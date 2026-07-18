@@ -1,0 +1,175 @@
+name: Release XynMacro (Windows)
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: bot/package-lock.json
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: 1.95.0
+
+      - name: Cache Cargo build
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: bot/src-tauri
+
+      - name: Read and validate release version
+        id: release
+        shell: pwsh
+        run: |
+          $version = (Get-Content bot/src-tauri/tauri.conf.json | ConvertFrom-Json).version
+          $cargoVersion = (Select-String -Path bot/src-tauri/Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"' | Select-Object -First 1).Matches.Groups[1].Value
+          if ($cargoVersion -ne $version) {
+            throw "Cargo.toml version $cargoVersion does not match tauri.conf.json version $version."
+          }
+          if ($env:GITHUB_REF_TYPE -ne 'tag' -or $env:GITHUB_REF_NAME -ne "v$version") {
+            throw "Tag $env:GITHUB_REF_NAME does not match tauri.conf.json version v$version."
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "tag=v$version" >> $env:GITHUB_OUTPUT
+
+      - name: Validate signing configuration
+        shell: pwsh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          TAURI_UPDATER_PUBLIC_KEY: ${{ vars.TAURI_UPDATER_PUBLIC_KEY }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY)) {
+            throw 'Missing GitHub Actions secret TAURI_SIGNING_PRIVATE_KEY.'
+          }
+          if ([string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD)) {
+            throw 'Missing GitHub Actions secret TAURI_SIGNING_PRIVATE_KEY_PASSWORD.'
+          }
+          if ([string]::IsNullOrWhiteSpace($env:TAURI_UPDATER_PUBLIC_KEY)) {
+            throw 'Missing GitHub Actions repository variable TAURI_UPDATER_PUBLIC_KEY.'
+          }
+
+      - name: Create updater release config
+        shell: pwsh
+        env:
+          TAURI_UPDATER_PUBLIC_KEY: ${{ vars.TAURI_UPDATER_PUBLIC_KEY }}
+        run: |
+          $config = @{
+            plugins = @{
+              updater = @{
+                pubkey = $env:TAURI_UPDATER_PUBLIC_KEY
+                endpoints = @('https://github.com/lowkxyn/xynmacro/releases/latest/download/latest.json')
+                windows = @{ installMode = 'passive' }
+              }
+            }
+          }
+          $config | ConvertTo-Json -Depth 5 | Set-Content bot/src-tauri/tauri.updater.ci.json
+
+      - name: Install Python dependencies
+        working-directory: bot/python
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pip-audit==2.10.1 pyinstaller==6.21.0 pynacl==1.6.2 pytest
+
+      - name: Install Node dependencies
+        working-directory: bot
+        run: npm ci
+
+      - name: Verify updater signing keypair
+        shell: pwsh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          TAURI_UPDATER_PUBLIC_KEY: ${{ vars.TAURI_UPDATER_PUBLIC_KEY }}
+        run: |
+          $probe = Join-Path $env:RUNNER_TEMP 'xynmacro-updater-key-check.bin'
+          [IO.File]::WriteAllText($probe, 'XynMacro updater key agreement check')
+          Push-Location bot
+          try {
+            npx tauri signer sign $probe
+            if ($LASTEXITCODE -ne 0) { throw 'Updater key probe signing failed.' }
+          } finally {
+            Pop-Location
+          }
+          python .github/scripts/verify_updater_keypair.py $probe "$probe.sig"
+
+      - name: Audit Rust dependencies
+        working-directory: bot/src-tauri
+        run: |
+          cargo install cargo-audit --locked --version 0.22.2
+          cargo audit --file Cargo.lock
+
+      - name: Audit Python dependencies
+        run: python -m pip_audit -r bot/python/requirements.txt
+
+      - name: Audit Node dependencies
+        working-directory: bot
+        run: npm audit --package-lock-only --audit-level=high
+
+      - name: Run Python tests
+        run: python -m pytest bot/python/tests -q
+
+      - name: Run frontend tests
+        working-directory: bot
+        run: npm test
+
+      - name: Freeze the Python sidecar
+        working-directory: bot
+        shell: pwsh
+        run: ./scripts/build_sidecar.ps1 -Python python
+
+      - name: Run Rust tests
+        working-directory: bot/src-tauri
+        run: cargo test --quiet
+
+      - name: Build and publish signed updater
+        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          projectPath: bot
+          tagName: ${{ steps.release.outputs.tag }}
+          releaseName: XynMacro v${{ steps.release.outputs.version }}
+          releaseBody: See the assets below to install or update XynMacro.
+          releaseDraft: false
+          prerelease: false
+          args: --bundles nsis --config src-tauri/tauri.updater.ci.json
+          uploadUpdaterJson: true
+          updaterJsonPreferNsis: true
+          uploadUpdaterSignatures: true
+
+      - name: Generate installer SHA256 checksum
+        shell: pwsh
+        working-directory: bot/src-tauri/target/release/bundle/nsis
+        run: |
+          $exe = Get-ChildItem -Filter *-setup.exe | Select-Object -First 1
+          if ($null -eq $exe) { throw 'NSIS installer was not produced.' }
+          $hash = (Get-FileHash $exe.FullName -Algorithm SHA256).Hash.ToLower()
+          "$hash  $($exe.Name)" | Out-File -Encoding ascii "$($exe.Name).sha256"
+
+      - name: Upload installer checksum
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+        with:
+          tag_name: ${{ steps.release.outputs.tag }}
+          files: bot/src-tauri/target/release/bundle/nsis/*-setup.exe.sha256

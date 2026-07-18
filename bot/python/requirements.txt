@@ -1,0 +1,7 @@
+opencv-python==4.13.0.92
+mss==10.2.0
+numpy==2.4.4
+keyboard==0.13.5
+PyDirectInput==1.0.4
+pywin32==311
+Flask==3.1.3

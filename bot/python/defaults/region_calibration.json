@@ -1,0 +1,14 @@
+{
+  "health_box": {
+    "top": 533,
+    "left": 1384,
+    "width": 534,
+    "height": 110
+  },
+  "agility_box": {
+    "top": 536,
+    "left": 1430,
+    "width": 486,
+    "height": 106
+  }
+}

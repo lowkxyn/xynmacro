@@ -1,0 +1,15 @@
+{
+  "name": "xynmacro",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "tauri": "tauri",
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "test": "node --test src/screen-state.test.mjs src/update-state.test.mjs src/frontend-contract.test.mjs"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}

@@ -1,0 +1,872 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>XynMacro</title>
+  <!-- Fonts are bundled (assets/fonts/) so the UI renders identically offline.
+       Network access is limited to signed updates and public owner announcements. -->
+  <link rel="stylesheet" href="assets/fonts.css">
+  <!-- Paint body dark IMMEDIATELY so we don't flash WebView's default white before
+       styles.css loads. styles.css later sets body transparent for the pill clip, but
+       by then the splash overlay is already painted on top so users never see the gap. -->
+  <style>html,body{background:#0d0d10;margin:0;overflow:hidden}</style>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<div class="window-frame">
+<canvas id="bgCanvas"></canvas>
+<div class="titlebar" id="titlebar">
+  <div class="titlebar-drag">
+    <span class="titlebar-title" data-tauri-drag-region>XynMacro</span>
+    <div class="titlebar-hud">
+      <button class="hud-toggle" id="hudMacroToggle" onclick="toggleMacroFromHud()" title="Start macro" aria-label="Start macro">
+        <span class="hud-dot" id="hudStatusDot"></span>
+        <span class="hud-state" id="hudState">Idle</span>
+      </button>
+      <span class="hud-sep" id="hudSep" style="display:none">·</span>
+      <span class="hud-stat" id="hudStat"></span>
+      <span class="hud-time" id="hudTime"></span>
+    </div>
+  </div>
+  <div class="titlebar-controls">
+    <!-- Transient status text (e.g. "Downloading update…") that fades in beside
+         the bell and fades away cleanly, leaving no layout trace. -->
+    <span class="tb-ticker" id="updateTicker" aria-live="polite"></span>
+    <button class="tb-btn tb-announcement" id="announcementBell" onclick="toggleAnnouncement()" title="Announcements" aria-label="Announcements">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+      <span class="announcement-dot" id="announcementDot" aria-hidden="true"></span>
+    </button>
+    <button class="tb-btn tb-ontop" id="btnOnTop" onclick="wcOnTop()" title="Stay on top" aria-label="Stay on top">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"/></svg>
+    </button>
+    <button class="tb-btn tb-compact" id="btnCompact" onclick="wcCompact()" title="Roll up" aria-label="Roll up">
+      <svg width="10" height="10" viewBox="0 0 10 10" stroke="currentColor" stroke-width="1.5" fill="none"><line x1="1" y1="8" x2="9" y2="8"/><polyline points="3 5 5 3 7 5"/></svg>
+    </button>
+    <button class="tb-btn tb-minimize" onclick="wcMinimize()" title="Minimize" aria-label="Minimize">
+      <svg width="10" height="1" viewBox="0 0 10 1"><rect width="10" height="1" fill="currentColor"/></svg>
+    </button>
+    <button class="tb-btn tb-maximize" onclick="wcMaximize()" title="Maximize" aria-label="Maximize">
+      <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1"><rect x=".5" y=".5" width="9" height="9"/></svg>
+    </button>
+    <button class="tb-btn tb-close" onclick="wcClose()" title="Close" aria-label="Close">
+      <svg width="10" height="10" viewBox="0 0 10 10" stroke="currentColor" stroke-width="1.2"><line x1="1" y1="1" x2="9" y2="9"/><line x1="9" y1="1" x2="1" y2="9"/></svg>
+    </button>
+  </div>
+</div>
+
+<div class="app-shell">
+  <aside class="sidebar">
+    <div class="sidebar-brand">
+      <div class="brand-mark"></div>
+      <div class="brand-info">
+        <span class="brand-name">XynMacro</span>
+        <span class="brand-ver" id="brandVer"></span>
+      </div>
+    </div>
+
+    <nav class="sidebar-nav">
+      <button class="nav-btn active" data-view="dashboard" data-tooltip="Dashboard" aria-label="Dashboard">
+        <span class="nav-icon">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+        </span>
+        <span class="nav-label">Dashboard</span>
+      </button>
+      <button class="nav-btn" data-view="controls" data-tooltip="Controls" aria-label="Controls">
+        <span class="nav-icon">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M4.93 4.93a10 10 0 0 0 0 14.14"/></svg>
+        </span>
+        <span class="nav-label">Controls</span>
+      </button>
+      <button class="nav-btn" data-view="tuning" data-tooltip="Tuning" aria-label="Tuning">
+        <span class="nav-icon">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>
+        </span>
+        <span class="nav-label">Tuning</span>
+      </button>
+      <button class="nav-btn" data-view="ki" data-tooltip="Calibration" aria-label="Calibration">
+        <span class="nav-icon">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="4"/><line x1="12" y1="2" x2="12" y2="8"/><line x1="12" y1="16" x2="12" y2="22"/><line x1="2" y1="12" x2="8" y2="12"/><line x1="16" y1="12" x2="22" y2="12"/></svg>
+        </span>
+        <span class="nav-label">Calibration</span>
+      </button>
+      <button class="nav-btn" data-view="logs" data-tooltip="Logs" aria-label="Logs">
+        <span class="nav-icon">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+        </span>
+        <span class="nav-label">Logs</span>
+      </button>
+      <button class="nav-btn" data-view="settings" data-tooltip="Settings" aria-label="Settings">
+        <span class="nav-icon">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        </span>
+        <span class="nav-label">Settings</span>
+      </button>
+    </nav>
+
+    <div class="sidebar-footer">
+      <div class="status-pill" id="statusPill">
+        <span class="status-dot" id="statusDot"></span>
+        <span id="statusText">Idle</span>
+      </div>
+      <div class="sidebar-credit">made by Xyn</div>
+    </div>
+    <div class="sidebar-resize" id="sidebarResize" title="Drag to resize" role="separator" aria-label="Resize sidebar" aria-orientation="vertical" aria-valuemin="180" aria-valuemax="340" tabindex="0"></div>
+  </aside>
+
+  <main class="main">
+    <div class="main-inner">
+
+    <!-- DASHBOARD -->
+    <div class="view active" id="dashboard">
+      <div class="page-header">
+        <h1>Dashboard</h1>
+        <p>Hyperbolic Time Chamber &amp; Gravity Chamber training automation</p>
+      </div>
+
+      <div class="action-bar">
+        <button class="btn-start" id="btnStart" onclick="startMacro()">START MACRO</button>
+        <button class="btn-stop" id="btnStop" onclick="stopMacro()">STOP</button>
+      </div>
+      <div class="keybind-bar">
+        <span class="keybind-hint"><span class="kbd" id="hintStartStop">F6</span> Start / Stop</span>
+        <span class="keybind-hint"><span class="kbd" id="hintManualNext">L</span> Skip Category</span>
+        <span class="keybind-hint"><span class="kbd" id="hintPause">U</span> Pause / Resume</span>
+      </div>
+
+      <div class="stat-row stat-row-3">
+        <div class="stat-card"><div class="stat-label">Status</div><div class="stat-value" id="currentState">Idle</div></div>
+        <div class="stat-card"><div class="stat-label">Current Stat</div><div class="stat-value" id="currentStat">&mdash;</div></div>
+        <div class="stat-card"><div class="stat-label">Session Time</div><div class="stat-value" id="elapsedTime">&mdash;</div></div>
+      </div>
+
+      <div class="section-title">Live Telemetry</div>
+      <div class="panel panel-static" id="telemetryPanel">
+        <div class="telem-row">
+          <div class="telem-card">
+            <div class="telem-label">Adaptive WASD</div>
+            <div class="telem-value" id="telemWasdRate">&mdash;</div>
+            <div class="telem-sub" id="telemWasdBreakdown">no data yet</div>
+          </div>
+          <div class="telem-card">
+            <div class="telem-label">Ki clicks</div>
+            <div class="telem-value" id="telemKiClicks">&mdash;</div>
+            <div class="telem-sub" id="telemKiBreakdown">no data yet</div>
+          </div>
+          <div class="telem-card">
+            <div class="telem-label">Health hits</div>
+            <div class="telem-value" id="telemHealthHits">&mdash;</div>
+            <div class="telem-sub" id="telemHealthBreakdown">&mdash;</div>
+          </div>
+          <div class="telem-card">
+            <div class="telem-label">Senzu stock</div>
+            <div class="telem-value" id="telemSenzuStock">&mdash;</div>
+            <div class="telem-sub" id="telemSenzuBreakdown">idle</div>
+          </div>
+          <div class="telem-card">
+            <div class="telem-label">Stat switches</div>
+            <div class="telem-value" id="telemSwitches">&mdash;</div>
+            <div class="telem-sub">since macro start</div>
+          </div>
+        </div>
+      </div>
+      <div class="run-summary" id="runSummary" hidden></div>
+
+      <div class="section-title">Setup Checklist</div>
+      <div class="panel panel-static">
+        <div class="check-item">
+          <span class="check-icon check-admin"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="M12 3.5v18"/></svg></span>
+          <div class="check-body">
+            <span class="check-title">Launch Normally</span>
+            <span class="check-desc">Administrator access is optional. Try Run as administrator only if Windows blocks global hotkeys or game input.</span>
+          </div>
+        </div>
+        <div class="check-item">
+          <span class="check-icon check-window"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M2 9h20"/></svg></span>
+          <div class="check-body">
+            <span class="check-title">Keep the Game Window Visible</span>
+            <span class="check-desc">Roblox must be open and on-screen with the training game running. Do not minimize it or cover it with other windows once the macro starts.</span>
+          </div>
+        </div>
+        <div class="check-item">
+          <span class="check-icon check-start"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="7" y1="12" x2="17" y2="12"/><rect x="3.5" y="7.5" width="3.5" height="9" rx="1"/><rect x="17" y="7.5" width="3.5" height="9" rx="1"/></svg></span>
+          <div class="check-body">
+            <span class="check-title">Start Inside Training</span>
+            <span class="check-desc">Be inside HTC or GC training. You can start from the Training menu, Game menu, or normal gameplay; the macro confirms its route before selecting the first trait.</span>
+          </div>
+        </div>
+        <div class="check-item">
+          <span class="check-icon check-game"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="11" x2="10" y2="11"/><line x1="8" y1="9" x2="8" y2="13"/><line x1="15" y1="12" x2="15.01" y2="12"/><line x1="18" y1="10" x2="18.01" y2="10"/><path d="M17.32 5H6.68a4 4 0 0 0-3.978 3.59c-.006.052-.01.101-.017.152C2.604 9.416 2 14.456 2 16a3 3 0 0 0 3 3c1 0 1.5-.5 2-1l1.414-1.414A2 2 0 0 1 9.828 16h4.344a2 2 0 0 1 1.414.586L17 18c.5.5 1 1 2 1a3 3 0 0 0 3-3c0-1.545-.604-6.584-.685-7.258-.007-.05-.011-.1-.017-.151A4 4 0 0 0 17.32 5z"/></svg></span>
+          <div class="check-body">
+            <span class="check-title">Roblox Window</span>
+            <span class="check-desc"><span id="gameIcon" class="res-icon res-warn">…</span><span id="gameText">Detecting&hellip;</span></span>
+          </div>
+        </div>
+        <div class="check-item">
+          <span class="check-icon check-res"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg></span>
+          <div class="check-body">
+            <span class="check-title">Resolution</span>
+            <span class="check-desc"><span id="resIcon" class="res-icon res-warn">&hellip;</span><span id="resText">Detecting&hellip;</span>
+              <button class="btn-sm" id="btnRes1080" style="margin-left:10px" title="Switch the display containing Roblox to 1920&times;1080 for this session (registry untouched)">Set 1080p</button>
+              <button class="btn-sm" id="btnResRevert" title="Restore your Windows display setting">Revert</button>
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <div class="section-title" style="margin-top:24px">Troubleshooting</div>
+      <div class="panel panel-static">
+        <div class="tip-row"><span class="tip-label">Won't Start</span><span class="tip-val">Confirm the Roblox Window check is green and that you are inside HTC or GC. If global hotkeys or game input fail, re-launch as Administrator.</span></div>
+        <div class="tip-row"><span class="tip-label">Stopped</span><span class="tip-val">Check Logs for the exact last confirmed screen or detector failure. In compact mode, an operational error turns the pill red; click it to expand.</span></div>
+        <div class="tip-row"><span class="tip-label">Ki Misses</span><span class="tip-val">Lower "v2 &middot; Ring Brightness Min" in 5-point steps while checking for background false detections. Raise "v2 &middot; Ring Pixel Min" if it clicks on speckle.</span></div>
+        <div class="tip-row"><span class="tip-label">Senzu Fails</span><span class="tip-val">Auto-Senzu samples the fixed left side of the player HP fill and reacts only to red. Disable overlays that recolour the HUD, then check Logs for menu or inventory confirmation failures.</span></div>
+        <div class="tip-row"><span class="tip-label">WASD Fails</span><span class="tip-val">Agility and Physical Damage require a QWERTY layout. If Adaptive misses letters, switch to Burst in Controls.</span></div>
+      </div>
+    </div>
+
+    <!-- CONTROLS -->
+    <div class="view" id="controls">
+      <div class="page-header">
+        <h1>Controls</h1>
+        <p>Training queue and runtime behavior</p>
+      </div>
+
+      <div class="section-title">WASD Mode</div>
+      <div class="panel">
+        <div class="row-item">
+          <span class="row-label">Input Strategy</span>
+          <div class="row-ctrl">
+            <div class="seg-ctrl" id="agilityModeSeg" role="group" aria-label="WASD input strategy">
+              <button class="seg-btn" type="button" data-val="v2" aria-pressed="false" onclick="setAgilityMode('v2')">Adaptive (v2)</button>
+              <button class="seg-btn" type="button" data-val="v1" aria-pressed="false" onclick="setAgilityMode('v1')">Burst (v1)</button>
+            </div>
+          </div>
+        </div>
+        <div class="row-hint">Adaptive confirms each key turned green before sending the next. Burst reads all visible letters at once and sends them together. Try Burst if Adaptive feels too slow.</div>
+      </div>
+
+      <div class="section-title">Startup</div>
+      <div class="panel">
+        <div class="row-item">
+          <span class="row-label">Start Countdown</span>
+          <div class="row-ctrl"><input type="number" class="inp" id="startDelay" step="0.1" min="0" max="30" aria-label="Start countdown in seconds"><span class="unit">sec</span></div>
+        </div>
+        <div class="row-hint">Delay after Start before XynMacro selects training and sends minigame input. Whole numbers display as whole numbers; decimals display in tenths.</div>
+        <div class="row-item">
+          <span class="row-label">GC Gravity Target</span>
+          <div class="row-ctrl gravity-control">
+            <input type="range" class="setting-slider" id="gcGravityTarget" min="0" max="100" step="10" value="0" aria-label="GC gravity target">
+            <span class="mono-badge gravity-value" id="gcGravityValue">Off</span>
+          </div>
+        </div>
+        <div class="row-hint">GC only. Off leaves the current gravity unchanged. A 10–100G target only raises gravity; it never lowers the current value or wraps 100G back to 0G.</div>
+        <div class="row-item">
+          <span class="row-label">Prevent PC Sleep</span>
+          <div class="row-ctrl"><button type="button" class="toggle" id="togglePreventSleep" role="switch" aria-checked="false" aria-label="Prevent PC sleep while running" onclick="toggleSetting('prevent_sleep_while_running',this)"></button></div>
+        </div>
+        <div class="row-hint">Keeps Windows and the display awake while the macro is active so screen detection continues. The hold is released immediately when the run stops or errors.</div>
+      </div>
+
+      <div class="section-title">Hotkeys</div>
+      <div class="panel">
+        <div class="row-item">
+          <span class="row-label">Start / Stop</span>
+          <div class="row-ctrl">
+            <button class="keybind-btn" data-setting-key="start_stop_hotkey" data-value="f6" aria-label="Start or stop hotkey">F6</button>
+          </div>
+        </div>
+        <div class="row-item">
+          <span class="row-label">Skip Current Stat</span>
+          <div class="row-ctrl">
+            <button class="keybind-btn" data-setting-key="manual_next_key" data-value="l" aria-label="Skip current stat hotkey">L</button>
+          </div>
+        </div>
+        <div class="row-item">
+          <span class="row-label">Pause / Resume</span>
+          <div class="row-ctrl">
+            <button class="keybind-btn" data-setting-key="pause_hotkey" data-value="u" aria-label="Pause or resume hotkey">U</button>
+          </div>
+        </div>
+        <div class="row-hint">Click a hotkey, then press the replacement key. Esc cancels. These global hotkeys work while Roblox has focus.</div>
+      </div>
+
+      <div class="section-title">Auto-Senzu</div>
+      <div class="panel">
+        <div class="row-item">
+          <span class="row-label">Eat Senzu on Red HP</span>
+          <div class="row-ctrl"><button type="button" class="toggle" id="toggleSenzu" role="switch" aria-checked="false" aria-label="Eat Senzu on red HP" onclick="toggleSetting('senzu_enabled',this)"></button></div>
+        </div>
+        <div class="row-hint">While the macro is running, watches a fixed patch inside the left side of the HP fill and reacts only when it turns critical red. Idle means fully off: no keys or clicks are sent.</div>
+        <div class="row-item">
+          <span class="row-label">Bean Preference</span>
+          <div class="row-ctrl">
+            <select class="inp" id="senzuPreferenceMode" aria-label="Bean preference">
+              <option value="full_only">Full only</option>
+              <option value="full_then_half">Full, then Half</option>
+              <option value="half_only">Half only</option>
+              <option value="half_then_full">Half, then Full</option>
+            </select>
+          </div>
+        </div>
+        <div class="row-hint">“Then” modes use the second type only after the preferred type has no stock. Full only is the default.</div>
+        <div class="row-item">
+          <span class="row-label">Set GC Gravity to 0 When Empty</span>
+          <div class="row-ctrl"><button type="button" class="toggle" id="toggleSenzuZeroGravity" role="switch" aria-checked="false" aria-label="Set GC gravity to zero when Senzu stock is empty" onclick="toggleSetting('senzu_zero_gravity_on_empty',this)"></button></div>
+        </div>
+        <div class="row-hint">GC only. When no bean type allowed by Bean Preference remains, cycles gravity back to 0G for the rest of that run. HTC ignores this option.</div>
+        <div class="row-item">
+          <span class="row-label">Senzu Slot</span>
+          <div class="row-ctrl"><input type="number" class="inp" id="senzuSlot" step="1" min="1" max="4" aria-label="Senzu slot"></div>
+        </div>
+        <div class="row-item">
+          <span class="row-label">Delay After Red</span>
+          <div class="row-ctrl"><input type="number" class="inp" id="senzuDelay" step="0.5" min="0" max="30" aria-label="Delay after red HP in seconds"><span class="unit">sec</span></div>
+        </div>
+        <div class="row-item">
+          <span class="row-label">Recovery Check</span>
+          <div class="row-ctrl"><input type="number" class="inp" id="senzuRecoveryTimeout" value="7" step="0.5" min="1" max="30" aria-label="Senzu recovery check in seconds"><span class="unit">sec</span></div>
+        </div>
+        <div class="row-hint">Delay After Red waits before the first attempt. Recovery Check waits for recovered HP before one retry or resuming the same category. When every bean type allowed by Bean Preference runs out, Auto-Senzu disables for that run and training continues.</div>
+      </div>
+
+      <div class="section-title">Training Order</div>
+      <div class="panel">
+        <div class="row-item" style="align-items:flex-start;flex-direction:column;gap:10px">
+          <span class="row-label">Queue (runs top to bottom)</span>
+          <div id="statOrderList" class="stat-order-list"></div>
+        </div>
+        <div class="row-item" style="align-items:flex-start;flex-direction:column;gap:10px">
+          <span class="row-label">Available Stats (click Add)</span>
+          <div id="statPoolList" class="stat-pool-list"></div>
+        </div>
+        <div class="row-hint">Drag to reorder. Remove or add stats to build your queue. Changes apply on the next run.</div>
+      </div>
+
+    </div>
+
+    <!-- TUNING -->
+    <div class="view" id="tuning">
+      <div class="page-header">
+        <h1>Tuning</h1>
+        <p>Advanced detector and timing adjustments</p>
+      </div>
+
+      <div class="section-title">Progression &amp; Switching</div>
+      <div class="panel">
+        <div class="row-item">
+          <span class="row-label">No-Progress Fallback Switch</span>
+          <div class="row-ctrl"><button type="button" class="toggle" id="toggleNoYellowFallback" role="switch" aria-checked="false" aria-label="No-progress fallback switch" onclick="toggleSetting('no_yellow_fallback_enabled',this)"></button></div>
+        </div>
+        <div class="row-item">
+          <span class="row-label">Progress Fallback Timeout</span>
+          <div class="row-ctrl"><input type="number" class="inp" id="noYellowTimeout" step="1" min="1" max="300" aria-label="Progress fallback timeout in seconds"><span class="unit">sec</span></div>
+        </div>
+        <div class="row-item">
+          <span class="row-label">After-Switch Wait</span>
+          <div class="row-ctrl"><input type="number" class="inp" id="afterSwitchWait" step="0.1" min="0" max="10" aria-label="After-switch wait in seconds"><span class="unit">sec</span></div>
+        </div>
+        <div class="row-hint">Progression tracking is the primary completion signal. No-Progress Fallback Switch additionally advances to the next stat after the timeout below when tracking has not locked and no progress color is seen; off by default. After-Switch Wait pauses after moving to a new stat.</div>
+      </div>
+
+      <div class="section-title">WASD Timings</div>
+      <div class="panel">
+        <div class="row-item">
+          <span class="row-label">Key Press Duration</span>
+          <div class="row-ctrl"><input type="number" class="inp" id="wasdKeyPress" step="0.001" min="0" max="1" aria-label="WASD key press duration in seconds"><span class="unit">sec</span></div>
+        </div>
+        <div class="row-item">
+          <span class="row-label">Post-Input Stabilize</span>
+          <div class="row-ctrl"><input type="number" class="inp" id="wasdStabilize" step="0.01" min="0" max="5" aria-label="WASD post-input stabilize time in seconds"><span class="unit">sec</span></div>
+        </div>
+        <div class="row-item">
+          <span class="row-label">Post-Burst Cooldown</span>
+          <div class="row-ctrl"><input type="number" class="inp" id="wasdPostBurst" step="0.01" min="0" max="5" aria-label="WASD post-burst cooldown in seconds"><span class="unit">sec</span></div>
+        </div>
+        <div class="row-item">
+          <span class="row-label">v2 Green Observe</span>
+          <div class="row-ctrl"><input type="number" class="inp" id="wasdGreenObserve" step="0.05" min="0.1" max="5" aria-label="WASD green observe time in seconds"><span class="unit">sec</span></div>
+        </div>
+        <div class="row-item">
+          <span class="row-label">v2 After-Burst Settle</span>
+          <div class="row-ctrl"><input type="number" class="inp" id="wasdAfterGreenSettle" step="0.05" min="0" max="5" aria-label="WASD after-burst settle time in seconds"><span class="unit">sec</span></div>
+        </div>
+        <div class="row-item">
+          <span class="row-label">v2 Inter-String Wait</span>
+          <div class="row-ctrl"><input type="number" class="inp" id="wasdInterStringWait" step="0.1" min="0.1" max="10" aria-label="WASD inter-string wait in seconds"><span class="unit">sec</span></div>
+        </div>
+        <div class="row-hint">Key Press, Stabilize, and Post-Burst control Burst mode. In Adaptive mode, Green Observe is the time allowed for each key to turn green before retrying; After-Burst Settle pauses before scanning again, and Inter-String Wait limits how long the next sequence is polled.</div>
+      </div>
+
+      <div class="section-title">Health Timing</div>
+      <div class="panel">
+        <div class="row-item">
+          <span class="row-label">Health Mode</span>
+          <div class="row-ctrl">
+            <div class="seg-ctrl" id="healthModeSeg" role="group" aria-label="Health mode">
+              <button class="seg-btn" type="button" data-val="v1_legacy" aria-pressed="false" onclick="setHealthMode('v1_legacy')">v1 · Legacy</button>
+              <button class="seg-btn" type="button" data-val="v2_track" aria-pressed="false" onclick="setHealthMode('v2_track')">v2 · Track</button>
+            </div>
+          </div>
+        </div>
+        <div class="row-hint">v1 scales the original narrow red probe over the target zone. v2 finds the Health bar and tracks the moving red marker into the middle of the green target.</div>
+        <div class="row-item">
+          <span class="row-label">HP Hit Cooldown</span>
+          <div class="row-ctrl"><input type="number" class="inp" id="healthHitCooldown" step="0.1" min="0" max="5" aria-label="Health hit cooldown in seconds"><span class="unit">sec</span></div>
+        </div>
+        <div class="row-hint">HP Hit Cooldown: minimum gap between F-key presses during health training.</div>
+      </div>
+
+      <div class="section-title">Ki Detection &amp; Timing</div>
+      <div class="panel">
+        <div class="row-item">
+          <span class="row-label">Mode</span>
+          <div class="row-ctrl">
+            <div class="seg-ctrl" id="kiV8ModeSeg" role="group" aria-label="Ki detection mode">
+              <button class="seg-btn" type="button" data-val="v1_time" aria-pressed="false" onclick="setKiV8Mode('v1_time')">v1 · Time</button>
+              <button class="seg-btn" type="button" data-val="v2_ring" aria-pressed="false" onclick="setKiV8Mode('v2_ring')">v2 · Ring</button>
+            </div>
+          </div>
+        </div>
+        <div class="row-hint">v2 tracks the shrinking ring and is the default. Use v1 only if Ring mode cannot read the chamber background reliably; it clicks after a fixed delay instead.</div>
+        <div class="row-item">
+          <span class="row-label">v1 · Click Delay</span>
+          <div class="row-ctrl"><input type="number" class="inp" id="kiV8ClickDelay" step="0.01" min="0" max="0.7" aria-label="Ki click delay in seconds"><span class="unit">sec</span></div>
+        </div>
+        <div class="row-hint">v1 only: wait this long after a stable detect before clicking. Raise if clicks land too early; lower if too late.</div>
+        <div class="row-item">
+          <span class="row-label">v2 · Target Radius</span>
+          <div class="row-ctrl"><input type="number" class="inp" id="kiV8V2TargetRFactor" step="0.05" min="1.40" max="3" aria-label="Ki target radius factor"><span class="unit">× dot_r</span></div>
+        </div>
+        <div class="row-hint">v2 only: click fires when the tracked ring radius reaches this × dot_r. <b>Lower = click LATER, when the ring is CLOSER to the dot.</b> Higher = click EARLIER, ring still far. Tune live while watching in-game Perfect/Okay/Bad: if clicks land too early (ring still big at hit), lower it; if clicks land past Perfect (ring already vanished), raise it. Ring vanishes at ~1.40; below that you'll lose detection.</div>
+        <div class="row-item">
+          <span class="row-label">v2 · Latency Compensation</span>
+          <div class="row-ctrl"><input type="number" class="inp" id="kiLatencyComp" step="10" min="0" max="250" aria-label="Ki latency compensation in milliseconds"><span class="unit">ms</span></div>
+        </div>
+        <div class="row-hint">v2 only: fire the click this many ms early using the ring's measured shrink speed. 0 = off (right for a fast PC on low ping). Raise if clicks consistently land late (ring already gone) on a slower PC or high-ping session — the ring shrinks ~10px per 100ms, so start around your ping.</div>
+        <div class="row-item">
+          <span class="row-label">v2 · Ring Brightness Min</span>
+          <div class="row-ctrl"><input type="number" class="inp" id="kiV8V2BrightnessThreshold" step="5" min="50" max="255" aria-label="Ki ring brightness minimum"></div>
+        </div>
+        <div class="row-hint">v2 only: a pixel counts as "ring" if its max color channel ≥ this value. Default 220. Lower if the ring color is gray/dim; raise if bright backgrounds (white floors) are triggering false ring detection.</div>
+        <div class="row-item">
+          <span class="row-label">v2 · Ring Pixel Min</span>
+          <div class="row-ctrl"><input type="number" class="inp" id="kiV8V2BrightCountThreshold" step="1" min="1" max="32" aria-label="Ki ring pixel minimum"></div>
+        </div>
+        <div class="row-hint">v2 only: minimum bright pixels (out of 32 sampled around each scanned radius) to call that radius "the ring". Default 6. Higher = stricter (avoids false detections from speckle); lower = more sensitive (catches partial / occluded rings).</div>
+      </div>
+
+      <div style="display:flex;gap:10px;margin-top:20px;align-items:center">
+        <button class="btn-sm" id="undoButton" onclick="undoLastChange()" disabled title="Nothing to undo">↶ Undo</button>
+        <button class="btn-sm" onclick="resetMacroSettings()">Reset macro settings</button>
+        <span class="row-sub" style="margin-left:auto">Auto-save: changes apply immediately</span>
+      </div>
+    </div>
+
+    <!-- CALIBRATION -->
+    <div class="view" id="ki">
+      <div class="page-header">
+        <h1>Calibration</h1>
+        <p>Click positions and detection samples for the training UI</p>
+      </div>
+
+      <div class="section-title">Trait Click Points</div>
+      <div class="panel">
+        <div class="calib-intro">
+          <ol class="step-list">
+            <li>Press <strong>Tab</strong> in Roblox to open the trait menu so all 5 buttons are visible</li>
+            <li>Click <strong>Recalibrate</strong> next to the trait you want to set</li>
+            <li>A translucent overlay appears — click on the in-game trait button through it. Esc to cancel.</li>
+            <li>Defaults work at 1920×1080. Recalibrate any stat if the macro is clicking the wrong row.</li>
+          </ol>
+        </div>
+        <div class="row-item">
+          <span class="row-label">Health</span>
+          <div class="row-ctrl">
+            <span class="mono-badge" id="btnPosHealth">&mdash;</span>
+            <button class="btn-sm" onclick="calibBtn('Health')">Recalibrate</button>
+          </div>
+        </div>
+        <div class="row-item">
+          <span class="row-label">Agility</span>
+          <div class="row-ctrl">
+            <span class="mono-badge" id="btnPosAgility">&mdash;</span>
+            <button class="btn-sm" onclick="calibBtn('Agility')">Recalibrate</button>
+          </div>
+        </div>
+        <div class="row-item">
+          <span class="row-label">Ki Control</span>
+          <div class="row-ctrl">
+            <span class="mono-badge" id="btnPosKiControl">&mdash;</span>
+            <button class="btn-sm" onclick="calibBtn('Ki Control')">Recalibrate</button>
+          </div>
+        </div>
+        <div class="row-item">
+          <span class="row-label">Physical Damage</span>
+          <div class="row-ctrl">
+            <span class="mono-badge" id="btnPosPhysicalDamage">&mdash;</span>
+            <button class="btn-sm" onclick="calibBtn('Physical Damage')">Recalibrate</button>
+          </div>
+        </div>
+        <div class="row-item">
+          <span class="row-label">Ki Damage</span>
+          <div class="row-ctrl">
+            <span class="mono-badge" id="btnPosKiDamage">&mdash;</span>
+            <button class="btn-sm" onclick="calibBtn('Ki Damage')">Recalibrate</button>
+          </div>
+        </div>
+        <div class="row-hint">The macro presses Tab and clicks the calibrated coord for whichever trait is up next in the training queue.</div>
+      </div>
+
+      <div class="section-title" style="margin-top:24px">Detection Regions</div>
+      <div class="panel">
+        <div class="calib-intro">
+          <ol class="step-list">
+            <li>Open Roblox so the area you want to capture is on-screen</li>
+            <li>Click <strong>Recalibrate</strong>; a translucent overlay appears</li>
+            <li>Click and drag a rectangle over the target area. Esc to cancel.</li>
+          </ol>
+        </div>
+        <div class="row-item">
+          <span class="row-label">Health Box <span class="muted">(Legacy v1)</span></span>
+          <div class="row-ctrl">
+            <span class="mono-badge" id="regionPosHealth">&mdash;</span>
+            <button class="btn-sm" data-health-legacy-control onclick="calibRegion('health_box')">Recalibrate</button>
+            <button class="btn-sm" data-health-legacy-control onclick="togglePreview('health_box')" id="previewBtnHealth">Preview</button>
+          </div>
+        </div>
+        <div class="preview-row" id="previewRowHealth" style="display:none">
+          <img class="region-preview" id="previewImgHealth" alt="Health Box preview">
+          <div class="preview-meta" id="previewMetaHealth">Loading&hellip;</div>
+        </div>
+        <div class="row-item">
+          <span class="row-label">Agility Box</span>
+          <div class="row-ctrl">
+            <span class="mono-badge" id="regionPosAgility">&mdash;</span>
+            <button class="btn-sm" onclick="calibRegion('agility_box')">Recalibrate</button>
+            <button class="btn-sm" onclick="togglePreview('agility_box')" id="previewBtnAgility">Preview</button>
+          </div>
+        </div>
+        <div class="preview-row" id="previewRowAgility" style="display:none">
+          <img class="region-preview" id="previewImgAgility" alt="Agility Box preview">
+          <div class="preview-meta" id="previewMetaAgility">Loading&hellip;</div>
+        </div>
+        <div class="row-hint">Health Box is used only by Legacy v1 health detection; v2 Track calibrates itself. Agility Box is the WASD-letter strip. Auto-Senzu uses its own fixed player-HP sample and is not changed here. Tight crops avoid false matches, and Preview shows the live detector input.</div>
+      </div>
+
+    </div>
+
+    <!-- LOGS -->
+    <div class="view" id="logs">
+      <div class="page-header">
+        <h1>Logs</h1>
+        <p>Real-time console output from the macro engine</p>
+      </div>
+      <div class="log-toolbar">
+        <label class="log-auto-label"><input type="checkbox" id="logAutoScroll" checked> Auto-scroll</label>
+        <div style="display:flex;gap:8px">
+          <button class="btn-sm" onclick="copyLog()">Copy</button>
+          <button class="btn-sm" onclick="saveLog()" title="Copy the full active backend session log to your save folder">Save session log</button>
+          <button class="btn-sm" onclick="clearLogs()" title="Clear this view only; the backend session log is kept">Clear view</button>
+        </div>
+      </div>
+      <div class="log-viewer log-feed" id="logViewer"></div>
+      <div class="log-note">Clear view only hides lines already shown. Save session log copies the full active session file to the configured save folder.</div>
+    </div>
+
+    <!-- SETTINGS -->
+    <div class="view" id="settings">
+      <div class="page-header">
+        <h1>Settings</h1>
+        <p>Appearance, updates, saves, and resets</p>
+      </div>
+
+      <div class="section-title">App Info</div>
+      <div class="panel panel-static">
+        <div class="row-item">
+          <span class="row-label">Version</span>
+          <div class="row-ctrl"><span class="mono-badge" id="appVer"></span></div>
+        </div>
+        <div class="row-item">
+          <span class="row-label">Backend Port</span>
+          <div class="row-ctrl"><span class="mono-badge" id="backendPort">&mdash;</span></div>
+        </div>
+      </div>
+
+      <div class="section-title">Updates</div>
+      <div class="panel panel-static">
+        <div class="row-item">
+          <span class="row-label">Automatic updates</span>
+          <div class="row-ctrl"><button type="button" class="toggle active" id="toggleAutoUpdate" role="switch" aria-checked="true" aria-label="Automatic updates" onclick="toggleAutoUpdate(this)"></button></div>
+        </div>
+        <div class="row-hint">Checks signed GitHub releases on launch. Downloads can continue while the macro runs; installation waits until the macro is idle and the app closes or restarts.</div>
+        <div class="row-item">
+          <span class="row-label">Check for updates</span>
+          <div class="row-ctrl" style="display:flex;gap:8px">
+            <button class="btn-sm" id="btnCheckUpdate">Check now</button>
+            <button class="btn-sm" id="btnViewChangelog">What&rsquo;s new</button>
+          </div>
+        </div>
+        <div class="row-hint" id="updateStatus">Automatic update checks are on.</div>
+      </div>
+
+      <div class="section-title">Interface</div>
+      <div class="panel">
+        <div class="row-item">
+          <span class="row-label">UI style</span>
+          <div class="row-ctrl">
+            <div class="seg-ctrl ui-style-switch" id="uiStyleSeg" role="group" aria-label="UI style">
+              <button class="seg-btn" type="button" data-ui-style="classic">Classic</button>
+              <button class="seg-btn" type="button" data-ui-style="aero">Aero</button>
+            </div>
+          </div>
+        </div>
+        <div class="row-hint">Classic keeps the compact desktop layout. Aero uses a floating glass dock and roomier cards.</div>
+      </div>
+
+      <div class="section-title classic-theme-only">Theme</div>
+      <div class="panel classic-theme-only">
+        <div class="theme-grid" id="themeGrid"></div>
+      </div>
+
+      <div class="section-title classic-theme-only">Custom Theme</div>
+      <div class="panel classic-theme-only">
+        <div class="row-item"><span class="row-label">Theme colour</span>
+          <div class="row-ctrl"><input type="color" class="ct-color" id="ctColor" value="#818cf8" aria-label="Theme colour"></div></div>
+        <div class="row-hint">Pick one colour and the whole interface is recoloured around it &mdash; same layout and depth as the presets, just in your colour. Updates live.</div>
+        <details class="ct-advanced">
+          <summary>Advanced &mdash; fine-tune individual colours</summary>
+          <div class="row-item"><span class="row-label">Accent</span><div class="row-ctrl"><input type="color" class="ct-color" id="advAccent" aria-label="Accent colour"></div></div>
+          <div class="row-item"><span class="row-label">Accent (secondary)</span><div class="row-ctrl"><input type="color" class="ct-color" id="advAccent2" aria-label="Secondary accent colour"></div></div>
+          <div class="row-item"><span class="row-label">Background</span><div class="row-ctrl"><input type="color" class="ct-color" id="advBg" aria-label="Background colour"></div></div>
+          <div class="row-item"><span class="row-label">Text</span><div class="row-ctrl"><input type="color" class="ct-color" id="advText" aria-label="Text colour"></div></div>
+          <div class="row-item"><span class="row-label">Muted text</span><div class="row-ctrl"><input type="color" class="ct-color" id="advText2" aria-label="Muted text colour"></div></div>
+          <div class="row-item"><span class="row-label">Gradient start</span><div class="row-ctrl"><input type="color" class="ct-color" id="advGradFrom" aria-label="Gradient start colour"></div></div>
+          <div class="row-item"><span class="row-label">Gradient end</span><div class="row-ctrl"><input type="color" class="ct-color" id="advGradTo" aria-label="Gradient end colour"></div></div>
+        </details>
+        <div class="row-item">
+          <span class="row-label">Preset name</span>
+          <div class="row-ctrl"><input type="text" class="inp ct-name" id="ctName" placeholder="My theme" maxlength="22" aria-label="Preset name"></div>
+        </div>
+        <div class="ct-actions">
+          <button class="btn-sm" id="ctSave">Save as preset</button>
+          <button class="btn-sm" id="ctExport">Export</button>
+          <button class="btn-sm" id="ctImport">Import</button>
+          <button class="btn-sm" id="ctClear">Reset</button>
+          <input type="file" id="ctFile" accept="application/json" hidden>
+        </div>
+      </div>
+
+      <div class="section-title">Background</div>
+      <div class="panel">
+        <div class="row-item">
+          <span class="row-label">Animated effect</span>
+          <div class="row-ctrl"><select class="inp" id="bgEffect" aria-label="Animated background effect">
+            <option value="none">None</option>
+            <option value="aurora">Aurora drift</option>
+            <option value="flow">Flow (liquid)</option>
+            <option value="particles">Particles</option>
+            <option value="starfield">Starfield</option>
+            <option value="constellation">Constellation</option>
+            <option value="mesh">Swirl</option>
+            <option value="grid">Grid</option>
+            <option value="glow">Glow pulse</option>
+          </select></div>
+        </div>
+        <div class="row-item">
+          <span class="row-label">Speed</span>
+          <div class="row-ctrl"><input type="range" class="bg-slider" id="bgSpeed" min="0.4" max="2" step="0.05" value="1.6" aria-label="Background animation speed"></div>
+        </div>
+        <div class="row-hint">Flow at 1.6 is the shipped default. Choose None if you want the lowest possible GPU use during long sessions.</div>
+      </div>
+
+      <div class="section-title">Saves</div>
+      <div class="panel">
+        <div class="row-item" style="flex-direction:column;align-items:flex-start;gap:10px">
+          <span class="row-label">Save location &mdash; saved logs are written here</span>
+          <span class="mono-badge" id="saveDir" style="max-width:100%;white-space:normal;overflow-wrap:anywhere">&mdash;</span>
+          <div style="display:flex;gap:8px">
+            <button class="btn-sm" onclick="pickSaveDir()">Change folder&hellip;</button>
+            <button class="btn-sm" onclick="openSaveDir()">Open folder</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="section-title">Configuration</div>
+      <div class="panel">
+        <div class="row-item" style="flex-direction:column;align-items:flex-start;gap:10px">
+          <span class="row-label">Config folder &mdash; settings and calibration are saved here</span>
+          <span class="mono-badge" id="configDir" style="max-width:100%;white-space:normal;overflow-wrap:anywhere">&mdash;</span>
+          <button class="btn-sm" onclick="openConfigDir()">Open config folder</button>
+        </div>
+        <div class="row-item">
+          <span class="row-label">Macro settings</span>
+          <div class="row-ctrl"><button class="btn-sm" onclick="resetMacroSettings()">Reset macro settings</button></div>
+        </div>
+        <div class="row-hint">Restores controls and tuning only. Calibration, appearance, window size, save location, presets, and logs are kept.</div>
+        <div class="row-item">
+          <span class="row-label">Factory reset</span>
+          <div class="row-ctrl"><button class="btn-sm danger" onclick="factoryResetApp()">Factory reset app</button></div>
+        </div>
+        <div class="row-hint">Restores settings, calibration, save location, appearance, update preferences, sidebar width, and window position/size. Saved logs and custom theme presets are kept.</div>
+      </div>
+
+    </div>
+
+    </div>
+  </main>
+
+  <!-- Status footer bar -->
+  <div class="status-footer" id="statusFooter">
+    <span class="sf-cell sf-state"><span class="sf-dot" id="sfDot"></span><span id="sfState">Idle</span></span>
+    <span class="sf-sep">·</span>
+    <span class="sf-cell sf-time" id="sfTime">—</span>
+    <span class="sf-spacer"></span>
+    <span class="sf-cell sf-hint" title="Open command palette"><kbd>Ctrl+K</kbd></span>
+    <span class="sf-cell sf-hint" title="Show shortcuts"><kbd>?</kbd></span>
+  </div>
+</div>
+</div>
+
+<!-- Start countdown overlay — covers the whole app while user switches to Roblox -->
+<div class="countdown-overlay" id="countdownOverlay">
+  <div class="countdown-content" role="status" aria-live="polite">
+    <div class="countdown-label">Switch to Roblox</div>
+    <div class="countdown-number" id="countdownNumber">5</div>
+    <div class="countdown-hint">Macro arms when this hits 0</div>
+  </div>
+</div>
+
+<!-- One-time non-1080p heads-up on the first Start press; auto-confirms at 0. -->
+<div class="countdown-overlay" id="startWarnOverlay">
+  <div class="countdown-content" role="dialog" aria-modal="true" aria-label="Resolution warning" tabindex="-1">
+    <div class="countdown-label warn-step">Heads up</div>
+    <div class="warn-res-msg warn-step" id="warnResMsg"></div>
+    <div class="warn-actions">
+      <button class="btn-primary warn-step" id="warnYes" disabled>Continue (5)</button>
+      <button class="btn-sm warn-step" id="warnCancel">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- Update inbox: on launch after an update it opens with the newest version
+     expanded; every past version is listed below as a collapsed header you can
+     pop open. -->
+<div class="countdown-overlay changelog-overlay" id="changelogOverlay">
+  <div class="changelog-card" role="dialog" aria-modal="true" aria-label="What's new" tabindex="-1">
+    <div class="cl-head">
+      <div class="cl-eyebrow" id="clEyebrow">What's new</div>
+      <div class="cl-title">XynMacro <span id="clVersion"></span></div>
+    </div>
+    <div class="cl-body cl-inbox" id="clBody"></div>
+    <div class="cl-foot">
+      <button class="btn-primary" id="clContinue">Continue</button>
+    </div>
+  </div>
+</div>
+
+<!-- First-run welcome (fresh installs only; updates get the changelog instead) -->
+<div class="countdown-overlay changelog-overlay" id="welcomeOverlay">
+  <div class="changelog-card" role="dialog" aria-modal="true" aria-label="Welcome" tabindex="-1">
+    <div class="cl-head">
+      <div class="cl-eyebrow">Welcome</div>
+      <div class="cl-title">XynMacro</div>
+    </div>
+    <div class="cl-body">
+      <p class="welcome-desc">Hyperbolic Time Chamber and Gravity Chamber training automation for DBOG.</p>
+      <ol class="welcome-steps">
+        <li>Launch XynMacro normally. Try Run as administrator only if Windows blocks its hotkeys or game input.</li>
+        <li>Open Roblox DBOG on your training screen.</li>
+        <li>Check the Tuning and Calibration defaults.</li>
+        <li>Press Start or F6.</li>
+      </ol>
+      <p class="welcome-keys"><span class="kbd">F6</span> start / stop <span class="welcome-sep">&middot;</span> <span class="kbd">L</span> skip stat <span class="welcome-sep">&middot;</span> <span class="kbd">U</span> pause <span class="welcome-note">— rebindable in Controls</span></p>
+    </div>
+    <div class="cl-foot">
+      <button class="btn-primary" id="welcomeStart">Get started</button>
+    </div>
+  </div>
+</div>
+
+<!-- Update-ready toast: shows once the new version is downloaded; the install
+     itself happens on app close or via the restart button, never mid-session. -->
+<div class="update-toast" id="updateToast" role="status">
+  <div class="ut-title">Update ready</div>
+  <div class="ut-body" id="utBody"></div>
+  <div class="ut-actions">
+    <button class="btn-primary" id="utRestart">Restart &amp; update</button>
+    <button class="btn-sm" id="utLater">Later</button>
+    <button class="btn-sm" id="utIgnore">Don&rsquo;t show again</button>
+  </div>
+</div>
+
+<!-- Update install screen: shown briefly when the user starts the install, so
+     the app isn't visibly frozen while it hands off to the installer. -->
+<div class="countdown-overlay update-installing" id="updateInstalling">
+  <div class="countdown-content" role="status" aria-live="polite">
+    <div class="splash-name update-installing-title">Installing update</div>
+    <div class="countdown-hint" id="updateInstallingHint">XynMacro will restart in a moment…</div>
+    <div class="splash-bar"><div class="splash-bar-fill"></div></div>
+  </div>
+</div>
+
+<!-- Owner announcement. Content is read from announcements.json on GitHub. -->
+<div class="countdown-overlay changelog-overlay announcement-overlay" id="announcementOverlay">
+  <div class="changelog-card announcement-card" role="dialog" aria-modal="true" aria-label="Announcement" tabindex="-1">
+    <div class="cl-head">
+      <div class="cl-eyebrow">Announcement</div>
+      <div class="cl-title" id="announcementTitle">Checking for messages&hellip;</div>
+      <div class="announcement-date" id="announcementDate"></div>
+    </div>
+    <div class="cl-body announcement-body" id="announcementBody"></div>
+    <div class="cl-foot">
+      <button class="btn-primary" id="announcementClose">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- Command palette (Ctrl+K) -->
+<div class="overlay-backdrop" id="paletteBackdrop">
+  <div class="palette" role="dialog" aria-modal="true" aria-label="Command palette" tabindex="-1">
+    <div class="palette-input-row">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <input type="text" class="palette-input" id="paletteInput" placeholder="Type a command…" spellcheck="false" autocomplete="off" aria-label="Search commands">
+      <span class="palette-esc">Esc</span>
+    </div>
+    <div class="palette-results" id="paletteResults"></div>
+    <div class="palette-foot">
+      <span><kbd>↑↓</kbd> navigate</span>
+      <span><kbd>↵</kbd> run</span>
+      <span><kbd>Esc</kbd> close</span>
+    </div>
+  </div>
+</div>
+
+<!-- Keyboard shortcuts cheatsheet (?) -->
+<div class="overlay-backdrop" id="shortcutsBackdrop">
+  <div class="palette" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts" tabindex="-1">
+    <div class="palette-input-row palette-input-row-static">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M6 8h.01M10 8h.01M14 8h.01M18 8h.01M8 12h.01M12 12h.01M16 12h.01M7 16h10"/></svg>
+      <span class="palette-input-static">Keyboard Shortcuts</span>
+      <span class="palette-esc">Esc</span>
+    </div>
+    <div class="palette-results palette-shortcuts" id="shortcutsContent"></div>
+  </div>
+</div>
+
+<div id="toast" class="notif-toast ok" style="display:none" role="status" aria-live="polite"></div>
+
+<!-- Splash: shown on every launch, fades out ~1.2s later (or once backend is ready, whichever is later) -->
+<div id="splash" class="splash">
+  <div class="splash-mark splash-step"></div>
+  <div class="splash-name splash-step">XYNMACRO</div>
+  <div class="splash-by splash-step">made by Xyn</div>
+  <div class="splash-hint splash-step" id="splashHint"></div>
+  <div class="splash-bar splash-step"><div class="splash-bar-fill"></div></div>
+</div>
+
+<script src="screen-state.js"></script>
+<script src="update-state.js"></script>
+<script src="main.js"></script>
+</body>
+</html>
