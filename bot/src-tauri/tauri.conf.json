@@ -1,0 +1,58 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "XynMacro",
+  "mainBinaryName": "XynMacro",
+  "version": "1.0.0",
+  "identifier": "com.htcgc.xyn",
+  "build": {
+    "frontendDist": "../src"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "label": "main",
+        "title": "XynMacro",
+        "width": 1100,
+        "height": 720,
+        "minWidth": 800,
+        "minHeight": 30,
+        "resizable": true,
+        "decorations": false,
+        "transparent": true,
+        "backgroundColor": "#0d0d10",
+        "center": true,
+        "visible": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost https://raw.githubusercontent.com; font-src 'self' data:; img-src 'self' asset: http://asset.localhost data: blob:; object-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "",
+      "endpoints": []
+    }
+  },
+  "bundle": {
+    "active": true,
+    "createUpdaterArtifacts": true,
+    "publisher": "Xyn",
+    "targets": "nsis",
+    "externalBin": ["binaries/XynMacro-core"],
+    "resources": ["resources/licenses/*"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    }
+  }
+}
