@@ -2545,6 +2545,12 @@ window.wcCompact = () => {
 
   // What's-new content, newest first. Each entry: {version, notes:[{h, items[]}]}.
   const CHANGELOG = [
+    { version: '1.0.1', notes: [
+      { h: 'Fixes', items: [
+        'Notifications no longer overlap the window buttons in the top-right corner.',
+        'Fixed the 1080p monitor switch failing on secondary monitors (display error -2).',
+      ]},
+    ]},
     { version: '1.0.0', notes: [
       { h: 'Training automation', items: [
         'Automates Health, Agility, Physical Damage, Ki Control, and Ki Damage in HTC and GC.',
