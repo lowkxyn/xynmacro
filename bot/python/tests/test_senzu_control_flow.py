@@ -425,7 +425,12 @@ class SenzuControlFlowTests(unittest.TestCase):
         with (
             patch.object(core.mss, "MSS", return_value=capture),
             patch.object(core, "CURRENT_TRAINING_STATE", "Ki Control"),
-            patch.object(core, "PROGRESSION_STATE_STARTED_AT", float("inf")),
+            # Category started long ago (0.0) so senzu's post-switch grace window has
+            # elapsed and the check can fire; the progression path is muted by mocking
+            # its completion read to None rather than by an infinite start time (which
+            # would now also suppress senzu, which shares that grace timer).
+            patch.object(core, "PROGRESSION_STATE_STARTED_AT", 0.0),
+            patch.object(core, "read_progression_completion", return_value=None),
             patch.object(core, "SENZU_ENABLED", True),
             patch.object(core, "SENZU_DISABLED_FOR_RUN", False),
             patch.object(core, "SENZU_DELAY_SEC", 0.0),

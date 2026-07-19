@@ -3126,7 +3126,14 @@ def _background_game_monitor(stop_event):
                     else:
                         complete_streak = 0
 
-                if SENZU_ENABLED and not SENZU_DISABLED_FOR_RUN and current_state:
+                # Same post-switch settle window the progression check above uses:
+                # right after a category starts the HP-fill box can misread as red
+                # while the UI is mid-transition, which spuriously fired Auto-Senzu on
+                # startup (the visible "it just presses Tab" symptom). Suppress the
+                # check for PROG_AFTER_SWITCH_GRACE_SEC; a real low-HP emergency still
+                # needs 2 red frames + SENZU_DELAY_SEC, so it lands just after the window.
+                if (SENZU_ENABLED and not SENZU_DISABLED_FOR_RUN and current_state
+                        and now - PROGRESSION_STATE_STARTED_AT >= PROG_AFTER_SWITCH_GRACE_SEC):
                     if _hp_bar_is_red(sct):
                         red_streak += 1
                         if red_since is None:
@@ -3866,6 +3873,19 @@ def _click_sendinput_abs(x, y):
 
     _user32.SetCursorPos(int(x), int(y))
     time.sleep(0.02)
+
+    # A genuine RELATIVE nudge (+1px then -1px, no ABSOLUTE flag) forces raw-input
+    # consumers like Roblox's cursor tracking to register a real HID delta. The
+    # absolute MOVEs below can be zero-delta since SetCursorPos already parked the
+    # cursor at the target, and a raw-input cursor ignores zero-delta moves until a
+    # real hardware event arrives — which is why clicks previously didn't land until
+    # the user physically wiggled the mouse. This nudge is that wiggle, in software.
+    nudge_out = (_INPUT * 1)(_make_mouse_input(_MOUSEEVENTF_MOVE, 1, 0))
+    nudge_back = (_INPUT * 1)(_make_mouse_input(_MOUSEEVENTF_MOVE, -1, 0))
+    _user32.SendInput(1, nudge_out, _ctypes.sizeof(_INPUT))
+    time.sleep(0.005)
+    _user32.SendInput(1, nudge_back, _ctypes.sizeof(_INPUT))
+    time.sleep(0.01)
 
     move = (_INPUT * 1)(_make_mouse_input(_MOUSEEVENTF_MOVE | absolute_flags, nx, ny))
     _user32.SendInput(1, move, _ctypes.sizeof(_INPUT))

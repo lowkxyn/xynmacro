@@ -126,14 +126,23 @@ class CoordinateTransformTests(unittest.TestCase):
             core._click_sendinput_abs(-1531, 751)
 
         self.assertEqual(fake_user32.cursor_positions, [(-1531, 751)])
-        self.assertEqual(len(fake_user32.sent_inputs), 3)
+        self.assertEqual(len(fake_user32.sent_inputs), 5)
         absolute_flags = core._MOUSEEVENTF_ABSOLUTE | core._MOUSEEVENTF_VIRTUALDESK
+        # A tiny relative nudge (+1px then -1px, no ABSOLUTE flag) precedes the
+        # absolute moves so raw-input consumers register a real HID delta.
         self.assertEqual(
             fake_user32.sent_inputs[:2],
+            [
+                [(core._MOUSEEVENTF_MOVE, 1, 0)],
+                [(core._MOUSEEVENTF_MOVE, -1, 0)],
+            ],
+        )
+        self.assertEqual(
+            fake_user32.sent_inputs[2:4],
             [[(core._MOUSEEVENTF_MOVE | absolute_flags, 1234, 5678)]] * 2,
         )
         self.assertEqual(
-            fake_user32.sent_inputs[2],
+            fake_user32.sent_inputs[4],
             [
                 (core._MOUSEEVENTF_LEFTDOWN, 0, 0),
                 (core._MOUSEEVENTF_LEFTUP, 0, 0),
