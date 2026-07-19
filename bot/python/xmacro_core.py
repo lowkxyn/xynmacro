@@ -2447,7 +2447,12 @@ def display_set_resolution(width=1920, height=1080):
             return False, "display mode unavailable"
         target_mode.PelsWidth = int(width)
         target_mode.PelsHeight = int(height)
-        target_mode.Fields |= win32con.DM_PELSWIDTH | win32con.DM_PELSHEIGHT
+        # Assert ONLY width/height. The mode came from ENUM_CURRENT_SETTINGS, so its
+        # Fields still flag the current DisplayFrequency/BitsPerPel; carrying those over
+        # (|=) told Windows "1080p AT this monitor's exact refresh+bpp", which a secondary
+        # monitor often can't do -> DISP_CHANGE_BADMODE (-2). Clearing to just W/H lets
+        # Windows pick a supported frequency/bpp for that device.
+        target_mode.Fields = win32con.DM_PELSWIDTH | win32con.DM_PELSHEIGHT
         result = win32api.ChangeDisplaySettingsEx(device, target_mode, 0)
         ok = (result == win32con.DISP_CHANGE_SUCCESSFUL)
         if ok and _DISPLAY_RESTORE is None:

@@ -801,7 +801,9 @@ body.sidebar-dragging *{user-select:none!important}
 
 /* ── Toast ── */
 .notif-toast{
-  position:fixed;top:16px;right:16px;padding:12px 18px;border-radius:var(--radius);
+  /* Sits below the 32px titlebar so it never overlaps the window controls
+     (close/maximize). At top:16px it rendered a pill straight over the close X. */
+  position:fixed;top:44px;right:16px;padding:12px 18px;border-radius:var(--radius);
   font-size:12.5px;font-weight:600;max-width:380px;z-index:10001;
   animation:toastIn .35s cubic-bezier(.16,1,.3,1);pointer-events:none;
   will-change:opacity,transform;

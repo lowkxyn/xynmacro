@@ -820,6 +820,15 @@ window.wcCompact = () => {
       return;
     }
     const el = document.getElementById('toast');
+    // Never render an empty pill — an empty message left a blank green box stuck
+    // in the corner. If there's nothing to say, hide any existing toast instead.
+    if (msg == null || String(msg).trim() === '') {
+      clearTimeout(toastTimeout);
+      clearTimeout(toastHideTimeout);
+      el.style.display = 'none';
+      el.classList.remove('hiding');
+      return;
+    }
     clearTimeout(toastTimeout);
     clearTimeout(toastHideTimeout);
     el.classList.remove('hiding');
