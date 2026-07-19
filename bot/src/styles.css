@@ -1203,6 +1203,11 @@ body.sidebar-dragging *{user-select:none!important}
   margin:12px 0 10px 12px;border:1px solid rgba(255,255,255,.09);border-radius:18px;
   background:rgba(255,255,255,.055);box-shadow:0 18px 42px rgba(0,0,0,.32),inset 0 1px 0 rgba(255,255,255,.06);
   backdrop-filter:blur(24px) saturate(1.2);overflow:visible;
+  /* backdrop-filter makes the sidebar its own stacking context; .main also is one
+     (transform:translateZ(0)) and paints later in DOM order, so hover tooltips that
+     flow out of the sidebar rendered UNDER the Aero glass panels. Lift the sidebar
+     above .main so its tooltips win. */
+  z-index:2;
 }
 [data-ui="aero"] .sidebar::after{display:none}
 [data-ui="aero"] .sidebar-brand{justify-content:center;padding:13px 0 12px;border-bottom-color:rgba(255,255,255,.07)}

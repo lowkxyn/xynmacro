@@ -2976,6 +2976,10 @@ PROG_SEARCH_BOX = {"left": 700, "top": 300, "width": 700, "height": 500}
 PROG_STABLE_COMPLETE_FRAMES = 3
 PROG_POLL_INTERVAL_SEC = 0.25
 PROG_AFTER_SWITCH_GRACE_SEC = 1.5
+# Shorter settle window specifically for Auto-Senzu: long enough to skip the
+# category-switch transition frames that spuriously fired Senzu on startup, but
+# short enough that real low-HP recovery isn't noticeably delayed.
+SENZU_AFTER_SWITCH_GRACE_SEC = 0.5
 
 
 def _format_seconds(value):
@@ -3126,14 +3130,14 @@ def _background_game_monitor(stop_event):
                     else:
                         complete_streak = 0
 
-                # Same post-switch settle window the progression check above uses:
-                # right after a category starts the HP-fill box can misread as red
-                # while the UI is mid-transition, which spuriously fired Auto-Senzu on
-                # startup (the visible "it just presses Tab" symptom). Suppress the
-                # check for PROG_AFTER_SWITCH_GRACE_SEC; a real low-HP emergency still
-                # needs 2 red frames + SENZU_DELAY_SEC, so it lands just after the window.
+                # Post-switch settle window (like the progression check above): right
+                # after a category starts the HP-fill box can misread as red while the
+                # UI is mid-transition, which spuriously fired Auto-Senzu on startup
+                # (the visible "it just presses Tab" symptom). Suppress the check for
+                # SENZU_AFTER_SWITCH_GRACE_SEC; a real low-HP emergency still needs
+                # 2 red frames + SENZU_DELAY_SEC, so it lands just after the window.
                 if (SENZU_ENABLED and not SENZU_DISABLED_FOR_RUN and current_state
-                        and now - PROGRESSION_STATE_STARTED_AT >= PROG_AFTER_SWITCH_GRACE_SEC):
+                        and now - PROGRESSION_STATE_STARTED_AT >= SENZU_AFTER_SWITCH_GRACE_SEC):
                     if _hp_bar_is_red(sct):
                         red_streak += 1
                         if red_since is None:

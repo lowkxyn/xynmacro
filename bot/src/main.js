@@ -2545,6 +2545,13 @@ window.wcCompact = () => {
 
   // What's-new content, newest first. Each entry: {version, notes:[{h, items[]}]}.
   const CHANGELOG = [
+    { version: '1.0.2', notes: [
+      { h: 'Fixes', items: [
+        'Auto-Senzu no longer misfires on startup (the stray Tab press right after a category begins).',
+        'In-game clicks now land immediately without needing a mouse wiggle first.',
+        'Aero style: hover tooltips no longer render behind panels.',
+      ]},
+    ]},
     { version: '1.0.1', notes: [
       { h: 'Fixes', items: [
         'Notifications no longer overlap the window buttons in the top-right corner.',
