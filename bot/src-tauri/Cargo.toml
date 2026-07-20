@@ -1,6 +1,6 @@
 [package]
 name = "xyn_macro"
-version = "1.0.3"
+version = "1.0.4"
 description = "XynMacro — DBOG training-minigame automation (Tauri shell)"
 authors = ["Xy"]
 edition = "2021"

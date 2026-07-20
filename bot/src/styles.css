@@ -207,6 +207,56 @@ html,body{background:transparent}
 }
 .titlebar-drag{flex:1;display:flex;align-items:center;height:100%;padding-left:14px;position:relative;min-width:0}
 .titlebar-title{font-size:11px;font-weight:600;color:var(--text3);letter-spacing:.3px;transition:opacity .22s ease}
+/* Windows has no glyph for regional-indicator flag emoji (🇪🇸 renders as "ES"),
+   so the flag is drawn in CSS. Sized in em, so it tracks whatever font-size the
+   parent uses — titlebar tag and the big centred pop share this one rule. */
+.flag-es{
+  display:inline-block;width:1.4em;height:.95em;vertical-align:-.12em;margin-left:.35em;
+  border-radius:2px;box-shadow:0 0 0 1px rgba(0,0,0,.35);
+  background:linear-gradient(#c60b1e 0 25%,#ffc400 25% 75%,#c60b1e 75% 100%);
+}
+
+/* Centred on the window, not on .titlebar-drag. pointer-events:none so a mousedown
+   here still reaches .titlebar-drag underneath and the window stays draggable. */
+.tb-tag{
+  position:absolute;left:50%;top:0;transform:translateX(-50%);
+  height:100%;display:flex;align-items:center;pointer-events:none;
+  font-family:var(--font-mono);font-size:15px;font-weight:700;
+  color:var(--text2);letter-spacing:.6px;white-space:nowrap;
+  transition:opacity .22s ease;
+}
+/* Compact mode hands the whole bar to the HUD — get out of its way. */
+.window-frame.compact .tb-tag{opacity:0}
+
+/* Launch confetti. Clipped by .window-frame's overflow:hidden, so bits vanish at
+   the rounded edges instead of spilling onto the OS desktop. Removed from the DOM
+   once the animation ends — see spawnLaunchConfetti() in main.js. */
+.confetti-layer{position:absolute;inset:0;pointer-events:none;z-index:60;overflow:hidden}
+.wspain-pop{
+  position:absolute;left:50%;top:50%;z-index:61;pointer-events:none;
+  font-family:var(--font-mono);font-size:38px;font-weight:700;letter-spacing:1px;
+  color:var(--text);text-shadow:0 4px 24px rgba(0,0,0,.55);white-space:nowrap;
+  animation:wspain-pop 2.4s cubic-bezier(.2,.9,.3,1) forwards;
+}
+@keyframes wspain-pop{
+  0%{transform:translate(-50%,-50%) scale(.6);opacity:0}
+  14%{transform:translate(-50%,-50%) scale(1.06);opacity:1}
+  22%{transform:translate(-50%,-50%) scale(1)}
+  75%{transform:translate(-50%,-50%) scale(1);opacity:1}
+  100%{transform:translate(-50%,-58%) scale(.96);opacity:0}
+}
+.confetti-bit{
+  position:absolute;top:-24px;font-size:var(--bit-size,18px);line-height:1;
+  will-change:transform,opacity;
+  animation:confetti-fall var(--bit-dur,2.6s) linear var(--bit-delay,0s) forwards;
+}
+@keyframes confetti-fall{
+  0%{transform:translateY(0) rotate(0deg);opacity:0}
+  8%{opacity:1}
+  75%{opacity:1}
+  100%{transform:translateY(105vh) rotate(var(--bit-spin,360deg));opacity:0}
+}
+@media (prefers-reduced-motion:reduce){.confetti-layer{display:none}}
 /* Compact HUD: overlays the title area when window is rolled up. */
 .titlebar-hud{
   position:absolute;left:14px;top:0;height:100%;right:14px;
