@@ -811,6 +811,9 @@ body.sidebar-dragging *{user-select:none!important}
 @keyframes toastIn{from{opacity:0;transform:translateX(20px) scale(.95)}to{opacity:1;transform:translateX(0) scale(1)}}
 @keyframes toastOut{from{opacity:1;transform:translateX(0) scale(1)}to{opacity:0;transform:translateX(14px) scale(.94)}}
 .notif-toast.hiding{animation:toastOut .24s cubic-bezier(.4,0,.2,1) forwards!important}
+/* Belt-and-braces: a toast with no text content never paints (kills the stray
+   empty green pill regardless of what tried to show it). */
+.notif-toast:empty{display:none!important}
 .notif-toast.ok{background:color-mix(in srgb,var(--green),#0a1a12 55%);color:#fff;border:1px solid color-mix(in srgb,var(--green),transparent 55%)}
 .notif-toast.warn{background:color-mix(in srgb,var(--amber),#251704 62%);color:#fff;border:1px solid color-mix(in srgb,var(--amber),transparent 48%)}
 .notif-toast.err{background:color-mix(in srgb,var(--red),#1a0a0a 55%);color:#fff;border:1px solid color-mix(in srgb,var(--red),transparent 55%)}

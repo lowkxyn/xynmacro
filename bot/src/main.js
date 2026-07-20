@@ -821,8 +821,10 @@ window.wcCompact = () => {
     }
     const el = document.getElementById('toast');
     // Never render an empty pill — an empty message left a blank green box stuck
-    // in the corner. If there's nothing to say, hide any existing toast instead.
-    if (msg == null || String(msg).trim() === '') {
+    // in the corner. Strip whitespace plus Unicode format/control chars (zero-width
+    // space, word joiner, soft hyphen, BOM, etc.) that survive .trim() and would
+    // otherwise render a textless green pill. If nothing's left, hide instead.
+    if (msg == null || String(msg).replace(/[\s\p{Cf}\p{Cc}]+/gu, '') === '') {
       clearTimeout(toastTimeout);
       clearTimeout(toastHideTimeout);
       el.style.display = 'none';
@@ -2545,6 +2547,11 @@ window.wcCompact = () => {
 
   // What's-new content, newest first. Each entry: {version, notes:[{h, items[]}]}.
   const CHANGELOG = [
+    { version: '1.0.3', notes: [
+      { h: 'Fixes', items: [
+        'Removed a stray empty notification pill that could briefly appear in the top-right corner.',
+      ]},
+    ]},
     { version: '1.0.2', notes: [
       { h: 'Fixes', items: [
         'Auto-Senzu no longer misfires on startup (the stray Tab press right after a category begins).',
