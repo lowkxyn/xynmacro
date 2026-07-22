@@ -402,6 +402,12 @@ fn sidecar_runtime_args(
     ]
 }
 
+fn runtime_app_version() -> &'static str {
+    // Cargo.toml is the release version source of truth. The generated Tauri
+    // package context can remain stale across same-version local rebuilds.
+    env!("CARGO_PKG_VERSION")
+}
+
 fn generate_backend_auth_token() -> Result<String, String> {
     let mut bytes = [0_u8; 32];
     getrandom::fill(&mut bytes).map_err(|error| format!("secure random failed: {error}"))?;
@@ -1045,11 +1051,11 @@ pub fn run() {
             }
 
             let app_handle = app.handle().clone();
-            let app_version = app.package_info().version.to_string();
+            let app_version = runtime_app_version();
             match spawn_sidecar(
                 &app_handle,
                 launcher_pid,
-                &app_version,
+                app_version,
                 &setup_auth_token,
             ) {
                 Ok(child) => {
@@ -1150,7 +1156,7 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::{generate_backend_auth_token, sidecar_runtime_args};
+    use super::{generate_backend_auth_token, runtime_app_version, sidecar_runtime_args};
     use std::path::Path;
 
     #[test]
@@ -1172,6 +1178,11 @@ mod tests {
                 "test-auth-token",
             ]
         );
+    }
+
+    #[test]
+    fn runtime_version_comes_from_the_cargo_package() {
+        assert_eq!(runtime_app_version(), env!("CARGO_PKG_VERSION"));
     }
 
     #[test]
