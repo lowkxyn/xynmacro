@@ -3117,6 +3117,7 @@ PROG_SEARCH_BOX = {"left": 700, "top": 300, "width": 700, "height": 500}
 PROG_STABLE_COMPLETE_FRAMES = 3
 PROG_POLL_INTERVAL_SEC = 0.25
 PROG_AFTER_SWITCH_GRACE_SEC = 1.5
+PROGRESSION_UI_LOST_TIMEOUT_SEC = 8.0
 # Shorter settle window specifically for Auto-Senzu: long enough to skip the
 # category-switch transition frames that spuriously fired Senzu on startup, but
 # short enough that real low-HP recovery isn't noticeably delayed.
@@ -3229,6 +3230,41 @@ def read_progression_completion(sct, geometry=None):
     )
 
 
+def _progression_ui_loss_state(
+    current_state,
+    tracked_state,
+    completion,
+    now,
+    missing_since,
+    suspended=False,
+):
+    """Track continuous loss only after progression was positively identified."""
+    if (
+        not current_state
+        or tracked_state != current_state
+        or completion is not None
+        or suspended
+    ):
+        return None, False
+    if missing_since is None:
+        return now, False
+    return (
+        missing_since,
+        now - missing_since >= PROGRESSION_UI_LOST_TIMEOUT_SEC,
+    )
+
+
+def _stop_for_training_ui_loss():
+    global UI_STOP_REQUESTED
+    reason = (
+        "GC training interface disappeared; the character may have left "
+        "the chamber or the session expired"
+    )
+    _record_run_outcome("error", reason, retryable=False)
+    UI_STOP_REQUESTED = True
+    print(f"[MONITOR] {reason}; stopping macro safely")
+
+
 def _background_game_monitor(stop_event):
     """Continuously watch progression and critical HP during every minigame."""
     global PROGRESSION_TRACKED_STATE, PROGRESSION_COMPLETE
@@ -3242,6 +3278,7 @@ def _background_game_monitor(stop_event):
     red_handled = False
     death_streak = 0
     last_error_log = 0.0
+    progression_missing_since = None
 
     with mss.MSS() as sct:
         while not stop_event.is_set():
@@ -3270,6 +3307,7 @@ def _background_game_monitor(stop_event):
                     tracked_state = current_state
                     complete_streak = 0
                     completion_sent = False
+                    progression_missing_since = None
                     PROGRESSION_TRACKED_STATE = None
                     PROGRESSION_COMPLETE = None
 
@@ -3278,6 +3316,7 @@ def _background_game_monitor(stop_event):
                         and now - PROGRESSION_STATE_STARTED_AT >= PROG_AFTER_SWITCH_GRACE_SEC):
                     completion = read_progression_completion(sct, game_geometry)
                     if completion is not None:
+                        progression_missing_since = None
                         if PROGRESSION_TRACKED_STATE != current_state:
                             print(_progression_tracking_message(current_state))
                         PROGRESSION_TRACKED_STATE = current_state
@@ -3293,6 +3332,24 @@ def _background_game_monitor(stop_event):
                             PROGRESSION_COMPLETE_REQUESTED.set()
                     else:
                         complete_streak = 0
+                        progression_missing_since, progression_ui_lost = (
+                            _progression_ui_loss_state(
+                                current_state,
+                                PROGRESSION_TRACKED_STATE,
+                                completion,
+                                now,
+                                progression_missing_since,
+                                suspended=(
+                                    TRAINING_MENU_VISIBLE
+                                    or CONTROLLER_PAUSED
+                                    or SENZU_CONTROLLER_ACTIVE.is_set()
+                                    or SENZU_CONTROLLER_RESUME_REQUIRED.is_set()
+                                ),
+                            )
+                        )
+                        if progression_ui_lost:
+                            _stop_for_training_ui_loss()
+                            break
 
                 # Post-switch settle window (like the progression check above): right
                 # after a category starts the HP-fill box can misread as red while the

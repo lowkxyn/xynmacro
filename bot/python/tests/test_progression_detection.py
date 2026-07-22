@@ -99,6 +99,61 @@ class ProgressionDetectionTests(unittest.TestCase):
             ),
         )
 
+    def test_progression_loss_does_not_arm_before_tracking_locks(self):
+        self.assertEqual(
+            core._progression_ui_loss_state(
+                "Ki Damage", None, None, 20.0, None
+            ),
+            (None, False),
+        )
+
+    def test_progression_loss_stops_only_after_continuous_timeout(self):
+        with patch.object(core, "PROGRESSION_UI_LOST_TIMEOUT_SEC", 8.0):
+            missing_since, lost = core._progression_ui_loss_state(
+                "Ki Damage", "Ki Damage", None, 20.0, None
+            )
+            self.assertEqual(missing_since, 20.0)
+            self.assertFalse(lost)
+
+            missing_since, lost = core._progression_ui_loss_state(
+                "Ki Damage", "Ki Damage", None, 27.99, missing_since
+            )
+            self.assertFalse(lost)
+
+            missing_since, lost = core._progression_ui_loss_state(
+                "Ki Damage", "Ki Damage", None, 28.0, missing_since
+            )
+            self.assertTrue(lost)
+
+    def test_progression_read_or_suspension_resets_loss_timer(self):
+        self.assertEqual(
+            core._progression_ui_loss_state(
+                "Ki Damage", "Ki Damage", False, 24.0, 20.0
+            ),
+            (None, False),
+        )
+        self.assertEqual(
+            core._progression_ui_loss_state(
+                "Ki Damage", "Ki Damage", None, 24.0, 20.0,
+                suspended=True,
+            ),
+            (None, False),
+        )
+
+    def test_training_ui_loss_is_non_retryable_and_requests_stop(self):
+        with (
+            patch.object(core, "_record_run_outcome") as record_outcome,
+            patch.object(core, "UI_STOP_REQUESTED", False),
+        ):
+            core._stop_for_training_ui_loss()
+
+            self.assertTrue(core.UI_STOP_REQUESTED)
+            record_outcome.assert_called_once()
+            args, kwargs = record_outcome.call_args
+            self.assertEqual(args[0], "error")
+            self.assertIn("session expired", args[1])
+            self.assertIs(kwargs["retryable"], False)
+
 
 if __name__ == "__main__":
     unittest.main()
