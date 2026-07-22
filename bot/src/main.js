@@ -2707,6 +2707,7 @@ window.wcCompact = () => {
       { h: 'Error Recovery', items: [
         'Added bounded retry-after-error controls with a configurable retry limit, recovery method, and walk duration.',
         'GC death is detected directly, the Respawn dialog is confirmed before clicking, and completed stats are rechecked after recovery.',
+        'Starting the macro while already on GC\'s death screen is detected before any menu input is sent.',
       ]},
       { h: 'Safety', items: [
         'Manual Stop never retries, stale monitor input is stopped before recovery, and after-run failure actions wait until retries are exhausted.',

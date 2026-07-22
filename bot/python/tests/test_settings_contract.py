@@ -78,6 +78,7 @@ class SettingsContractTests(unittest.TestCase):
     def test_run_controller_does_not_reload_stale_config(self):
         with (
             patch.object(core, "load_master_config") as load_config,
+            patch.object(core, "_stop_if_starting_on_death_screen", return_value=False),
             patch.object(
                 core, "_start_background_game_monitor", side_effect=RuntimeError("stop")
             ),

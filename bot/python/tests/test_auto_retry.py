@@ -106,6 +106,28 @@ class AutoRetryTests(unittest.TestCase):
         self.assertEqual(core._CURRENT_RUN_OUTCOME, "error")
         self.assertEqual(core._CURRENT_RUN_REASON, "Character death was confirmed")
 
+    def test_startup_death_is_recorded_before_controller_navigation(self):
+        core.UI_STOP_REQUESTED = False
+        with patch.object(
+            core, "_auto_retry_wait_for_death_dialog", return_value=True
+        ):
+            self.assertTrue(core._stop_if_starting_on_death_screen())
+
+        self.assertTrue(core.UI_STOP_REQUESTED)
+        self.assertEqual(core._CURRENT_RUN_OUTCOME, "error")
+        self.assertTrue(core._CURRENT_RUN_RETRYABLE)
+
+    def test_controller_sends_no_startup_input_when_already_dead(self):
+        with (
+            patch.object(core, "_stop_if_starting_on_death_screen", return_value=True),
+            patch.object(core, "_start_background_game_monitor") as start_monitor,
+            patch.object(core, "hardware_tap") as tap,
+        ):
+            core.run_master_controller()
+
+        start_monitor.assert_not_called()
+        tap.assert_not_called()
+
     def test_non_retryable_error_never_enters_recovery(self):
         def controller():
             core._record_run_outcome("error", "missing recognition asset")

@@ -5512,6 +5512,8 @@ def run_master_controller():
     global CONTROLLER_PAUSED, CURRENT_TRAINING_STATE, PROGRESSION_STATE_STARTED_AT
     global TRAINING_MENU_VISIBLE
     check_exit()
+    if _stop_if_starting_on_death_screen():
+        return
     CONTROLLER_PAUSED = False
     TRAINING_MENU_VISIBLE = False
     print("[XynMacro] macro loop started")
@@ -6726,6 +6728,16 @@ def _auto_retry_wait_for_death_dialog(timeout):
             if not _auto_retry_wait(0.25):
                 return False
     return False
+
+
+def _stop_if_starting_on_death_screen():
+    """Fail safely before startup navigation if GC is already awaiting Respawn."""
+    if not _auto_retry_wait_for_death_dialog(0.75):
+        check_exit()
+        return False
+    print("[RECOVERY] Macro started on GC's death screen")
+    _stop_for_game_death()
+    return True
 
 
 def _auto_retry_click_respawn(timeout=15.0):
