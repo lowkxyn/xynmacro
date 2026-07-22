@@ -1,5 +1,5 @@
 param(
-    [string]$ExePath = (Join-Path $env:LOCALAPPDATA 'XynMacro\XynMacro.exe'),
+    [string]$ExePath = (Join-Path $env:LOCALAPPDATA 'XynMacro\XynMacroApp.exe'),
     [string]$DataDir = (Join-Path $env:APPDATA 'com.htcgc.xyn'),
     [int]$MaxCleanupMs = 1000
 )
