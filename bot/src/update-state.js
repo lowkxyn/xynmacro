@@ -7,5 +7,5 @@
     };
   }
 
-  root.XMacroUpdateState = { reminderDecision };
+  root.XynMacroUpdateState = { reminderDecision };
 })(globalThis);

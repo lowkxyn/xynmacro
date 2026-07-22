@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-import xmacro_core as core
+import xynmacro_core as core
 
 
 class VersionPropagationTests(unittest.TestCase):

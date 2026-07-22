@@ -1,6 +1,6 @@
 # Freeze the Python sidecar into one self-contained .exe (Python + all libs + the
 # template/calibration assets baked in) and drop it where Tauri's externalBin expects.
-# The installed app then needs nothing preinstalled. Re-run after changing xmacro_core.py.
+# The installed app then needs nothing preinstalled. Re-run after changing xynmacro_core.py.
 #
 #   cd bot
 #   powershell -ExecutionPolicy Bypass -File scripts/build_sidecar.ps1
@@ -24,7 +24,7 @@ try {
         --add-data "gravity;gravity" `
         --add-data "defaults;defaults" `
         --hidden-import win32gui --hidden-import win32process `
-        xmacro_core.py
+        xynmacro_core.py
     if ($LASTEXITCODE -ne 0) {
         throw "PyInstaller failed with exit code $LASTEXITCODE"
     }

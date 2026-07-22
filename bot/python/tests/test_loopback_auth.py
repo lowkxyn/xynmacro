@@ -6,7 +6,7 @@ from pathlib import Path
 PYTHON_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PYTHON_DIR))
 
-import xmacro_core as core
+import xynmacro_core as core
 
 
 class LoopbackAuthTests(unittest.TestCase):

@@ -7,7 +7,7 @@
     "tauri": "tauri",
     "dev": "tauri dev",
     "build": "tauri build",
-    "test": "node --test src/screen-state.test.mjs src/update-state.test.mjs src/frontend-contract.test.mjs"
+    "test": "node --test src/screen-state.test.mjs src/update-state.test.mjs src/preference-migration.test.mjs src/frontend-contract.test.mjs"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2"

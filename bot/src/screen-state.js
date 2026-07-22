@@ -21,5 +21,5 @@
       && screen.signature !== acceptedSignature;
   }
 
-  root.XMacroScreenState = { normalizeScreen, needsResolutionWarning };
+  root.XynMacroScreenState = { normalizeScreen, needsResolutionWarning };
 })(globalThis);

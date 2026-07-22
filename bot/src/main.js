@@ -1,5 +1,15 @@
-/* Apply saved appearance before first paint. */
-(function(){var u=localStorage.getItem('xmacro-ui-style')||'classic';if(u==='aero')document.documentElement.setAttribute('data-ui','aero');var t=localStorage.getItem('dbog-theme');if(t&&t!=='graphite'&&t!=='custom'&&t.indexOf('p:')!==0)document.documentElement.setAttribute('data-theme',t);var b=localStorage.getItem('dbog-bg')||'flow';if(b!=='none')document.documentElement.setAttribute('data-bg',b)})();
+const XYNMACRO_PREFERENCE_PREFIX = 'xynmacro-';
+
+/* Migrate pre-1.1 preference keys locally, remove the legacy copies, then apply
+   saved appearance before first paint. No preference data leaves the WebView. */
+(function(){
+  const legacyPrefix = ['x', 'macro-'].join('');
+  const suffixes = ['ui-style', 'auto-update', 'update-ignored-version', 'changelog-seen', 'announcement-seen', 'welcome-seen', 'wspain-seen'];
+  XynMacroPreferenceMigration.migratePreferences(
+    localStorage, legacyPrefix, XYNMACRO_PREFERENCE_PREFIX, suffixes
+  );
+  var u=localStorage.getItem(XYNMACRO_PREFERENCE_PREFIX+'ui-style')||'classic';if(u==='aero')document.documentElement.setAttribute('data-ui','aero');var t=localStorage.getItem('dbog-theme');if(t&&t!=='graphite'&&t!=='custom'&&t.indexOf('p:')!==0)document.documentElement.setAttribute('data-theme',t);var b=localStorage.getItem('dbog-bg')||'flow';if(b!=='none')document.documentElement.setAttribute('data-bg',b)
+})();
 
 /* Splash: stays until Python sidecar reports healthy (Rust fires `backend-ready`)
    OR a hard cap (8s) — whichever comes first. Minimum hold of 900ms so the splash
@@ -40,7 +50,7 @@ window.addEventListener('DOMContentLoaded', () => {
 /* One-time "W spain" moment: a centred card plus an emoji shower as the splash
    fades. Fires once per install — the flag lives in ACTIVE_PREFERENCE_KEYS, so a
    config reset replays it. Everything is pointer-events:none and self-removing. */
-const WSPAIN_SEEN_KEY = 'xmacro-wspain-seen';
+const WSPAIN_SEEN_KEY = XYNMACRO_PREFERENCE_PREFIX + 'wspain-seen';
 function celebrateWSpain() {
   const frame = document.querySelector('.window-frame');
   if (!frame || localStorage.getItem(WSPAIN_SEEN_KEY)) return;
@@ -111,14 +121,14 @@ const ACTIVE_PREFERENCE_KEYS = [
   'dbog-theme',
   'dbog-bg',
   'dbog-bg-speed',
-  'xmacro-ui-style',
+  'xynmacro-ui-style',
   'dbog-sidebar-width',
-  'xmacro-auto-update',
-  'xmacro-update-ignored-version',
-  'xmacro-changelog-seen',
-  'xmacro-announcement-seen',
-  'xmacro-welcome-seen',
-  'xmacro-wspain-seen',
+  'xynmacro-auto-update',
+  'xynmacro-update-ignored-version',
+  'xynmacro-changelog-seen',
+  'xynmacro-announcement-seen',
+  'xynmacro-welcome-seen',
+  'xynmacro-wspain-seen',
 ];
 
 // Deleting the visible macro_config.json is a complete reset on next launch.
@@ -660,14 +670,14 @@ window.wcCompact = () => {
     const selected = style === 'aero' ? 'aero' : 'classic';
     document.documentElement.toggleAttribute('data-ui', selected === 'aero');
     if (selected === 'aero') document.documentElement.setAttribute('data-ui', 'aero');
-    localStorage.setItem('xmacro-ui-style', selected);
+    localStorage.setItem('xynmacro-ui-style', selected);
     document.querySelectorAll('[data-ui-style]').forEach((button) => {
       button.classList.toggle('active', button.dataset.uiStyle === selected);
       button.setAttribute('aria-pressed', button.dataset.uiStyle === selected ? 'true' : 'false');
     });
     if (resetScroll) _resetScroll();
   }
-  const uiStyle = localStorage.getItem('xmacro-ui-style') === 'aero' ? 'aero' : 'classic';
+  const uiStyle = localStorage.getItem('xynmacro-ui-style') === 'aero' ? 'aero' : 'classic';
   document.querySelectorAll('[data-ui-style]').forEach((button) => {
     button.addEventListener('click', () => applyUiStyle(button.dataset.uiStyle));
   });
@@ -1298,7 +1308,7 @@ window.wcCompact = () => {
     const task = (async () => {
       // Non-1080p heads-up. Continue = accept for this session (don't warn again);
       // Cancel = not accepted, so it reappears on the next Start.
-      while (XMacroScreenState.needsResolutionWarning(_screenRes, _acceptedDisplaySignature)) {
+      while (XynMacroScreenState.needsResolutionWarning(_screenRes, _acceptedDisplaySignature)) {
         const warnedScreen = _screenRes;
         const ok = await _confirmResStart(warnedScreen);
         if (!ok || actionSeq !== _macroActionSeq) return;
@@ -2125,7 +2135,7 @@ window.wcCompact = () => {
     const setResolutionButton = document.getElementById('btnRes1080');
     const revertResolutionButton = document.getElementById('btnResRevert');
     if (resIcon && resText) {
-      const nextScreen = XMacroScreenState.normalizeScreen(scr);
+      const nextScreen = XynMacroScreenState.normalizeScreen(scr);
       if (setResolutionButton) setResolutionButton.disabled = running || !nextScreen;
       // Revert can still restore a display changed earlier when Roblox has
       // temporarily disappeared, so only an active macro blocks it here.
@@ -2694,11 +2704,11 @@ window.wcCompact = () => {
   }
 
   /* ── Signed GitHub updates + changelog overlay ── */
-  const AUTO_UPDATE_KEY = 'xmacro-auto-update';
-  const IGNORED_UPDATE_KEY = 'xmacro-update-ignored-version';
-  const SEEN_VERSION_KEY = 'xmacro-changelog-seen';
-  const ANNOUNCEMENT_SEEN_KEY = 'xmacro-announcement-seen';
-  const WELCOME_SEEN_KEY = 'xmacro-welcome-seen';
+  const AUTO_UPDATE_KEY = 'xynmacro-auto-update';
+  const IGNORED_UPDATE_KEY = 'xynmacro-update-ignored-version';
+  const SEEN_VERSION_KEY = 'xynmacro-changelog-seen';
+  const ANNOUNCEMENT_SEEN_KEY = 'xynmacro-announcement-seen';
+  const WELCOME_SEEN_KEY = 'xynmacro-welcome-seen';
   const ANNOUNCEMENT_URL = 'https://raw.githubusercontent.com/lowkxyn/xynmacro/main/announcements.json';
 
   // What's-new content, newest first. Each entry: {version, notes:[{h, items[]}]}.
@@ -2711,6 +2721,7 @@ window.wcCompact = () => {
       ]},
       { h: 'Safety', items: [
         'Manual Stop never retries, stale monitor input is stopped before recovery, and after-run failure actions wait until retries are exhausted.',
+        'Standardized remaining internal module, browser-state, and build names under XynMacro with a one-time local preference migration.',
       ]},
     ]},
     { version: '1.0.5', notes: [
@@ -2931,7 +2942,7 @@ window.wcCompact = () => {
           return null;
         }
         const ignoredVersion = localStorage.getItem(IGNORED_UPDATE_KEY);
-        const reminder = XMacroUpdateState.reminderDecision(
+        const reminder = XynMacroUpdateState.reminderDecision(
           info.version,
           ignoredVersion,
           automatic,

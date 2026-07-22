@@ -14,6 +14,13 @@ const [html, main, styles, readme, packageText] = await Promise.all([
 ]);
 const packageMetadata = JSON.parse(packageText);
 
+test('XynMacro branding migrates and removes legacy preference keys', () => {
+  assert.doesNotMatch(main, /X(?:Macro)|x(?:macro)-/);
+  assert.match(main, /const legacyPrefix = \['x', 'macro-'\]\.join\(''\)/);
+  assert.match(main, /XynMacroPreferenceMigration\.migratePreferences/);
+  assert.match(html, /preference-migration\.js[\s\S]*main\.js/);
+});
+
 test('custom switches and segmented controls expose their state', () => {
   const toggles = [...html.matchAll(/<button\b[^>]*class="toggle(?: active)?"[^>]*>/g)].map((match) => match[0]);
   assert.equal(toggles.length, 10);

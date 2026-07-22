@@ -449,7 +449,7 @@ fn spawn_sidecar(
     #[cfg(debug_assertions)]
     let mut cmd = {
         let dir = python_dir(app);
-        let script = dir.join("xmacro_core.py");
+        let script = dir.join("xynmacro_core.py");
         if !script.exists() {
             return Err(format!("Sidecar script not found at {:?}", script));
         }

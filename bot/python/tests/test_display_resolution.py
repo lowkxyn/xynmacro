@@ -10,7 +10,7 @@ from unittest.mock import call, patch
 PYTHON_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PYTHON_DIR))
 
-import xmacro_core as core
+import xynmacro_core as core
 
 
 def monitor(device, width, height, left=0, top=0):

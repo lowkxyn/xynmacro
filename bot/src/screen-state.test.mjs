@@ -3,7 +3,7 @@ import test from 'node:test';
 
 await import('./screen-state.js');
 
-const { normalizeScreen, needsResolutionWarning } = globalThis.XMacroScreenState;
+const { normalizeScreen, needsResolutionWarning } = globalThis.XynMacroScreenState;
 
 const screen = (device, width, height) => normalizeScreen({
   source: 'game-monitor',
