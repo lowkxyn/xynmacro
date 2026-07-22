@@ -32,6 +32,7 @@ bot/ui_mockups/
 /e.txt
 bot/python/senzu_*.png
 bot/python/json/
+bot/python/display_restore.json
 
 # OS cruft
 Thumbs.db

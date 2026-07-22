@@ -179,14 +179,23 @@ window.wcOnTop = () => {
 let _isCompact = false;
 window.wcCompact = () => {
   const frame = document.querySelector('.window-frame');
+  const compactButton = document.getElementById('btnCompact');
   _isCompact = !_isCompact;
   if (_isCompact) {
     frame.classList.add('compact');
-    document.getElementById('btnCompact')?.classList.add('active');
+    compactButton?.classList.add('active');
+    if (compactButton) {
+      compactButton.title = 'Expand';
+      compactButton.setAttribute('aria-label', 'Expand');
+    }
     _wcSend('compact');
   } else {
     frame.classList.remove('compact');
-    document.getElementById('btnCompact')?.classList.remove('active');
+    compactButton?.classList.remove('active');
+    if (compactButton) {
+      compactButton.title = 'Roll up';
+      compactButton.setAttribute('aria-label', 'Roll up');
+    }
     _wcSend('uncompact');
   }
 };
@@ -805,6 +814,7 @@ window.wcCompact = () => {
   let toastTimeout = null;
   let toastHideTimeout = null;
   let _macroRunning = false;
+  let _gameWindowFound = false;
   let _macroUiAction = '';
   let _macroActionSeq = 0;
   let _startTask = null;
@@ -817,8 +827,9 @@ window.wcCompact = () => {
     const start = document.getElementById('btnStart');
     const stop = document.getElementById('btnStop');
     if (start) {
-      start.disabled = starting || stopping || _macroRunning;
+      start.disabled = starting || stopping || _macroRunning || !_gameWindowFound;
       start.textContent = starting ? 'STARTING…' : 'START MACRO';
+      start.title = _gameWindowFound ? '' : 'Open Roblox before starting XynMacro';
       start.classList.toggle('running', _macroRunning && !stopping);
     }
     if (stop) {
@@ -828,7 +839,11 @@ window.wcCompact = () => {
     const hudToggle = document.getElementById('hudMacroToggle');
     if (hudToggle) {
       hudToggle.classList.toggle('error', !!_compactAlert);
-      hudToggle.disabled = stopping;
+      hudToggle.disabled = stopping || (!_macroRunning && !starting && !_gameWindowFound);
+      if (!_gameWindowFound && !_macroRunning && !starting) {
+        hudToggle.title = 'Open Roblox before starting XynMacro';
+        hudToggle.setAttribute('aria-label', hudToggle.title);
+      }
     }
   }
 
@@ -1224,7 +1239,7 @@ window.wcCompact = () => {
   /* Actions */
   let _cancelResolutionWarning = null;
   // First Start of the session on a non-1080p display: a brief warning that
-  // auto-confirms after a 3s countdown (or Cancel to back out). The macro still
+  // auto-confirms after a 5s countdown (or Cancel to back out). The macro still
   // runs at any resolution — this is only a heads-up.
   function _confirmResStart(screen) {
     return new Promise((resolve) => {
@@ -1272,6 +1287,10 @@ window.wcCompact = () => {
 
   window.startMacro = () => {
     if (_startTask || _stopTask || _macroRunning) return _startTask || _stopTask;
+    if (!_gameWindowFound) {
+      showToast('Open Roblox before starting XynMacro', 'err');
+      return Promise.resolve();
+    }
     const actionSeq = ++_macroActionSeq;
     _compactAlert = '';
     _setMacroUiAction('starting');
@@ -1438,9 +1457,31 @@ window.wcCompact = () => {
       el.classList.toggle('active', next);
       el.setAttribute('aria-checked', next ? 'true' : 'false');
       _pushUndo(key, isActive, next);
+      if (key === 'shutdown_pc_when_finished' || key === 'after_run_on_failure') {
+        _syncAfterRunControls();
+      }
     }
-    showToast(r.msg || `${key}: ${next ? 'ON' : 'OFF'}`, r.ok !== false ? 'ok' : 'err');
+    const shutdownLabels = {
+      shutdown_pc_when_finished: 'Shutdown when finished',
+      after_run_on_failure: 'After-run actions on failure',
+    };
+    const message = r.ok !== false && shutdownLabels[key]
+      ? `${shutdownLabels[key]} ${next ? 'enabled' : 'disabled'}`
+      : (r.msg || `${key}: ${next ? 'ON' : 'OFF'}`);
+    showToast(message, r.ok !== false ? 'ok' : 'err');
   };
+
+  function _syncAfterRunControls() {
+    const failureToggle = document.getElementById('toggleAfterRunFailure');
+    const failureRow = document.getElementById('afterRunFailureRow');
+    const failureHint = document.getElementById('afterRunFailureHint');
+    const gameAction = document.getElementById('afterRunGameAction')?.value || 'none';
+    const shutdownEnabled = document.getElementById('toggleShutdownFinished')?.classList.contains('active');
+    const disabled = gameAction === 'none' && !shutdownEnabled;
+    if (failureToggle) disabled ? failureToggle.setAttribute('disabled', '') : failureToggle.removeAttribute('disabled');
+    failureRow?.classList.toggle('is-disabled', disabled);
+    failureHint?.classList.toggle('is-disabled', disabled);
+  }
 
   function _readInputValue(el) {
     if (!el) return null;
@@ -1489,6 +1530,7 @@ window.wcCompact = () => {
           if (!el._suppressUndo && savedValue !== ov) {
             _pushUndo(key, ov, savedValue);
           }
+          if (key === 'after_run_game_action') _syncAfterRunControls();
           el.classList.add('saved-flash');
           setTimeout(() => el.classList.remove('saved-flash'), 450);
         }
@@ -1646,6 +1688,7 @@ window.wcCompact = () => {
     const map = {
       health_box:  { rowId: 'previewRowHealth',  imgId: 'previewImgHealth',  metaId: 'previewMetaHealth',  btnId: 'previewBtnHealth'  },
       agility_box: { rowId: 'previewRowAgility', imgId: 'previewImgAgility', metaId: 'previewMetaAgility', btnId: 'previewBtnAgility' },
+      diagnostics: { rowId: 'previewRowDiagnostics', imgId: 'previewImgDiagnostics', metaId: 'previewMetaDiagnostics', btnId: 'previewBtnDiagnostics' },
     }[region];
     if (!map) return;
     const row = document.getElementById(map.rowId);
@@ -1668,6 +1711,31 @@ window.wcCompact = () => {
       metaEl: document.getElementById(map.metaId),
     };
     _fetchPreview(region);
+  };
+
+  window.copyDiagnostics = async () => {
+    try {
+      const report = await invoke('proxy_get', { path: '/diagnostics' });
+      if (!report || report.ok === false) {
+        showToast(report?.summary || 'Diagnostics unavailable', 'err');
+        return;
+      }
+      const lines = [
+        `XynMacro ${document.getElementById('appVer')?.textContent || ''}`.trim(),
+        report.summary,
+        `Monitor: ${JSON.stringify(report.monitor || {})}`,
+        `Mode: ${report.window_mode}; DPI: ${report.dpi}; foreground: ${report.foreground}; minimized: ${report.minimized}`,
+        `Template scores: ${JSON.stringify(report.template_scores || {})}`,
+        `Settings: ${JSON.stringify(report.settings || {})}`,
+        `Calibration: ${JSON.stringify(report.calibration || {})}`,
+        report.capture_note || '',
+        ...(report.issues || []).map(issue => `WARNING: ${issue}`),
+      ].filter(Boolean);
+      await navigator.clipboard.writeText(lines.join('\n'));
+      showToast('Diagnostic report copied', 'ok');
+    } catch (error) {
+      showToast(`Could not copy diagnostics: ${error}`, 'err');
+    }
   };
 
   function _selectedSegmentValue(segmentId) {
@@ -1744,10 +1812,14 @@ window.wcCompact = () => {
     senzu_zero_gravity_on_empty: 'toggleSenzuZeroGravity',
     no_yellow_fallback_enabled: 'toggleNoYellowFallback',
     prevent_sleep_while_running: 'togglePreventSleep',
+    diagnostic_mode: 'toggleDiagnosticMode',
+    shutdown_pc_when_finished: 'toggleShutdownFinished',
+    after_run_on_failure: 'toggleAfterRunFailure',
   };
 
   const entryMap = {
     start_delay_sec:                 'startDelay',
+    after_run_game_action:           'afterRunGameAction',
     gc_gravity_target_g:             'gcGravityTarget',
     no_yellow_timeout_sec:           'noYellowTimeout',
     after_switch_wait_sec:           'afterSwitchWait',
@@ -1824,11 +1896,18 @@ window.wcCompact = () => {
   _refreshBackendPort();
   window.addEventListener('backend-ready', () => _refreshBackendPort());
 
-  function _renderRunSummary(telemetry) {
+  function _renderRunSummary(run) {
     const el = document.getElementById('runSummary');
     if (!el) return;
-    const tel = telemetry || {};
+    const tel = run?.telemetry || {};
+    const outcomeLabels = {
+      completed: 'Completed',
+      incomplete: 'Incomplete',
+      stopped: 'Stopped',
+      error: 'Error',
+    };
     const parts = [
+      outcomeLabels[run?.outcome] || 'Ended',
       `${tel.switches || 0} switches`,
       `${tel.health_hits || 0} health hits`,
       `${tel.ki_clicks || 0} Ki clicks`,
@@ -1853,9 +1932,11 @@ window.wcCompact = () => {
 
     const cfg = state.config || {};
     const running = !!state.running;
+    _gameWindowFound = !!state.game_window?.found;
     const backendActivity = state.stop_requested ? 'Stopping'
       : state.controller_paused_for_senzu ? 'Auto-Senzu'
       : state.controller_paused ? 'Paused'
+      : state.training_menu_visible ? 'Training Menu'
       : (running && !state.current_state) ? 'Starting'
       : (running ? 'Active' : 'Idle');
     const runStarted = _lastBackendRunning === false && running;
@@ -1934,7 +2015,8 @@ window.wcCompact = () => {
                     : (running && state.progression_status === 'complete') ? ' · complete'
                     : (running && state.progression_status === 'tracking') ? ' · tracking'
                     : '';
-      curStat.textContent = (running && state.current_state) ? state.current_state + progTxt : '—';
+      const menuTxt = state.training_menu_visible ? ' · menu open' : '';
+      curStat.textContent = (running && state.current_state) ? state.current_state + progTxt + menuTxt : '—';
     }
     // Compact HUD: show current stat (and separator) only when actually running.
     const hudStat = document.getElementById('hudStat');
@@ -1983,7 +2065,6 @@ window.wcCompact = () => {
         el.setAttribute('aria-checked', enabled ? 'true' : 'false');
       }
     }
-
     _syncAgilityModeSeg(cfg.agility_mode || 'v2');
     _syncHealthModeSeg(cfg.health_mode || 'v2_track');
     if (cfg.ki_v8_mode) _syncKiV8ModeSeg(cfg.ki_v8_mode);
@@ -1998,6 +2079,7 @@ window.wcCompact = () => {
           : ((el.type === 'number' || el.type === 'range') ? Number(v) : v);
       }
     }
+    _syncAfterRunControls();
     _renderGravityValue(cfg.gc_gravity_target_g);
 
     // Keybind buttons: sync display only when not actively capturing.
@@ -2174,7 +2256,12 @@ window.wcCompact = () => {
     if (switchesEl) switchesEl.textContent = String(tel.switches || 0);
     const runSummary = document.getElementById('runSummary');
     if (runStarted && runSummary) runSummary.hidden = true;
-    if (runEnded) _renderRunSummary(tel);
+    if (runEnded) {
+      _renderRunSummary(state.last_run);
+      if (state.last_run?.outcome === 'incomplete') {
+        showToast(state.last_run.reason || 'Training order ended with skipped stats', 'warn');
+      }
+    }
 
   }
 
@@ -2432,6 +2519,11 @@ window.wcCompact = () => {
   }
 
   function openPalette() {
+    if (_isCompact) {
+      window.wcCompact();
+      setTimeout(openPalette, 260);
+      return;
+    }
     paletteOpen = true;
     paletteInput.value = '';
     paletteActiveIdx = 0;
@@ -2522,6 +2614,11 @@ window.wcCompact = () => {
     }
   }
   function openShortcuts() {
+    if (_isCompact) {
+      window.wcCompact();
+      setTimeout(openShortcuts, 260);
+      return;
+    }
     shortcutsOpen = true;
     shortcutsBackdrop.classList.add('open');
     renderShortcuts();
@@ -2601,6 +2698,21 @@ window.wcCompact = () => {
 
   // What's-new content, newest first. Each entry: {version, notes:[{h, items[]}]}.
   const CHANGELOG = [
+    { version: '1.0.5', notes: [
+      { h: 'Interface', items: [
+        'Added After Run choices for Main Menu, closing Roblox, staying in GC at 0G, and optional PC shutdown.',
+        'Added Support Diagnostics with a live labelled vision preview and copyable environment report.',
+      ]},
+      { h: 'Fixes', items: [
+        'Training Mode is detected during a run, so minigame input stops and an unfinished stat resumes safely.',
+        'Manually skipped stats now mark the order incomplete and never trigger successful after-run actions.',
+      ]},
+    ]},
+    { version: '1.0.4', notes: [
+      { h: 'Interface', items: [
+        'Added the W spain titlebar tag and one-time launch celebration.',
+      ]},
+    ]},
     { version: '1.0.3', notes: [
       { h: 'Fixes', items: [
         'Removed a stray empty notification pill that could briefly appear in the top-right corner.',

@@ -5,16 +5,18 @@ import test from 'node:test';
 const sourceRoot = new URL('./', import.meta.url);
 const repoRoot = new URL('../../', import.meta.url);
 
-const [html, main, styles, readme] = await Promise.all([
+const [html, main, styles, readme, packageText] = await Promise.all([
   readFile(new URL('index.html', sourceRoot), 'utf8'),
   readFile(new URL('main.js', sourceRoot), 'utf8'),
   readFile(new URL('styles.css', sourceRoot), 'utf8'),
   readFile(new URL('README.md', repoRoot), 'utf8'),
+  readFile(new URL('package.json', new URL('../', sourceRoot)), 'utf8'),
 ]);
+const packageMetadata = JSON.parse(packageText);
 
 test('custom switches and segmented controls expose their state', () => {
   const toggles = [...html.matchAll(/<button\b[^>]*class="toggle(?: active)?"[^>]*>/g)].map((match) => match[0]);
-  assert.equal(toggles.length, 5);
+  assert.equal(toggles.length, 8);
   for (const toggle of toggles) {
     assert.match(toggle, /role="switch"/);
     assert.match(toggle, /aria-checked="(?:true|false)"/);
@@ -93,4 +95,47 @@ test('public and in-app copy matches actual admin, update, and theme behavior', 
   assert.match(readme, /eight colour themes/);
   assert.match(readme, /manual\s+update access under Settings\./);
   assert.doesNotMatch(readme, /update\s+access under Settings and the title-bar bell/);
+});
+
+test('the in-app changelog includes the shipped version', () => {
+  assert.ok(main.includes(`{ version: '${packageMetadata.version}'`));
+  assert.match(main, /\{ version: '1\.0\.4'[\s\S]*?W spain titlebar tag/);
+});
+
+test('start controls stay disabled until Roblox is detected', () => {
+  assert.match(main, /let _gameWindowFound = false/);
+  assert.match(main, /_gameWindowFound = !!state\.game_window\?\.found/);
+  assert.match(main, /start\.disabled = starting \|\| stopping \|\| _macroRunning \|\| !_gameWindowFound/);
+  assert.ok(main.includes("showToast('Open Roblox before starting XynMacro', 'err')"));
+});
+
+test('compact-only shortcuts expand before opening overlays', () => {
+  assert.match(main, /function openPalette\(\) \{\s+if \(_isCompact\) \{\s+window\.wcCompact\(\);\s+setTimeout\(openPalette, 260\)/);
+  assert.match(main, /function openShortcuts\(\) \{\s+if \(_isCompact\) \{\s+window\.wcCompact\(\);\s+setTimeout\(openShortcuts, 260\)/);
+  assert.ok(main.includes("compactButton.setAttribute('aria-label', 'Expand')"));
+});
+
+test('after-run actions share one failure policy and never imply manual Stop', () => {
+  assert.match(html, /id="afterRunGameAction"[\s\S]*?value="main_menu"[\s\S]*?value="close_game"[\s\S]*?value="zero_gravity"/);
+  assert.match(html, /id="toggleShutdownFinished"[\s\S]*?shutdown_pc_when_finished/);
+  assert.match(html, /id="afterRunFailureRow"[\s\S]*?id="toggleAfterRunFailure"[\s\S]*?after_run_on_failure/);
+  assert.match(html, /Manual Stop never runs after-run actions/);
+  assert.match(main, /function _syncAfterRunControls\(\)/);
+  assert.match(main, /gameAction === 'none' && !shutdownEnabled/);
+  assert.match(styles, /\.shutdown-dependent::before/);
+});
+
+test('training menu state is surfaced instead of pretending minigame input is active', () => {
+  assert.match(main, /state\.training_menu_visible \? 'Training Menu'/);
+  assert.match(main, /state\.training_menu_visible \? ' · menu open'/);
+  assert.match(main, /incomplete: 'Incomplete'/);
+  assert.match(main, /state\.last_run\?\.outcome === 'incomplete'/);
+});
+
+test('support diagnostics expose a live scan preview and copyable report', () => {
+  assert.match(html, /id="toggleDiagnosticMode"[\s\S]*?diagnostic_mode/);
+  assert.match(html, /togglePreview\('diagnostics'\)/);
+  assert.match(html, /id="previewImgDiagnostics"/);
+  assert.match(main, /path: '\/diagnostics'/);
+  assert.match(main, /Diagnostic report copied/);
 });

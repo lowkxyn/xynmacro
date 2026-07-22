@@ -86,6 +86,19 @@ class ProgressionDetectionTests(unittest.TestCase):
         self.assertEqual(core._format_seconds(5), "5s")
         self.assertEqual(core._format_seconds(2.5), "2.5s")
 
+    def test_manual_skips_cannot_report_a_completed_training_order(self):
+        self.assertEqual(
+            core._training_order_result([]),
+            ("completed", "Training order completed"),
+        )
+        self.assertEqual(
+            core._training_order_result(["Ki Control", "Ki Damage"]),
+            (
+                "incomplete",
+                "Training order ended with skipped stats: Ki Control, Ki Damage",
+            ),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

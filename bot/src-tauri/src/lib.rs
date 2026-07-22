@@ -522,12 +522,22 @@ fn wait_for_backend(port: u16, auth_token: &str) -> bool {
         .ok();
     let Some(client) = client else { return false };
     for i in 0..40 {
-        if client
+        let healthy = client
             .get(format!("http://127.0.0.1:{port}/health"))
             .header(BACKEND_AUTH_HEADER, auth_token)
             .send()
-            .is_ok()
-        {
+            .ok()
+            .filter(|response| response.status().is_success())
+            .and_then(|response| response.json::<serde_json::Value>().ok())
+            .is_some_and(|body| {
+                body.get("ok").and_then(|value| value.as_bool()) == Some(true)
+                    && body.get("pid").and_then(|value| value.as_u64()).is_some()
+                    && body
+                        .get("version")
+                        .and_then(|value| value.as_str())
+                        .is_some()
+            });
+        if healthy {
             println!("[tauri] Backend healthy after {} attempts", i + 1);
             return true;
         }
