@@ -9,10 +9,16 @@ import numpy as np
 PYTHON_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PYTHON_DIR))
 
-import xmacro_core as core
+import xynmacro_core as core
 
 
 class SenzuControlFlowTests(unittest.TestCase):
+    def test_live_full_bean_slot_score_keeps_type_and_stability_guard(self):
+        self.assertTrue(core._senzu_slot_match_is_reliable(0.762, 42, "full"))
+        self.assertFalse(core._senzu_slot_match_is_reliable(0.739, 42, "full"))
+        self.assertFalse(core._senzu_slot_match_is_reliable(0.900, 80, "full"))
+        self.assertTrue(core._senzu_slot_match_is_reliable(0.900, 80, "half"))
+
     def setUp(self):
         # Tests that exercise the real _find_senzu_row populate the row cache;
         # every test must start without a remembered Items position.

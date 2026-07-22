@@ -402,6 +402,12 @@ fn sidecar_runtime_args(
     ]
 }
 
+fn runtime_app_version() -> &'static str {
+    // Cargo.toml is the release version source of truth. The generated Tauri
+    // package context can remain stale across same-version local rebuilds.
+    env!("CARGO_PKG_VERSION")
+}
+
 fn generate_backend_auth_token() -> Result<String, String> {
     let mut bytes = [0_u8; 32];
     getrandom::fill(&mut bytes).map_err(|error| format!("secure random failed: {error}"))?;
@@ -449,7 +455,7 @@ fn spawn_sidecar(
     #[cfg(debug_assertions)]
     let mut cmd = {
         let dir = python_dir(app);
-        let script = dir.join("xmacro_core.py");
+        let script = dir.join("xynmacro_core.py");
         if !script.exists() {
             return Err(format!("Sidecar script not found at {:?}", script));
         }
@@ -522,12 +528,22 @@ fn wait_for_backend(port: u16, auth_token: &str) -> bool {
         .ok();
     let Some(client) = client else { return false };
     for i in 0..40 {
-        if client
+        let healthy = client
             .get(format!("http://127.0.0.1:{port}/health"))
             .header(BACKEND_AUTH_HEADER, auth_token)
             .send()
-            .is_ok()
-        {
+            .ok()
+            .filter(|response| response.status().is_success())
+            .and_then(|response| response.json::<serde_json::Value>().ok())
+            .is_some_and(|body| {
+                body.get("ok").and_then(|value| value.as_bool()) == Some(true)
+                    && body.get("pid").and_then(|value| value.as_u64()).is_some()
+                    && body
+                        .get("version")
+                        .and_then(|value| value.as_str())
+                        .is_some()
+            });
+        if healthy {
             println!("[tauri] Backend healthy after {} attempts", i + 1);
             return true;
         }
@@ -1035,11 +1051,11 @@ pub fn run() {
             }
 
             let app_handle = app.handle().clone();
-            let app_version = app.package_info().version.to_string();
+            let app_version = runtime_app_version();
             match spawn_sidecar(
                 &app_handle,
                 launcher_pid,
-                &app_version,
+                app_version,
                 &setup_auth_token,
             ) {
                 Ok(child) => {
@@ -1140,7 +1156,7 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::{generate_backend_auth_token, sidecar_runtime_args};
+    use super::{generate_backend_auth_token, runtime_app_version, sidecar_runtime_args};
     use std::path::Path;
 
     #[test]
@@ -1162,6 +1178,11 @@ mod tests {
                 "test-auth-token",
             ]
         );
+    }
+
+    #[test]
+    fn runtime_version_comes_from_the_cargo_package() {
+        assert_eq!(runtime_app_version(), env!("CARGO_PKG_VERSION"));
     }
 
     #[test]

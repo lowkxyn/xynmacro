@@ -9,7 +9,7 @@ from unittest.mock import patch
 PYTHON_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PYTHON_DIR))
 
-import xmacro_core as core
+import xynmacro_core as core
 
 
 class FactoryResetTests(unittest.TestCase):

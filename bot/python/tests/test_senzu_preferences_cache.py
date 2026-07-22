@@ -9,7 +9,7 @@ import numpy as np
 PYTHON_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PYTHON_DIR))
 
-import xmacro_core as core
+import xynmacro_core as core
 
 
 def _solid_bgr(blue, green, red, height=30, width=75):

@@ -137,10 +137,22 @@ def _set_save_dir(path):
 # Set False now that you have captured everything
 SETUP_MODE = False
 SHOW_DEBUG_HUD = False
+DIAGNOSTIC_MODE = False
 VERBOSE_DETECTOR_LOGS = False
 START_DELAY = 5.0  # seconds before the macro starts (lets you tab into the game)
 GC_GRAVITY_TARGET_G = 0  # 0 leaves the current GC gravity unchanged
 PREVENT_SLEEP_WHILE_RUNNING = True
+SHUTDOWN_PC_WHEN_FINISHED = False
+AFTER_RUN_GAME_ACTION = "none"
+AFTER_RUN_ON_FAILURE = False
+AUTO_RETRY_ON_FAILURE = False
+AUTO_RETRY_MAX_ATTEMPTS = 3
+AUTO_RETRY_RECOVERY_MODE = "reset"
+AUTO_RETRY_WALK_OUT = True
+AUTO_RETRY_WALK_SECONDS = 2.5
+PC_SHUTDOWN_DELAY_SEC = 60
+AFTER_RUN_GAME_ACTIONS = {"none", "main_menu", "close_game", "zero_gravity"}
+AUTO_RETRY_RECOVERY_MODES = {"reset", "wait_for_death"}
 
 CALIB_FREEZE_COUNTDOWN = 3
 
@@ -226,8 +238,14 @@ TRAINING_MENU_STABLE_FRAMES = 3
 GRAVITY_LABEL_BOX = {"left": 456, "top": 316, "width": 142, "height": 51}
 GRAVITY_CLICK_POINT = (527, 342)
 GRAVITY_POINTER_PARK_POINT = (1000, 200)
-GRAVITY_MATCH_MIN = 0.93
+GRAVITY_MATCH_MIN = 0.80
 GRAVITY_MATCH_MARGIN_MIN = 0.035
+GC_DEATH_DIALOG_BANDS = (
+    (750, 545, 420, 50),
+    (535, 588, 850, 45),
+    (535, 630, 850, 45),
+)
+GC_RESPAWN_POINT = (960, 610)
 AGILITY_CONFIDENCE = 0.85
 SCALES = [1.2, 1.1, 1.0, 0.9, 0.8, 0.7]
 
@@ -235,6 +253,10 @@ SCALES = [1.2, 1.1, 1.0, 0.9, 0.8, 0.7]
 # Substring patterns to match against window titles (case-insensitive). User can refine
 # via the UI once we expose it; for now this list covers common DBOG client names.
 DBOG_WINDOW_TITLES = ["roblox"]
+SUPPORTED_ROBLOX_EXECUTABLES = {
+    "robloxplayerbeta.exe",
+    "windows10universal.exe",
+}
 GAME_HWND = None
 GAME_OFFSET_X = 0
 GAME_OFFSET_Y = 0
@@ -368,6 +390,7 @@ KI_V8_CLICK_DELAY_SEC = 0.29
 #   that happens to live inside the scan range.
 SENZU_ENABLED = True                  # Autofeed: eat a senzu (H + slot key) when the HP bar turns red.
 SENZU_SLOT = 1                        # Item slot the senzu is assigned to (1-4).
+SENZU_SLOT_MATCH_MIN = 0.74
 SENZU_DELAY_SEC = 0.0                 # Extra wait between detecting red HP and eating.
 SENZU_RECOVERY_TIMEOUT_SEC = 7.0      # Wait for green HP before one confirmed retry.
 SENZU_PREFERENCE_MODE = "full_only"  # full_only/full_then_half/half_only/half_then_full.
@@ -471,6 +494,9 @@ LAST_RUN_RESULT = None
 _CURRENT_RUN_OUTCOME = None
 _CURRENT_RUN_REASON = None
 _CURRENT_RUN_CATEGORY = None
+_CURRENT_RUN_RETRYABLE = False
+_USER_STOP_LATCHED = False
+_AFTER_ACTIONS_BLOCKED = False
 _run_result_lock = threading.RLock()
 MANUAL_NEXT_REQUESTED = False           # set by global L hotkey, consumed by main loop
 PAUSE_TOGGLE_REQUESTED = False          # set by global U hotkey, consumed by main loop
@@ -478,6 +504,7 @@ CONTROLLER_PAUSED = False               # authoritative UI state for the pause h
 _manual_next_hotkey_handle = None       # keyboard.add_hotkey handle for re-registration on rebind
 _pause_hotkey_handle = None
 CURRENT_TRAINING_STATE = None
+TRAINING_MENU_VISIBLE = False
 MACRO_THREAD = None
 MACRO_STARTED_AT = 0.0
 
@@ -498,6 +525,9 @@ SENZU_CONTROLLER_RESUME_REQUIRED = threading.Event()
 # Input from the minigame loop and the senzu monitor must never interleave.
 # RLock lets the atomic H -> slot -> H transaction call shared input helpers.
 _input_lock = threading.RLock()
+# Linearizes explicit Stop with the next key/click packet. Hold this only for
+# one short input action so Stop remains responsive during captures and waits.
+_stop_input_gate = threading.RLock()
 
 # Per-run telemetry. Reset to zero each time the macro starts.
 TELEMETRY = {
@@ -514,6 +544,7 @@ TELEMETRY = {
     "senzu_eaten":      0,
     "senzu_refills":    0,
     "switches":         0,
+    "recovery_attempts": 0,
 }
 
 def _telemetry_reset():
@@ -523,28 +554,53 @@ def _telemetry_reset():
 
 def _begin_run_result():
     global _CURRENT_RUN_OUTCOME, _CURRENT_RUN_REASON, _CURRENT_RUN_CATEGORY
+    global _CURRENT_RUN_RETRYABLE
+    global _USER_STOP_LATCHED, _AFTER_ACTIONS_BLOCKED
     with _run_result_lock:
         _CURRENT_RUN_OUTCOME = None
         _CURRENT_RUN_REASON = None
         _CURRENT_RUN_CATEGORY = None
+        _CURRENT_RUN_RETRYABLE = False
+        _USER_STOP_LATCHED = False
+        _AFTER_ACTIONS_BLOCKED = False
 
 
-def _record_run_outcome(outcome, reason, category=None):
+def _record_run_outcome(outcome, reason, category=None, retryable=False):
     """Record the strongest operational result seen during the active run."""
     global _CURRENT_RUN_OUTCOME, _CURRENT_RUN_REASON, _CURRENT_RUN_CATEGORY
+    global _CURRENT_RUN_RETRYABLE
     global MACRO_LAST_ERROR
-    priorities = {"completed": 1, "stopped": 2, "error": 3}
+    priorities = {"completed": 1, "incomplete": 1, "stopped": 2, "error": 3}
     outcome = str(outcome or "error")
     reason = str(reason or "No reason reported")
     with _run_result_lock:
+        # A late worker error must not turn an explicit user Stop into an
+        # after-run failure action such as closing the game or shutting down.
+        if _USER_STOP_LATCHED and outcome == "error":
+            MACRO_LAST_ERROR = reason
+            return
+        if _USER_STOP_LATCHED and outcome == "stopped":
+            _CURRENT_RUN_OUTCOME = "stopped"
+            _CURRENT_RUN_REASON = reason
+            _CURRENT_RUN_CATEGORY = category or CURRENT_TRAINING_STATE
+            _CURRENT_RUN_RETRYABLE = False
+            return
         current_priority = priorities.get(_CURRENT_RUN_OUTCOME, 0)
         new_priority = priorities.get(outcome, 3)
         if _CURRENT_RUN_OUTCOME is None or new_priority > current_priority:
             _CURRENT_RUN_OUTCOME = outcome
             _CURRENT_RUN_REASON = reason
             _CURRENT_RUN_CATEGORY = category or CURRENT_TRAINING_STATE
-        elif new_priority == current_priority and _CURRENT_RUN_CATEGORY is None:
-            _CURRENT_RUN_CATEGORY = category or CURRENT_TRAINING_STATE
+            _CURRENT_RUN_RETRYABLE = bool(retryable and outcome == "error")
+        elif new_priority == current_priority:
+            if _CURRENT_RUN_CATEGORY is None:
+                _CURRENT_RUN_CATEGORY = category or CURRENT_TRAINING_STATE
+            if outcome == "error":
+                # One unexpected/non-operational failure makes the whole
+                # attempt unsafe to retry, even if a retryable error came first.
+                _CURRENT_RUN_RETRYABLE = bool(
+                    _CURRENT_RUN_RETRYABLE and retryable
+                )
         if outcome == "error":
             MACRO_LAST_ERROR = reason
 
@@ -625,6 +681,15 @@ DEFAULT_USER_SETTINGS = {
     "start_delay_sec": float(START_DELAY),
     "gc_gravity_target_g": int(GC_GRAVITY_TARGET_G),
     "prevent_sleep_while_running": bool(PREVENT_SLEEP_WHILE_RUNNING),
+    "shutdown_pc_when_finished": bool(SHUTDOWN_PC_WHEN_FINISHED),
+    "after_run_game_action": str(AFTER_RUN_GAME_ACTION),
+    "after_run_on_failure": bool(AFTER_RUN_ON_FAILURE),
+    "auto_retry_on_failure": bool(AUTO_RETRY_ON_FAILURE),
+    "auto_retry_max_attempts": int(AUTO_RETRY_MAX_ATTEMPTS),
+    "auto_retry_recovery_mode": str(AUTO_RETRY_RECOVERY_MODE),
+    "auto_retry_walk_out": bool(AUTO_RETRY_WALK_OUT),
+    "auto_retry_walk_seconds": float(AUTO_RETRY_WALK_SECONDS),
+    "diagnostic_mode": bool(DIAGNOSTIC_MODE),
     "after_switch_wait_sec": float(NEW_GAME_WAIT),
     "no_yellow_timeout_sec": float(NO_YELLOW_TIMEOUT_SEC),
     "no_yellow_fallback_enabled": bool(NO_YELLOW_FALLBACK_ENABLED),
@@ -677,6 +742,10 @@ def reset_user_settings_to_defaults():
     The UI command persists the reset immediately after calling this function.
     """
     global START_DELAY, GC_GRAVITY_TARGET_G, PREVENT_SLEEP_WHILE_RUNNING
+    global SHUTDOWN_PC_WHEN_FINISHED, AFTER_RUN_GAME_ACTION, AFTER_RUN_ON_FAILURE
+    global AUTO_RETRY_ON_FAILURE, AUTO_RETRY_MAX_ATTEMPTS
+    global AUTO_RETRY_RECOVERY_MODE, AUTO_RETRY_WALK_OUT, AUTO_RETRY_WALK_SECONDS
+    global DIAGNOSTIC_MODE
     global NEW_GAME_WAIT, NO_YELLOW_TIMEOUT_SEC, NO_YELLOW_FALLBACK_ENABLED
     global MANUAL_NEXT_KEY, START_STOP_HOTKEY, PAUSE_HOTKEY
     global HEALTH_HIT_COOLDOWN_SEC, HEALTH_MODE
@@ -689,6 +758,17 @@ def reset_user_settings_to_defaults():
     PREVENT_SLEEP_WHILE_RUNNING = bool(
         DEFAULT_USER_SETTINGS["prevent_sleep_while_running"]
     )
+    SHUTDOWN_PC_WHEN_FINISHED = bool(
+        DEFAULT_USER_SETTINGS["shutdown_pc_when_finished"]
+    )
+    AFTER_RUN_GAME_ACTION = str(DEFAULT_USER_SETTINGS["after_run_game_action"])
+    AFTER_RUN_ON_FAILURE = bool(DEFAULT_USER_SETTINGS["after_run_on_failure"])
+    AUTO_RETRY_ON_FAILURE = bool(DEFAULT_USER_SETTINGS["auto_retry_on_failure"])
+    AUTO_RETRY_MAX_ATTEMPTS = int(DEFAULT_USER_SETTINGS["auto_retry_max_attempts"])
+    AUTO_RETRY_RECOVERY_MODE = str(DEFAULT_USER_SETTINGS["auto_retry_recovery_mode"])
+    AUTO_RETRY_WALK_OUT = bool(DEFAULT_USER_SETTINGS["auto_retry_walk_out"])
+    AUTO_RETRY_WALK_SECONDS = float(DEFAULT_USER_SETTINGS["auto_retry_walk_seconds"])
+    DIAGNOSTIC_MODE = bool(DEFAULT_USER_SETTINGS["diagnostic_mode"])
     NEW_GAME_WAIT = float(DEFAULT_USER_SETTINGS["after_switch_wait_sec"])
     NO_YELLOW_TIMEOUT_SEC = float(DEFAULT_USER_SETTINGS["no_yellow_timeout_sec"])
     NO_YELLOW_FALLBACK_ENABLED = bool(
@@ -745,6 +825,38 @@ pydirectinput.PAUSE = 0.0
 
 # ---------------- Game window detection ----------------
 
+def _window_process_executable(hwnd):
+    """Return the executable basename that owns hwnd, or None."""
+    if os.name != "nt" or not hwnd:
+        return None
+    import ctypes
+
+    process_id = ctypes.c_ulong(0)
+    ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(process_id))
+    if not process_id.value:
+        return None
+    process_handle = ctypes.windll.kernel32.OpenProcess(
+        0x1000, False, process_id.value  # PROCESS_QUERY_LIMITED_INFORMATION
+    )
+    if not process_handle:
+        return None
+    try:
+        path_buffer = ctypes.create_unicode_buffer(32768)
+        path_size = ctypes.c_ulong(len(path_buffer))
+        if not ctypes.windll.kernel32.QueryFullProcessImageNameW(
+            process_handle, 0, path_buffer, ctypes.byref(path_size)
+        ):
+            return None
+        return os.path.basename(path_buffer.value).lower()
+    finally:
+        ctypes.windll.kernel32.CloseHandle(process_handle)
+
+
+def _is_supported_roblox_window(hwnd):
+    """Reject title-only matches such as browsers showing a Roblox page."""
+    executable = _window_process_executable(hwnd)
+    return executable in SUPPORTED_ROBLOX_EXECUTABLES
+
 def find_dbog_window():
     """Locate the DBOG game window. Returns (hwnd, (client_x, client_y, w, h)) or (None, None).
 
@@ -787,6 +899,8 @@ def find_dbog_window():
                 title = (buf.value or "").lower()
                 title_matches = any(target.lower() in title for target in DBOG_WINDOW_TITLES)
                 if not title_matches:
+                    return True
+                if not _is_supported_roblox_window(hwnd):
                     return True
                 client = _RECT()
                 if not user32.GetClientRect(hwnd, ctypes.byref(client)):
@@ -946,11 +1060,14 @@ def focus_game_window():
         return False
     if user32.GetForegroundWindow() == GAME_HWND:
         return True
-    win32api.keybd_event(win32con.VK_MENU, 0, 0, 0)
-    try:
-        user32.SetForegroundWindow(GAME_HWND)
-    finally:
-        win32api.keybd_event(win32con.VK_MENU, 0, win32con.KEYEVENTF_KEYUP, 0)
+    with _stop_input_gate:
+        if _USER_STOP_LATCHED:
+            return False
+        win32api.keybd_event(win32con.VK_MENU, 0, 0, 0)
+        try:
+            user32.SetForegroundWindow(GAME_HWND)
+        finally:
+            win32api.keybd_event(win32con.VK_MENU, 0, win32con.KEYEVENTF_KEYUP, 0)
     time.sleep(0.15)
     focused = user32.GetForegroundWindow() == GAME_HWND
     if not focused:
@@ -1219,17 +1336,24 @@ def _senzu_slot_has_bean(
     frame_text = ((hsv[:, :, 1] < 90) & (hsv[:, :, 2] > 200)).astype(np.uint8) * 255
     template_text = (slot_template > 200).astype(np.uint8) * 255
     scores = cv2.matchTemplate(frame_text, template_text, cv2.TM_CCOEFF_NORMED)
-    matches_y, matches_x = np.where(scores >= 0.82)
+    matches_y, matches_x = np.where(scores >= SENZU_SLOT_MATCH_MIN)
     # Full labels start around x=42. Half labels contain the same suffix farther
     # right, so the match position identifies the assigned type without a second
     # template or weakening the established full-vs-Half filter.
     type_scores = [
         float(scores[y, x])
         for y, x in zip(matches_y, matches_x)
-        if (int(x) <= 60) == (bean_type == "full")
+        if _senzu_slot_match_is_reliable(float(scores[y, x]), int(x), bean_type)
     ]
     best_score = float(np.max(scores)) if scores.size else 0.0
     return bool(type_scores), max(type_scores, default=best_score)
+
+
+def _senzu_slot_match_is_reliable(score, match_x, bean_type):
+    return bool(
+        score >= SENZU_SLOT_MATCH_MIN
+        and (int(match_x) <= 60) == (bean_type == "full")
+    )
 
 
 def _stable_senzu_slot_state(
@@ -1393,7 +1517,11 @@ def _find_senzu_row(sct, assets, bean_type="full"):
     def _send_wheel(notches):
         wheel = (_INPUT * 1)(_make_mouse_input(0x0800))  # MOUSEEVENTF_WHEEL
         wheel[0].mi.mouseData = int(notches * 120) & 0xFFFFFFFF
-        _user32.SendInput(1, wheel, _ctypes.sizeof(_INPUT))
+        with _stop_input_gate:
+            if _USER_STOP_LATCHED:
+                return False
+            _user32.SendInput(1, wheel, _ctypes.sizeof(_INPUT))
+        return True
 
     for _ in range(15):
         if _senzu_abort_requested():
@@ -2045,14 +2173,25 @@ def _resume_training_after_senzu(sct, assets):
     return False
 
 
-def _stop_for_senzu_failure(message, status="error"):
+def _stop_for_senzu_failure(message, status="error", retryable=False):
     global UI_STOP_REQUESTED, SENZU_STATUS
     SENZU_STATUS = status
     # Failure paths leave the menu state unknown; never fast-path off it later.
     _invalidate_senzu_row_cache()
-    _record_run_outcome("error", f"Auto-Senzu: {message}")
+    _record_run_outcome(
+        "error", f"Auto-Senzu: {message}", retryable=retryable
+    )
     UI_STOP_REQUESTED = True
     print(f"[SENZU] {message}; stopping macro safely")
+
+
+def _stop_for_game_death():
+    global UI_STOP_REQUESTED
+    _record_run_outcome(
+        "error", "Character death was confirmed", retryable=True
+    )
+    UI_STOP_REQUESTED = True
+    print("[RECOVERY] Character death dialog confirmed; stopping current attempt")
 
 
 def _disable_senzu_for_run(message):
@@ -2368,7 +2507,8 @@ def eat_senzu(sct):
                         print("[SENZU] HP is still red; retrying the eat once")
                         continue
                     _stop_for_senzu_failure(
-                        "Senzu was not consumed after two confirmed slot attempts"
+                        "Senzu was not consumed after two confirmed slot attempts",
+                        retryable=True,
                     )
                     return False
                 _stop_for_senzu_failure(
@@ -2412,7 +2552,8 @@ def eat_senzu(sct):
             return False
         _stop_for_senzu_failure(
             f"HP was not green after two confirmed Senzu uses "
-            f"({SENZU_RECOVERY_TIMEOUT_SEC:g}s each)"
+            f"({SENZU_RECOVERY_TIMEOUT_SEC:g}s each)",
+            retryable=True,
         )
         return False
 
@@ -2902,7 +3043,7 @@ def _destroy_cv_windows():
 
 
 def check_exit():
-    if UI_STOP_REQUESTED:
+    if _USER_STOP_LATCHED or UI_STOP_REQUESTED:
         # This flag is shared by the controller and the Auto-Senzu monitor.
         # Leave it set until the next Start so whichever thread observes Stop
         # first cannot consume it and allow the other thread to keep sending input.
@@ -2976,6 +3117,7 @@ PROG_SEARCH_BOX = {"left": 700, "top": 300, "width": 700, "height": 500}
 PROG_STABLE_COMPLETE_FRAMES = 3
 PROG_POLL_INTERVAL_SEC = 0.25
 PROG_AFTER_SWITCH_GRACE_SEC = 1.5
+PROGRESSION_UI_LOST_TIMEOUT_SEC = 8.0
 # Shorter settle window specifically for Auto-Senzu: long enough to skip the
 # category-switch transition frames that spuriously fired Senzu on startup, but
 # short enough that real low-HP recovery isn't noticeably delayed.
@@ -3006,6 +3148,14 @@ def _first_yellow_message():
             "until progression tracking locks"
         )
     return "[YELLOW] First yellow after switch; fallback timeout is disabled"
+
+
+def _training_order_result(skipped_stats):
+    skipped = [str(stat) for stat in skipped_stats if str(stat)]
+    if skipped:
+        names = ", ".join(skipped)
+        return "incomplete", f"Training order ended with skipped stats: {names}"
+    return "completed", "Training order completed"
 
 
 def _glyph_iou(mask, first, second):
@@ -3080,6 +3230,41 @@ def read_progression_completion(sct, geometry=None):
     )
 
 
+def _progression_ui_loss_state(
+    current_state,
+    tracked_state,
+    completion,
+    now,
+    missing_since,
+    suspended=False,
+):
+    """Track continuous loss only after progression was positively identified."""
+    if (
+        not current_state
+        or tracked_state != current_state
+        or completion is not None
+        or suspended
+    ):
+        return None, False
+    if missing_since is None:
+        return now, False
+    return (
+        missing_since,
+        now - missing_since >= PROGRESSION_UI_LOST_TIMEOUT_SEC,
+    )
+
+
+def _stop_for_training_ui_loss():
+    global UI_STOP_REQUESTED
+    reason = (
+        "GC training interface disappeared; the character may have left "
+        "the chamber or the session expired"
+    )
+    _record_run_outcome("error", reason, retryable=False)
+    UI_STOP_REQUESTED = True
+    print(f"[MONITOR] {reason}; stopping macro safely")
+
+
 def _background_game_monitor(stop_event):
     """Continuously watch progression and critical HP during every minigame."""
     global PROGRESSION_TRACKED_STATE, PROGRESSION_COMPLETE
@@ -3091,7 +3276,9 @@ def _background_game_monitor(stop_event):
     red_streak = 0
     red_since = None
     red_handled = False
+    death_streak = 0
     last_error_log = 0.0
+    progression_missing_since = None
 
     with mss.MSS() as sct:
         while not stop_event.is_set():
@@ -3102,10 +3289,25 @@ def _background_game_monitor(stop_event):
                     continue
                 game_geometry = _game_geometry()
                 current_state = CURRENT_TRAINING_STATE
+                try:
+                    death_visible = bool(
+                        current_state
+                        and _gc_death_dialog_visible(sct, game_geometry)
+                    )
+                except Exception:
+                    death_visible = False
+                if death_visible:
+                    death_streak += 1
+                else:
+                    death_streak = 0
+                if death_streak >= 3:
+                    _stop_for_game_death()
+                    break
                 if current_state != tracked_state:
                     tracked_state = current_state
                     complete_streak = 0
                     completion_sent = False
+                    progression_missing_since = None
                     PROGRESSION_TRACKED_STATE = None
                     PROGRESSION_COMPLETE = None
 
@@ -3114,6 +3316,7 @@ def _background_game_monitor(stop_event):
                         and now - PROGRESSION_STATE_STARTED_AT >= PROG_AFTER_SWITCH_GRACE_SEC):
                     completion = read_progression_completion(sct, game_geometry)
                     if completion is not None:
+                        progression_missing_since = None
                         if PROGRESSION_TRACKED_STATE != current_state:
                             print(_progression_tracking_message(current_state))
                         PROGRESSION_TRACKED_STATE = current_state
@@ -3129,6 +3332,24 @@ def _background_game_monitor(stop_event):
                             PROGRESSION_COMPLETE_REQUESTED.set()
                     else:
                         complete_streak = 0
+                        progression_missing_since, progression_ui_lost = (
+                            _progression_ui_loss_state(
+                                current_state,
+                                PROGRESSION_TRACKED_STATE,
+                                completion,
+                                now,
+                                progression_missing_since,
+                                suspended=(
+                                    TRAINING_MENU_VISIBLE
+                                    or CONTROLLER_PAUSED
+                                    or SENZU_CONTROLLER_ACTIVE.is_set()
+                                    or SENZU_CONTROLLER_RESUME_REQUIRED.is_set()
+                                ),
+                            )
+                        )
+                        if progression_ui_lost:
+                            _stop_for_training_ui_loss()
+                            break
 
                 # Post-switch settle window (like the progression check above): right
                 # after a category starts the HP-fill box can misread as red while the
@@ -3197,6 +3418,7 @@ def _background_game_monitor(stop_event):
 def _start_background_game_monitor():
     global _background_monitor_stop, _background_monitor_thread
     global PROGRESSION_TRACKED_STATE, PROGRESSION_COMPLETE
+    global _AFTER_ACTIONS_BLOCKED
     PROGRESSION_COMPLETE_REQUESTED.clear()
     PROGRESSION_TRACKED_STATE = None
     PROGRESSION_COMPLETE = None
@@ -3205,7 +3427,11 @@ def _start_background_game_monitor():
     # Reuse only within an active run. _run_macro_safe stops this thread when
     # the macro ends, so Idle can never inject game input.
     if _background_monitor_thread is not None and _background_monitor_thread.is_alive():
-        return
+        if _background_monitor_stop is not None and _background_monitor_stop.is_set():
+            _AFTER_ACTIONS_BLOCKED = True
+            print("[SAFETY] Previous game-state monitor is still stopping")
+            return False
+        return True
     if _background_monitor_stop is not None:
         _background_monitor_stop.set()
     _background_monitor_stop = threading.Event()
@@ -3216,10 +3442,12 @@ def _start_background_game_monitor():
         name="game-state-monitor",
     )
     _background_monitor_thread.start()
+    return True
 
 
 def _stop_background_game_monitor():
     global _background_monitor_stop, _background_monitor_thread
+    global _AFTER_ACTIONS_BLOCKED
     stop_event = _background_monitor_stop
     monitor_thread = _background_monitor_thread
     if stop_event is not None:
@@ -3228,9 +3456,14 @@ def _stop_background_game_monitor():
             and monitor_thread is not threading.current_thread()
             and monitor_thread.is_alive()):
         monitor_thread.join(timeout=2.0)
+    if monitor_thread is not None and monitor_thread.is_alive():
+        _AFTER_ACTIONS_BLOCKED = True
+        print("[SAFETY] Game-state monitor did not stop; after-run actions disabled")
+        return False
     _background_monitor_stop = None
     _background_monitor_thread = None
     PROGRESSION_COMPLETE_REQUESTED.clear()
+    return True
 
 
 def detect_training_menu(sct, monitor, template):
@@ -3262,6 +3495,26 @@ def _normalize_gravity_target(value, *, strict=False):
             raise ValueError("GC gravity must be 0, 10, 20, ... 100")
         return 0
     return number
+
+
+def _normalize_after_run_game_action(value, *, strict=False):
+    action = str(value or "none").strip().lower()
+    if action not in AFTER_RUN_GAME_ACTIONS:
+        if strict:
+            choices = ", ".join(sorted(AFTER_RUN_GAME_ACTIONS))
+            raise ValueError(f"After-run game action must be one of: {choices}")
+        return "none"
+    return action
+
+
+def _normalize_auto_retry_recovery_mode(value, *, strict=False):
+    mode = str(value or "reset").strip().lower()
+    if mode not in AUTO_RETRY_RECOVERY_MODES:
+        if strict:
+            choices = ", ".join(sorted(AUTO_RETRY_RECOVERY_MODES))
+            raise ValueError(f"Recovery mode must be one of: {choices}")
+        return "reset"
+    return mode
 
 
 def _gravity_mask_from_frame(frame):
@@ -3310,10 +3563,23 @@ def _gravity_value_from_mask(mask, templates):
     scores.sort(reverse=True)
     best_score, best_value = scores[0]
     second_score = scores[1][0] if len(scores) > 1 else 0.0
-    if (best_score < GRAVITY_MATCH_MIN
-            or best_score - second_score < GRAVITY_MATCH_MARGIN_MIN):
+    if not _gravity_match_is_reliable(best_score, second_score):
         return None, best_score, second_score
     return best_value, best_score, second_score
+
+
+def _gravity_match_is_reliable(best_score, second_score):
+    return bool(
+        best_score >= GRAVITY_MATCH_MIN
+        and best_score - second_score >= GRAVITY_MATCH_MARGIN_MIN
+    )
+
+
+def _gravity_advance_is_safe(current, observed, target):
+    return bool(
+        observed in range(0, 101, 10)
+        and current < observed <= target
+    )
 
 
 def _read_gc_gravity(sct, geometry, templates):
@@ -3373,6 +3639,14 @@ def _raise_gc_gravity(sct, geometry, target):
                     current = observed
                     accepted = True
                     break
+                if _gravity_advance_is_safe(current, observed, target):
+                    print(
+                        f"[GRAVITY] Delayed redraw skipped {expected}G but confirmed "
+                        f"safe forward progress at {observed}G"
+                    )
+                    current = observed
+                    accepted = True
+                    break
                 if observed not in (None, current):
                     print(
                         f"[GRAVITY] Expected {expected}G but read {observed}G; "
@@ -3393,15 +3667,25 @@ def _raise_gc_gravity(sct, geometry, target):
     return True
 
 
-def _cycle_gc_gravity_to_zero(sct, geometry):
+def _cycle_gc_gravity_to_zero(sct, geometry, *, after_run=False):
     """Cycle the GC control forward until it wraps to 0G; never click in HTC."""
+    if after_run:
+        _ensure_after_run_active()
     templates = _load_gravity_templates()
     if len(templates) != 11:
         print("[GRAVITY] Gravity label templates are missing; cannot set 0G")
         return False
 
-    robust_move(*_reference_point(*GRAVITY_POINTER_PARK_POINT, geometry))
-    safe_sleep(0.10)
+    park_at = _reference_point(*GRAVITY_POINTER_PARK_POINT, geometry)
+    if after_run:
+        with _input_lock:
+            _ensure_after_run_active()
+            _user32.SetCursorPos(*park_at)
+        time.sleep(0.10)
+        _ensure_after_run_active()
+    else:
+        robust_move(*park_at)
+        safe_sleep(0.10)
     current, score, second, control_present = _read_gc_gravity(
         sct, geometry, templates
     )
@@ -3415,7 +3699,7 @@ def _cycle_gc_gravity_to_zero(sct, geometry):
         )
         return False
     if current == 0:
-        print("[GRAVITY] Allowed Senzu stock is empty; gravity is already 0G")
+        print("[GRAVITY] Gravity is already 0G")
         return True
 
     start_value = current
@@ -3425,12 +3709,24 @@ def _cycle_gc_gravity_to_zero(sct, geometry):
         expected = 0 if current == 100 else current + 10
         accepted = False
         for attempt in range(1, 4):
-            check_exit()
-            click_at(*click_point)
-            robust_move(*park_point)
+            if after_run:
+                _ensure_after_run_active()
+                with _input_lock:
+                    _ensure_after_run_active()
+                    _click_sendinput_abs(*click_point)
+                    _ensure_after_run_active()
+                    _user32.SetCursorPos(*park_point)
+            else:
+                check_exit()
+                click_at(*click_point)
+                robust_move(*park_point)
             deadline = time.time() + 0.8
             while time.time() < deadline:
-                safe_sleep(0.05)
+                if after_run:
+                    time.sleep(0.05)
+                    _ensure_after_run_active()
+                else:
+                    safe_sleep(0.05)
                 observed, score, second, control_present = _read_gc_gravity(
                     sct, geometry, templates
                 )
@@ -3454,7 +3750,7 @@ def _cycle_gc_gravity_to_zero(sct, geometry):
             print(f"[GRAVITY] Could not confirm {expected}G; leaving it at {current}G")
             return False
 
-    print(f"[GRAVITY] Allowed Senzu stock is empty; lowered {start_value}G -> 0G")
+    print(f"[GRAVITY] Lowered {start_value}G -> 0G")
     return True
 
 
@@ -3482,6 +3778,10 @@ def load_master_config():
     If missing, creates a default config file using the values in this script.
     """
     global START_DELAY, GC_GRAVITY_TARGET_G, PREVENT_SLEEP_WHILE_RUNNING
+    global SHUTDOWN_PC_WHEN_FINISHED, AFTER_RUN_GAME_ACTION, AFTER_RUN_ON_FAILURE
+    global AUTO_RETRY_ON_FAILURE, AUTO_RETRY_MAX_ATTEMPTS
+    global AUTO_RETRY_RECOVERY_MODE, AUTO_RETRY_WALK_OUT, AUTO_RETRY_WALK_SECONDS
+    global DIAGNOSTIC_MODE
     global NEW_GAME_WAIT, NO_YELLOW_TIMEOUT_SEC
     global MANUAL_NEXT_KEY, START_STOP_HOTKEY
     global HEALTH_HIT_COOLDOWN_SEC, HEALTH_MODE
@@ -3493,6 +3793,10 @@ def load_master_config():
         # IMPORTANT: this is a nested function; we must declare globals here
         # or assignments will create locals and the config won't actually apply.
         global START_DELAY, GC_GRAVITY_TARGET_G, PREVENT_SLEEP_WHILE_RUNNING
+        global SHUTDOWN_PC_WHEN_FINISHED, AFTER_RUN_GAME_ACTION, AFTER_RUN_ON_FAILURE
+        global AUTO_RETRY_ON_FAILURE, AUTO_RETRY_MAX_ATTEMPTS
+        global AUTO_RETRY_RECOVERY_MODE, AUTO_RETRY_WALK_OUT, AUTO_RETRY_WALK_SECONDS
+        global DIAGNOSTIC_MODE
         global NEW_GAME_WAIT, NO_YELLOW_TIMEOUT_SEC
         global MANUAL_NEXT_KEY, START_STOP_HOTKEY, PAUSE_HOTKEY
         global HEALTH_HIT_COOLDOWN_SEC, HEALTH_MODE
@@ -3513,6 +3817,34 @@ def load_master_config():
             PREVENT_SLEEP_WHILE_RUNNING = _ui_bool(
                 data["prevent_sleep_while_running"]
             )
+        if "shutdown_pc_when_finished" in data:
+            SHUTDOWN_PC_WHEN_FINISHED = _ui_bool(
+                data["shutdown_pc_when_finished"]
+            )
+        if "after_run_game_action" in data:
+            AFTER_RUN_GAME_ACTION = _normalize_after_run_game_action(
+                data["after_run_game_action"]
+            )
+        if "after_run_on_failure" in data:
+            AFTER_RUN_ON_FAILURE = _ui_bool(data["after_run_on_failure"])
+        if "auto_retry_on_failure" in data:
+            AUTO_RETRY_ON_FAILURE = _ui_bool(data["auto_retry_on_failure"])
+        if "auto_retry_max_attempts" in data:
+            AUTO_RETRY_MAX_ATTEMPTS = _bounded_int(
+                data["auto_retry_max_attempts"], 1, 10
+            )
+        if "auto_retry_recovery_mode" in data:
+            AUTO_RETRY_RECOVERY_MODE = _normalize_auto_retry_recovery_mode(
+                data["auto_retry_recovery_mode"]
+            )
+        if "auto_retry_walk_out" in data:
+            AUTO_RETRY_WALK_OUT = _ui_bool(data["auto_retry_walk_out"])
+        if "auto_retry_walk_seconds" in data:
+            AUTO_RETRY_WALK_SECONDS = _bounded_float(
+                data["auto_retry_walk_seconds"], 0.5, 10.0
+            )
+        if "diagnostic_mode" in data:
+            DIAGNOSTIC_MODE = _ui_bool(data["diagnostic_mode"])
         if "after_switch_wait_sec" in data:
             NEW_GAME_WAIT = _bounded_float(data["after_switch_wait_sec"], 0.0, 10.0)
         if "no_yellow_timeout_sec" in data:
@@ -3679,11 +4011,20 @@ def load_master_config():
         print(f"[WARN] Could not load {MACRO_CONFIG_FILE}: {e}")
 
 
-def save_master_config():
-    data = {
+def _master_config_snapshot():
+    return {
         "start_delay_sec": float(START_DELAY),
         "gc_gravity_target_g": int(GC_GRAVITY_TARGET_G),
         "prevent_sleep_while_running": bool(PREVENT_SLEEP_WHILE_RUNNING),
+        "shutdown_pc_when_finished": bool(SHUTDOWN_PC_WHEN_FINISHED),
+        "after_run_game_action": AFTER_RUN_GAME_ACTION,
+        "after_run_on_failure": bool(AFTER_RUN_ON_FAILURE),
+        "auto_retry_on_failure": bool(AUTO_RETRY_ON_FAILURE),
+        "auto_retry_max_attempts": int(AUTO_RETRY_MAX_ATTEMPTS),
+        "auto_retry_recovery_mode": str(AUTO_RETRY_RECOVERY_MODE),
+        "auto_retry_walk_out": bool(AUTO_RETRY_WALK_OUT),
+        "auto_retry_walk_seconds": float(AUTO_RETRY_WALK_SECONDS),
+        "diagnostic_mode": bool(DIAGNOSTIC_MODE),
         "after_switch_wait_sec": float(NEW_GAME_WAIT),
         "no_yellow_timeout_sec": float(NO_YELLOW_TIMEOUT_SEC),
         "no_yellow_fallback_enabled": bool(NO_YELLOW_FALLBACK_ENABLED),
@@ -3713,6 +4054,9 @@ def save_master_config():
         "senzu_preference_mode": str(SENZU_PREFERENCE_MODE),
         "senzu_zero_gravity_on_empty": bool(SENZU_ZERO_GRAVITY_ON_EMPTY),
     }
+
+
+def save_master_config():
     try:
         os.makedirs(JSON_DIR, exist_ok=True)
     except Exception:
@@ -3722,6 +4066,7 @@ def save_master_config():
     # a temp file in the same dir, then os.replace() (atomic on Windows + POSIX).
     tmp_path = MACRO_CONFIG_FILE + ".tmp"
     with _config_lock:
+        data = _master_config_snapshot()
         with open(tmp_path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
             f.flush()
@@ -3782,10 +4127,14 @@ def burst_click(count=3):
 def _tap_key_unchecked(key):
     # pydirectinput.press() with PAUSE=0 releases too quickly for Roblox to register
     # reliably. A 30ms hold matches a short physical key tap.
-    pydirectinput.keyDown(key)
-    time.sleep(0.030)
-    pydirectinput.keyUp(key)
+    with _stop_input_gate:
+        if _USER_STOP_LATCHED:
+            return False
+        pydirectinput.keyDown(key)
+        time.sleep(0.030)
+        pydirectinput.keyUp(key)
     time.sleep(KEY_PRESS_DELAY)
+    return True
 
 
 def hardware_tap(key):
@@ -3870,7 +4219,7 @@ def _absolute_virtual_coords(x, y, bounds=None):
     )
 
 
-def _click_sendinput_abs(x, y):
+def _click_sendinput_abs_unchecked(x, y):
     """Absolute-coordinate SendInput click, mapped across the complete Windows virtual desktop."""
     nx, ny = _absolute_virtual_coords(x, y)
     absolute_flags = _MOUSEEVENTF_ABSOLUTE | _MOUSEEVENTF_VIRTUALDESK
@@ -3907,6 +4256,14 @@ def _click_sendinput_abs(x, y):
     _user32.SendInput(2, click, _ctypes.sizeof(_INPUT))
 
 
+def _click_sendinput_abs(x, y):
+    with _stop_input_gate:
+        if _USER_STOP_LATCHED:
+            return False
+        _click_sendinput_abs_unchecked(x, y)
+    return True
+
+
 def _click_setcursor_mouseevent(x, y):
     """Legacy: SetCursorPos + mouse_event with relative (0,0). What this build used before — Roblox often drops these silently."""
     win32api.SetCursorPos((int(x), int(y)))
@@ -3927,29 +4284,35 @@ def click_at(x, y, method=None):
     with _input_lock:
         if _controller_decisions_suspended():
             raise SenzuControllerPause()
-        if method == "sendinput_abs":
-            _click_sendinput_abs(x, y)
-        elif method == "setcursor_mouseevent":
-            _click_setcursor_mouseevent(x, y)
-        elif method == "setcursor_only":
-            _click_setcursor_only(x, y)
-        else:
-            # Unknown method — fall back to the K pattern, don't silently no-op.
-            _click_sendinput_abs(x, y)
+        with _stop_input_gate:
+            if _USER_STOP_LATCHED:
+                raise QuitException()
+            if method == "sendinput_abs":
+                _click_sendinput_abs(x, y)
+            elif method == "setcursor_mouseevent":
+                _click_setcursor_mouseevent(x, y)
+            elif method == "setcursor_only":
+                _click_setcursor_only(x, y)
+            else:
+                # Unknown method — fall back to the K pattern, don't silently no-op.
+                _click_sendinput_abs(x, y)
 
 
 def robust_move(x, y):
     """Move the cursor without clicking. Uses SendInput-absolute so Roblox notices the move."""
     check_exit()
-    nx, ny = _absolute_virtual_coords(x, y)
-    _user32.SetCursorPos(int(x), int(y))
-    time.sleep(0.01)
-    move = (_INPUT * 1)(_make_mouse_input(
-        _MOUSEEVENTF_MOVE | _MOUSEEVENTF_ABSOLUTE | _MOUSEEVENTF_VIRTUALDESK,
-        nx,
-        ny,
-    ))
-    _user32.SendInput(1, move, _ctypes.sizeof(_INPUT))
+    with _stop_input_gate:
+        if _USER_STOP_LATCHED:
+            raise QuitException()
+        nx, ny = _absolute_virtual_coords(x, y)
+        _user32.SetCursorPos(int(x), int(y))
+        time.sleep(0.01)
+        move = (_INPUT * 1)(_make_mouse_input(
+            _MOUSEEVENTF_MOVE | _MOUSEEVENTF_ABSOLUTE | _MOUSEEVENTF_VIRTUALDESK,
+            nx,
+            ny,
+        ))
+        _user32.SendInput(1, move, _ctypes.sizeof(_INPUT))
     time.sleep(0.005)
     check_exit()
 
@@ -5204,12 +5567,20 @@ def _stable_scan_letters(sct, templates, max_wait_sec, settle_ms=25):
 # --- MAIN LOOP ---
 def run_master_controller():
     global CONTROLLER_PAUSED, CURRENT_TRAINING_STATE, PROGRESSION_STATE_STARTED_AT
+    global TRAINING_MENU_VISIBLE
+    check_exit()
+    if _stop_if_starting_on_death_screen():
+        return
     CONTROLLER_PAUSED = False
+    TRAINING_MENU_VISIBLE = False
     print("[XynMacro] macro loop started")
 
-    # Load persisted settings (if any)
-    load_master_config()
-    _start_background_game_monitor()
+    # Settings are loaded before the UI server starts and live changes already
+    # update these globals. Reloading here can overwrite a just-saved UI change.
+    if _start_background_game_monitor() is False:
+        raise RuntimeError(
+            "Previous game-state monitor is still stopping. Wait a moment and try Start again."
+        )
 
     agility_templates = []
     for char in ['w', 'a', 's', 'd']:
@@ -5231,6 +5602,7 @@ def run_master_controller():
 
     current_idx = 0
     state = runtime_order[current_idx]
+    skipped_stats = []
 
     if SHOW_DEBUG_HUD:
         cv2.namedWindow("BOT VISION HUD", cv2.WINDOW_NORMAL)
@@ -5249,6 +5621,16 @@ def run_master_controller():
     with mss.MSS() as sct:
         monitor, monitor_source = _build_monitor_from_game()
         print(f"[CAPTURE] Region: ({monitor['left']},{monitor['top']}) {monitor['width']}x{monitor['height']} [{monitor_source}]")
+        if DIAGNOSTIC_MODE:
+            report = _diagnostic_report()
+            print(f"[DIAGNOSTIC] {report.get('summary', 'Unavailable')}")
+            print(
+                f"[DIAGNOSTIC] foreground={report.get('foreground')} "
+                f"dpi={report.get('dpi')} templates={report.get('template_scores')}"
+            )
+            print(f"[DIAGNOSTIC] {report.get('capture_note', '')}")
+            for issue in report.get("issues", []):
+                print(f"[DIAGNOSTIC WARN] {issue}")
         window_last_refresh = time.time()
 
         # Yellow tracking state
@@ -5407,7 +5789,7 @@ def run_master_controller():
         # Pause state (hotkey flag is in PAUSE_TOGGLE_REQUESTED)
         paused = False
 
-        def do_switch(reason):
+        def do_switch(reason, *, current_completed=True):
             nonlocal state, current_idx, yellow_last_poll, yellow_last_seen_ts
             nonlocal menu_match_streak, menu_shadow_visible, awaiting_first_yellow
             global CURRENT_TRAINING_STATE, PROGRESSION_STATE_STARTED_AT
@@ -5415,10 +5797,13 @@ def run_master_controller():
             # Pause progression and Auto-Senzu decisions while menus are changing.
             CURRENT_TRAINING_STATE = None
             TELEMETRY["switches"] += 1
+            if not current_completed and state not in skipped_stats:
+                skipped_stats.append(state)
             next_idx = current_idx + 1
             if next_idx >= len(runtime_order):
-                print("ALL DONE!")
-                _record_run_outcome("completed", "Training order completed", state)
+                outcome, outcome_reason = _training_order_result(skipped_stats)
+                print("ALL DONE!" if outcome == "completed" else outcome_reason.upper())
+                _record_run_outcome(outcome, outcome_reason, state)
                 return True
             # Menu handshake: Tab TOGGLES the menu, so pressing it while the menu
             # is already open (game kicked us back, or a prior Tab landed) would
@@ -5512,7 +5897,10 @@ def run_master_controller():
                 if (time.time() - last_manual_next_ts) >= MANUAL_NEXT_DEBOUNCE:
                     last_manual_next_ts = time.time()
                     try:
-                        if do_switch(f"[SKIP] Manual next ({MANUAL_NEXT_KEY.upper()})"):
+                        if do_switch(
+                            f"[SKIP] Manual next ({MANUAL_NEXT_KEY.upper()})",
+                            current_completed=False,
+                        ):
                             break
                     except SenzuControllerPause:
                         pass
@@ -5601,6 +5989,7 @@ def run_master_controller():
                         )
                         menu_match_streak = menu_match_streak + 1 if menu_match else 0
                         stable_visible = menu_match_streak >= TRAINING_MENU_STABLE_FRAMES
+                        TRAINING_MENU_VISIBLE = stable_visible
                         if menu_shadow_visible is None or stable_visible != menu_shadow_visible:
                             menu_shadow_visible = stable_visible
                             label = "visible" if stable_visible else "hidden"
@@ -5608,6 +5997,28 @@ def run_master_controller():
                                 f"[MENU shadow] {label} score={menu_score:.3f} "
                                 f"streak={menu_match_streak}/{TRAINING_MENU_STABLE_FRAMES}"
                             )
+
+                if TRAINING_MENU_VISIBLE:
+                    # The user may press Tab, or the game may return here on its
+                    # own. Never keep firing minigame input through an open menu.
+                    # Give the progression watcher one beat to classify a truly
+                    # completed stat before resuming an incomplete one.
+                    time.sleep(0.25)
+                    if PROGRESSION_COMPLETE_REQUESTED.is_set():
+                        continue
+                    if not _click_trait_and_confirm(state, "[MENU RECOVERY]"):
+                        raise RuntimeError(
+                            f"Training Mode is open and {state} could not be resumed"
+                        )
+                    TRAINING_MENU_VISIBLE = False
+                    menu_match_streak = 0
+                    menu_shadow_visible = False
+                    yellow_last_seen_ts = time.time()
+                    awaiting_first_yellow = True
+                    PROGRESSION_STATE_STARTED_AT = time.time()
+                    PROGRESSION_COMPLETE_REQUESTED.clear()
+                    print(f"[MENU RECOVERY] Resumed incomplete stat: {state}")
+                    continue
 
                 # --- MINIGAME LOGIC --- (wrapped so L key during a green-observe wait
                 # unwinds back to the loop top, where MANUAL_NEXT_REQUESTED gets consumed
@@ -5706,6 +6117,15 @@ def _ui_config_snapshot():
         "start_delay_sec": START_DELAY,
         "gc_gravity_target_g": GC_GRAVITY_TARGET_G,
         "prevent_sleep_while_running": PREVENT_SLEEP_WHILE_RUNNING,
+        "shutdown_pc_when_finished": SHUTDOWN_PC_WHEN_FINISHED,
+        "after_run_game_action": AFTER_RUN_GAME_ACTION,
+        "after_run_on_failure": AFTER_RUN_ON_FAILURE,
+        "auto_retry_on_failure": AUTO_RETRY_ON_FAILURE,
+        "auto_retry_max_attempts": AUTO_RETRY_MAX_ATTEMPTS,
+        "auto_retry_recovery_mode": AUTO_RETRY_RECOVERY_MODE,
+        "auto_retry_walk_out": AUTO_RETRY_WALK_OUT,
+        "auto_retry_walk_seconds": AUTO_RETRY_WALK_SECONDS,
+        "diagnostic_mode": DIAGNOSTIC_MODE,
         "after_switch_wait_sec": NEW_GAME_WAIT,
         "no_yellow_timeout_sec": NO_YELLOW_TIMEOUT_SEC,
         "no_yellow_fallback_enabled": NO_YELLOW_FALLBACK_ENABLED,
@@ -5752,6 +6172,7 @@ def _ui_state_snapshot():
         "version": APP_VERSION,
         "running": running,
         "current_state": CURRENT_TRAINING_STATE,
+        "training_menu_visible": bool(running and TRAINING_MENU_VISIBLE),
         "controller_paused_for_senzu": SENZU_CONTROLLER_ACTIVE.is_set(),
         "controller_paused": CONTROLLER_PAUSED,
         "stop_requested": bool(running and UI_STOP_REQUESTED),
@@ -5824,6 +6245,439 @@ def _set_thread_sleep_hold(active):
     return True
 
 
+def _should_run_after_actions(outcome):
+    """Manual Stop is never eligible, even when error handling is enabled."""
+    if _USER_STOP_LATCHED or _AFTER_ACTIONS_BLOCKED:
+        return False
+    if outcome == "completed":
+        return True
+    return outcome == "error" and AFTER_RUN_ON_FAILURE
+
+
+def _should_shutdown_pc(outcome):
+    return bool(SHUTDOWN_PC_WHEN_FINISHED and _should_run_after_actions(outcome))
+
+
+class AfterRunCancelled(RuntimeError):
+    pass
+
+
+def _ensure_after_run_active():
+    if _USER_STOP_LATCHED:
+        raise AfterRunCancelled("cancelled by Manual Stop")
+
+
+def _after_run_tap(key):
+    """Send a bounded cleanup key even when the controller's stop flag is set."""
+    _ensure_after_run_active()
+    with _input_lock:
+        _ensure_after_run_active()
+        _tap_key_unchecked(key)
+
+
+def _after_run_click_reference(x, y, geometry):
+    _ensure_after_run_active()
+    screen_x, screen_y = _reference_point(x, y, geometry)
+    with _input_lock:
+        _ensure_after_run_active()
+        _click_sendinput_abs(screen_x, screen_y)
+
+
+def _after_run_wait_training_menu(sct, geometry, template, visible, timeout=2.0):
+    deadline = time.time() + timeout
+    stable = 0
+    while time.time() < deadline:
+        if _USER_STOP_LATCHED:
+            return False
+        matched, _score = detect_training_menu(sct, geometry, template)
+        if matched == visible:
+            stable += 1
+            if stable >= 2:
+                return True
+        else:
+            stable = 0
+        time.sleep(0.08)
+    return False
+
+
+def _after_run_wait_template(sct, template, box, visible=True, timeout=3.0):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if _USER_STOP_LATCHED:
+            return False
+        matched, _score, _location = _template_in_reference_box(
+            sct, template, box, threshold=0.82
+        )
+        if matched == visible:
+            return True
+        time.sleep(0.08)
+    return False
+
+
+def _after_run_wait_game_menu(sct, template, visible=True, timeout=3.0):
+    return _after_run_wait_template(
+        sct, template, (0, 340, 220, 80), visible=visible, timeout=timeout
+    )
+
+
+def _after_run_open_training_menu(sct, geometry):
+    template = _senzu_assets()["training"]
+    if template is None:
+        print("[AFTER RUN] Training Mode template is missing")
+        return False
+    if _after_run_wait_training_menu(sct, geometry, template, True, timeout=0.25):
+        return True
+    _after_run_tap("tab")
+    if _after_run_wait_training_menu(sct, geometry, template, True):
+        return True
+    print("[AFTER RUN] Training Mode could not be confirmed")
+    return False
+
+
+def _after_run_go_to_main_menu():
+    _ensure_after_run_active()
+    if not focus_game_window():
+        print("[AFTER RUN] Roblox could not be focused for Main Menu")
+        return False
+    try:
+        geometry = _confirmed_game_capture_rect()
+    except RuntimeError as error:
+        print(f"[AFTER RUN] Main Menu skipped: {error}")
+        return False
+
+    assets = _senzu_assets()
+    game_menu_template = assets["game_menu"]
+    training_template = assets["training"]
+    inventory_template = assets["inventory"]
+    if (game_menu_template is None or training_template is None
+            or inventory_template is None):
+        print("[AFTER RUN] Menu templates are missing")
+        return False
+
+    with mss.MSS() as sct:
+        inventory_open = _after_run_wait_template(
+            sct, inventory_template, (200, 340, 280, 80), timeout=0.25
+        )
+        if inventory_open:
+            _after_run_click_reference(80, 377, geometry)
+        elif not _after_run_wait_game_menu(sct, game_menu_template, timeout=0.25):
+            _after_run_tap("m")
+            inventory_open = _after_run_wait_template(
+                sct, inventory_template, (200, 340, 280, 80), timeout=0.5
+            )
+            if inventory_open:
+                _after_run_click_reference(80, 377, geometry)
+        if not _after_run_wait_game_menu(sct, game_menu_template, timeout=1.5):
+            # M can be ignored from a minigame. Exit through Training Mode, then
+            # open Game Menu from normal gameplay.
+            if not _after_run_wait_training_menu(
+                sct, geometry, training_template, True, timeout=0.25
+            ):
+                _after_run_tap("tab")
+                _after_run_wait_training_menu(
+                    sct, geometry, training_template, True, timeout=2.0
+                )
+            if _after_run_wait_training_menu(
+                sct, geometry, training_template, True, timeout=0.25
+            ):
+                _after_run_tap("tab")
+                _after_run_wait_training_menu(
+                    sct, geometry, training_template, False, timeout=2.0
+                )
+            _after_run_tap("m")
+            inventory_open = _after_run_wait_template(
+                sct, inventory_template, (200, 340, 280, 80), timeout=0.6
+            )
+            if inventory_open:
+                _after_run_click_reference(80, 377, geometry)
+        if not _after_run_wait_game_menu(sct, game_menu_template, timeout=3.0):
+            print("[AFTER RUN] Game Menu could not be confirmed; no menu clicks sent")
+            return False
+
+        # Same confirmed DBOG route used by DBOG Daily Claimer.
+        before = _grab_reference_box(sct, (120, 360, 555, 130), geometry)
+        _after_run_click_reference(84, 564, geometry)
+        deadline = time.time() + 5.0
+        travel_open = False
+        while time.time() < deadline:
+            _ensure_after_run_active()
+            after = _grab_reference_box(sct, (120, 360, 555, 130), geometry)
+            difference = float(np.mean(cv2.absdiff(before, after)))
+            if difference >= 6.0:
+                travel_open = True
+                break
+            time.sleep(0.1)
+        if not travel_open:
+            print("[AFTER RUN] Travel menu change was not confirmed; Main Menu click cancelled")
+            return False
+        _after_run_click_reference(330, 423, geometry)
+        time.sleep(1.0)
+    print("[AFTER RUN] Main Menu requested")
+    return True
+
+
+def _after_run_close_game():
+    _ensure_after_run_active()
+    if not update_game_window() or GAME_HWND is None:
+        print("[AFTER RUN] Roblox is already closed")
+        return True
+    hwnd = GAME_HWND
+    if not _is_supported_roblox_window(hwnd):
+        print("[AFTER RUN] Close cancelled: target is not a verified Roblox client")
+        return False
+    _ensure_after_run_active()
+    print("[AFTER RUN] Closing Roblox")
+    _user32.PostMessageW(hwnd, win32con.WM_CLOSE, 0, 0)
+    deadline = time.time() + 5.0
+    while time.time() < deadline:
+        if _USER_STOP_LATCHED:
+            print("[AFTER RUN] Close wait cancelled by Manual Stop")
+            return False
+        if not _user32.IsWindow(hwnd):
+            print("[AFTER RUN] Roblox closed")
+            return True
+        time.sleep(0.2)
+    print("[AFTER RUN] Roblox did not close; no other Roblox processes were terminated")
+    return False
+
+
+def _after_run_set_zero_gravity():
+    _ensure_after_run_active()
+    if not focus_game_window():
+        print("[AFTER RUN] Roblox could not be focused for 0G")
+        return False
+    try:
+        geometry = _confirmed_game_capture_rect()
+    except RuntimeError as error:
+        print(f"[AFTER RUN] 0G skipped: {error}")
+        return False
+    with mss.MSS() as sct:
+        if not _after_run_open_training_menu(sct, geometry):
+            return False
+        return _cycle_gc_gravity_to_zero(sct, geometry, after_run=True)
+
+
+def _perform_after_run_game_action(action):
+    handlers = {
+        "main_menu": _after_run_go_to_main_menu,
+        "close_game": _after_run_close_game,
+        "zero_gravity": _after_run_set_zero_gravity,
+    }
+    handler = handlers.get(action)
+    if handler is None:
+        return action == "none"
+    original_cursor = (
+        win32api.GetCursorPos()
+        if action in {"main_menu", "zero_gravity"}
+        else None
+    )
+    try:
+        return bool(handler())
+    except Exception as error:
+        print(f"[AFTER RUN] {action} failed: {type(error).__name__}: {error}")
+        return False
+    finally:
+        # After-run handlers temporarily park the pointer over GC controls and
+        # menus. Put it back even when detection refuses an uncertain action.
+        if original_cursor is not None:
+            with _input_lock:
+                _user32.SetCursorPos(*original_cursor)
+
+
+def _diagnostic_report():
+    """Describe the exact capture/input environment for remote support."""
+    if GAME_HWND is None:
+        update_game_window()
+    if GAME_HWND is None:
+        return {
+            "ok": False,
+            "summary": "Roblox window not found",
+            "issues": ["Open DBOG before collecting diagnostics."],
+        }
+
+    geometry = _game_geometry()
+    left, top, width, height = geometry
+    monitor = _current_game_monitor_info() or {}
+    monitor_width = int(monitor.get("width", 0))
+    monitor_height = int(monitor.get("height", 0))
+    mode = "borderless/fullscreen" if (
+        left == int(monitor.get("left", left))
+        and top == int(monitor.get("top", top))
+        and width == monitor_width
+        and height == monitor_height
+    ) else "windowed"
+    aspect = width / max(1, height)
+    issues = []
+    if _user32.IsIconic(GAME_HWND):
+        issues.append("Roblox is minimized; screen capture cannot see the game.")
+    if abs(aspect - (16 / 9)) > 0.035:
+        issues.append(
+            f"Roblox client is not 16:9 ({width}x{height}); detection is scaled but may be less reliable."
+        )
+    if width < 1280 or height < 720:
+        issues.append("Roblox client is below 1280x720; small templates may lose detail.")
+    training_order = list(_sanitize_training_order(TRAINING_ORDER_CUSTOM))
+    if not training_order:
+        issues.append("Training Order is empty.")
+    invalid_buttons = [
+        name for name, (x, y) in BUTTONS.items()
+        if not (0 <= int(x) < GAME_REFERENCE_WIDTH and 0 <= int(y) < GAME_REFERENCE_HEIGHT)
+    ]
+    if invalid_buttons:
+        issues.append(f"Trait calibration is outside the game client: {', '.join(invalid_buttons)}")
+    invalid_regions = []
+    for name, box in (("Health", HEALTH_BOX), ("Agility", AGILITY_BOX)):
+        if (box["left"] < 0 or box["top"] < 0
+                or box["left"] + box["width"] > GAME_REFERENCE_WIDTH
+                or box["top"] + box["height"] > GAME_REFERENCE_HEIGHT):
+            invalid_regions.append(name)
+    if invalid_regions:
+        issues.append(f"Scan calibration is outside the game client: {', '.join(invalid_regions)}")
+    required_templates = (
+        "tpl_training_mode.png", "tpl_game_menu.png", "tpl_inventory_menu.png",
+        "tpl_senzu_bean.png", "tpl_slot_senzu.png",
+    )
+    missing_templates = [
+        name for name in required_templates if not os.path.isfile(os.path.join(BASE_DIR, name))
+    ]
+    if missing_templates:
+        issues.append(f"Required vision files are missing: {', '.join(missing_templates)}")
+
+    try:
+        dpi = int(_user32.GetDpiForWindow(GAME_HWND))
+    except Exception:
+        dpi = 0
+    foreground = _user32.GetForegroundWindow() == GAME_HWND
+
+    menu_scores = {"training": None, "game": None}
+    try:
+        assets = _senzu_assets()
+        with mss.MSS() as sct:
+            _visible, training_score = detect_training_menu(
+                sct, _confirmed_game_capture_rect(), assets["training"]
+            )
+            _visible, game_score, _location = _template_in_reference_box(
+                sct, assets["game_menu"], (0, 340, 220, 80), threshold=0.82
+            )
+        menu_scores = {
+            "training": round(float(training_score), 3),
+            "game": round(float(game_score), 3),
+        }
+    except Exception as error:
+        issues.append(f"Live template probe failed: {type(error).__name__}: {error}")
+
+    return {
+        "ok": True,
+        "summary": f"Roblox {width}x{height} at ({left}, {top}), {mode}",
+        "client": {"left": left, "top": top, "width": width, "height": height},
+        "monitor": monitor,
+        "window_mode": mode,
+        "dpi": dpi,
+        "foreground": foreground,
+        "minimized": bool(_user32.IsIconic(GAME_HWND)),
+        "template_scores": menu_scores,
+        "settings": {
+            "training_order": training_order,
+            "gravity_target_g": GC_GRAVITY_TARGET_G,
+            "health_mode": HEALTH_MODE,
+            "agility_mode": AGILITY_MODE,
+            "ki_mode": KI_V8_MODE,
+            "senzu_enabled": SENZU_ENABLED,
+        },
+        "calibration": {
+            "trait_buttons": {name: list(point) for name, point in BUTTONS.items()},
+            "health_box": dict(HEALTH_BOX),
+            "agility_box": dict(AGILITY_BOX),
+        },
+        "capture_note": (
+            "Coordinates use the Roblox client area, so a visible taskbar does not shift scan boxes. "
+            "Minimizing or covering Roblox can still break capture."
+        ),
+        "issues": issues,
+    }
+
+
+def _diagnostic_overlay_frame(sct, geometry):
+    """Return a labelled, scaled view of the exact client-relative scan areas."""
+    raw = np.array(sct.grab(geometry))[:, :, :3]
+    frame = raw.copy()
+    scale_x = frame.shape[1] / GAME_REFERENCE_WIDTH
+    scale_y = frame.shape[0] / GAME_REFERENCE_HEIGHT
+
+    def draw_box(name, box, color):
+        x = int(box["left"] * scale_x)
+        y = int(box["top"] * scale_y)
+        right = int((box["left"] + box["width"]) * scale_x)
+        bottom = int((box["top"] + box["height"]) * scale_y)
+        cv2.rectangle(frame, (x, y), (right, bottom), color, 2)
+        cv2.putText(
+            frame, name, (x + 4, max(18, y + 18)), cv2.FONT_HERSHEY_SIMPLEX,
+            0.55, color, 2, cv2.LINE_AA,
+        )
+
+    draw_box("Training menu", TRAINING_MENU_BOX, (255, 190, 40))
+    draw_box("Health", HEALTH_BOX, (50, 220, 80))
+    draw_box("WASD", AGILITY_BOX, (50, 180, 255))
+    draw_box("HP", SENZU_HP_FILL_BOX, (50, 50, 255))
+    draw_box("Gravity", GRAVITY_LABEL_BOX, (230, 80, 230))
+    cv2.putText(
+        frame, "Ki: scans full Roblox client", (20, frame.shape[0] - 22),
+        cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 230, 255), 2, cv2.LINE_AA,
+    )
+    max_width = 960
+    if frame.shape[1] > max_width:
+        target_height = max(1, int(frame.shape[0] * max_width / frame.shape[1]))
+        frame = cv2.resize(frame, (max_width, target_height), interpolation=cv2.INTER_AREA)
+    return frame
+
+
+def _run_after_actions(outcome, reason):
+    if not _should_run_after_actions(outcome):
+        return False
+    action = _normalize_after_run_game_action(AFTER_RUN_GAME_ACTION)
+    if action != "none":
+        _perform_after_run_game_action(action)
+    # PC shutdown is independent: a failed game action must not suppress an
+    # explicitly enabled shutdown.
+    _schedule_pc_shutdown(outcome, reason)
+    return action != "none" or bool(SHUTDOWN_PC_WHEN_FINISHED)
+
+
+def _schedule_pc_shutdown(outcome, reason):
+    """Schedule a cancellable Windows shutdown for an eligible run outcome."""
+    if not _should_shutdown_pc(outcome):
+        return False
+    if os.name != "nt":
+        print("[POWER] PC shutdown is only supported on Windows")
+        return False
+
+    import subprocess
+
+    outcome_label = "finished" if outcome == "completed" else "failed"
+    comment = f"XynMacro {outcome_label}: {str(reason)[:160]}"
+    shutdown_executable = os.path.join(
+        os.environ.get("SystemRoot", r"C:\Windows"), "System32", "shutdown.exe"
+    )
+    command = [
+        shutdown_executable, "/s", "/t", str(PC_SHUTDOWN_DELAY_SEC),
+        "/c", comment,
+    ]
+    try:
+        subprocess.Popen(
+            command,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except OSError as error:
+        print(f"[POWER] Could not schedule PC shutdown: {error}")
+        return False
+
+    print(
+        f"[POWER] PC shutdown scheduled in {PC_SHUTDOWN_DELAY_SEC}s "
+        "(run 'shutdown /a' to cancel)"
+    )
+    return True
+
+
 def _finalize_run_result():
     global LAST_RUN_RESULT, MACRO_ERROR_COUNT, MACRO_LAST_ERROR
     ended_at = time.time()
@@ -5852,59 +6706,330 @@ def _finalize_run_result():
         f"[RUN] outcome={outcome} reason={reason_log!r} "
         f"category={category or '-'} elapsed={elapsed:.1f}s telemetry={telemetry_log}"
     )
+    _run_after_actions(outcome, reason)
 
 
-def _run_macro_safe():
-    global CURRENT_TRAINING_STATE, MANUAL_NEXT_REQUESTED, PAUSE_TOGGLE_REQUESTED
+def _auto_retry_can_run(retries_used):
+    with _run_result_lock:
+        outcome = _CURRENT_RUN_OUTCOME
+        retryable = _CURRENT_RUN_RETRYABLE
+    return bool(
+        AUTO_RETRY_ON_FAILURE
+        and outcome == "error"
+        and retryable
+        and not _USER_STOP_LATCHED
+        and not _AFTER_ACTIONS_BLOCKED
+        and int(retries_used) < int(AUTO_RETRY_MAX_ATTEMPTS)
+    )
+
+
+def _clear_attempt_outcome():
+    global _CURRENT_RUN_OUTCOME, _CURRENT_RUN_REASON, _CURRENT_RUN_CATEGORY
+    global _CURRENT_RUN_RETRYABLE
+    global MACRO_LAST_ERROR
+    with _run_result_lock:
+        _CURRENT_RUN_OUTCOME = None
+        _CURRENT_RUN_REASON = None
+        _CURRENT_RUN_CATEGORY = None
+        _CURRENT_RUN_RETRYABLE = False
+        MACRO_LAST_ERROR = None
+
+
+def _auto_retry_cancelled():
+    """User Stop is permanent for this run, including recovery handoffs."""
+    return bool(_USER_STOP_LATCHED)
+
+
+def _auto_retry_wait(duration, step=0.05):
+    deadline = time.time() + max(0.0, float(duration))
+    while time.time() < deadline:
+        if _auto_retry_cancelled():
+            return False
+        time.sleep(min(step, max(0.0, deadline - time.time())))
+    return not _auto_retry_cancelled()
+
+
+def _gc_death_dialog_visible(sct, geometry):
+    """Match DBOG's centered You Died/Respawn dialog by its three blue bands."""
+    for box in GC_DEATH_DIALOG_BANDS:
+        frame = _grab_reference_box(sct, box, geometry=geometry)[:, :, :3]
+        dark_blue = (
+            (frame[:, :, 0] > 35) & (frame[:, :, 0] < 120)
+            & (frame[:, :, 1] > 20) & (frame[:, :, 1] < 100)
+            & (frame[:, :, 2] < 100)
+        )
+        bright_text = np.min(frame, axis=2) > 190
+        if float(np.mean(dark_blue)) < 0.60 or float(np.mean(bright_text)) < 0.008:
+            return False
+    return True
+
+
+def _auto_retry_wait_for_death_dialog(timeout):
+    stable = 0
+    deadline = time.time() + timeout
+    with mss.MSS() as sct:
+        while time.time() < deadline:
+            if _auto_retry_cancelled():
+                return False
+            try:
+                geometry = _confirmed_game_capture_rect()
+                visible = _gc_death_dialog_visible(sct, geometry)
+            except Exception:
+                stable = 0
+                if not _auto_retry_wait(0.25):
+                    return False
+                continue
+            stable = stable + 1 if visible else 0
+            if stable >= 2:
+                return True
+            if not _auto_retry_wait(0.25):
+                return False
+    return False
+
+
+def _stop_if_starting_on_death_screen():
+    """Fail safely before startup navigation if GC is already awaiting Respawn."""
+    if not _auto_retry_wait_for_death_dialog(0.75):
+        check_exit()
+        return False
+    print("[RECOVERY] Macro started on GC's death screen")
+    _stop_for_game_death()
+    return True
+
+
+def _auto_retry_click_respawn(timeout=15.0):
+    if _auto_retry_cancelled() or not focus_game_window():
+        return False
+    if _auto_retry_cancelled():
+        return False
+    with mss.MSS() as sct:
+        geometry = _confirmed_game_capture_rect()
+        if not _gc_death_dialog_visible(sct, geometry):
+            return False
+        click_point = _reference_point(*GC_RESPAWN_POINT, geometry)
+        with _input_lock:
+            if _auto_retry_cancelled():
+                return False
+            geometry = _confirmed_game_capture_rect()
+            if not _gc_death_dialog_visible(sct, geometry):
+                return False
+            if _auto_retry_cancelled():
+                return False
+            click_point = _reference_point(*GC_RESPAWN_POINT, geometry)
+            if not _click_sendinput_abs(*click_point):
+                return False
+    print("[RECOVERY] Confirmed GC death dialog; clicked Respawn")
+
+    stable_hidden = 0
+    deadline = time.time() + timeout
+    with mss.MSS() as sct:
+        while time.time() < deadline:
+            if _auto_retry_cancelled():
+                return False
+            try:
+                geometry = _confirmed_game_capture_rect()
+                visible = _gc_death_dialog_visible(sct, geometry)
+            except Exception:
+                stable_hidden = 0
+                if not _auto_retry_wait(0.25):
+                    return False
+                continue
+            stable_hidden = 0 if visible else stable_hidden + 1
+            if stable_hidden >= 4:
+                print("[RECOVERY] Respawn dialog closed")
+                return _auto_retry_wait(4.0)
+            if not _auto_retry_wait(0.25):
+                return False
+    print("[RECOVERY] Respawn click was not confirmed")
+    return False
+
+
+def _auto_retry_wait_for_death(timeout=180.0):
+    print(f"[RECOVERY] Waiting up to {timeout:g}s for GC death")
+    if not _auto_retry_wait_for_death_dialog(timeout):
+        print("[RECOVERY] Timed out waiting for the GC death dialog")
+        return False
+    return _auto_retry_click_respawn()
+
+
+def _auto_retry_reset_character():
+    """Send Roblox's bounded reset sequence without clicking an unverified menu."""
+    if _auto_retry_cancelled() or not focus_game_window():
+        print("[RECOVERY] Roblox could not be focused for reset")
+        return False
+    if _auto_retry_cancelled():
+        return False
+    with _input_lock:
+        # Tab may release a DBOG minigame that suppresses Roblox's reset chord.
+        for key in ("tab", "esc", "r", "enter"):
+            if _auto_retry_cancelled():
+                return False
+            if not _tap_key_unchecked(key):
+                return False
+            if key != "enter" and not _auto_retry_wait(0.35):
+                return False
+    print("[RECOVERY] Reset requested with Esc, R, Enter")
+    if not _auto_retry_wait_for_death_dialog(15.0):
+        print("[RECOVERY] GC death dialog was not confirmed after reset")
+        return False
+    return _auto_retry_click_respawn()
+
+
+def _auto_retry_walk_forward():
+    if not AUTO_RETRY_WALK_OUT:
+        return True
+    if _auto_retry_cancelled() or not focus_game_window():
+        print("[RECOVERY] Roblox could not be focused for the walk-out step")
+        return False
+    if _auto_retry_cancelled():
+        return False
+    duration = _bounded_float(AUTO_RETRY_WALK_SECONDS, 0.5, 10.0)
+    print(f"[RECOVERY] Walking forward for {duration:g}s")
+    with _input_lock:
+        if _auto_retry_cancelled():
+            return False
+        key_is_down = False
+        try:
+            with _stop_input_gate:
+                if _auto_retry_cancelled():
+                    return False
+                pydirectinput.keyDown("w")
+                key_is_down = True
+            deadline = time.time() + duration
+            while time.time() < deadline:
+                if _auto_retry_cancelled():
+                    return False
+                time.sleep(min(0.1, max(0.0, deadline - time.time())))
+        finally:
+            if key_is_down:
+                pydirectinput.keyUp("w")
+    return True
+
+
+def _auto_retry_recover():
+    if _auto_retry_cancelled():
+        return False
+    if AUTO_RETRY_RECOVERY_MODE == "wait_for_death":
+        ready = _auto_retry_wait_for_death()
+    else:
+        ready = _auto_retry_reset_character()
+    if not ready or _auto_retry_cancelled():
+        return False
+    return _auto_retry_walk_forward()
+
+
+def _prepare_controller_attempt():
+    global UI_STOP_REQUESTED, CURRENT_TRAINING_STATE
+    global MANUAL_NEXT_REQUESTED, PAUSE_TOGGLE_REQUESTED, TRAINING_MENU_VISIBLE
     global CONTROLLER_PAUSED, SENZU_DISABLED_FOR_RUN, SENZU_STATUS
     global SENZU_ACTIVE_TYPE, SENZU_REMAINING
-    # Reset stray flags from any prior run. If the user pressed L between sessions
-    # (or aborted while a previous macro had set it), the flag would persist as a
-    # module global and trigger SkipMinigameException during this run's startup
-    # safe_sleeps — which would propagate out unhandled and look like an empty error.
+    if _auto_retry_cancelled():
+        UI_STOP_REQUESTED = True
+        return False
+    UI_STOP_REQUESTED = False
     MANUAL_NEXT_REQUESTED = False
     PAUSE_TOGGLE_REQUESTED = False
     CONTROLLER_PAUSED = False
+    CURRENT_TRAINING_STATE = None
+    TRAINING_MENU_VISIBLE = False
     SENZU_DISABLED_FOR_RUN = False
+    SENZU_STATUS = "idle"
     SENZU_ACTIVE_TYPE = None
     SENZU_REMAINING = None
-    # A new run cannot trust any remembered Items position: the user may have
-    # navigated menus, died, or relogged between sessions.
+    PROGRESSION_COMPLETE_REQUESTED.clear()
+    SENZU_CONTROLLER_ACTIVE.clear()
+    SENZU_CONTROLLER_RESUME_REQUIRED.clear()
     _invalidate_senzu_row_cache()
-    # Reset Ki click state so multi-frame stability + post-click cooldown start clean.
     _ki_v8_state["last_dot"] = None
     _ki_v8_state["consecutive_seen"] = 0
     _ki_v8_state["last_click_at"] = 0.0
+    return True
+
+
+def _runtime_error_is_retryable(message):
+    message = str(message)
+    return bool(
+        (
+            message.startswith("Could not confirm ")
+            and message.endswith(" trait selection after 3 clicks")
+        )
+        or message == "Training Mode menu was not confirmed after Tab; switch cancelled"
+        or (
+            message.startswith("Training Mode is open and ")
+            and message.endswith(" could not be resumed")
+        )
+    )
+
+
+def _run_macro_safe():
+    global CURRENT_TRAINING_STATE, TRAINING_MENU_VISIBLE, CONTROLLER_PAUSED
+    global SENZU_STATUS, SENZU_ACTIVE_TYPE
     sleep_hold_active = bool(PREVENT_SLEEP_WHILE_RUNNING)
     if sleep_hold_active:
         _set_thread_sleep_hold(True)
+    retries_used = 0
     try:
-        run_master_controller()
-    except QuitException:
-        _record_run_outcome("stopped", "Run stopped")
-    except SkipMinigameException:
-        # Stray L during startup, before the main loop's handler kicks in. Benign.
-        print("[UI] Manual skip raised during startup — ignored. Press Start again.")
-        _record_run_outcome("error", "Manual skip interrupted startup")
-    except RuntimeError as e:
-        # Controller RuntimeErrors are deliberate, user-facing safety stops
-        # (missing Roblox, unconfirmed menu/trait route). One clear line plus
-        # the [RUN] record is more useful than a repeated traceback in the UI.
-        _record_run_outcome("error", f"RuntimeError: {e}")
-        print(f"[UI] Macro stopped safely: {e}")
-    except Exception as e:
-        import traceback
-        _record_run_outcome("error", f"{e.__class__.__name__}: {e}")
-        print(f"[UI] Macro thread error ({e.__class__.__name__}): {e}")
-        for ln in traceback.format_exc().splitlines()[-6:]:
-            if ln.strip():
-                print(f"[UI] {ln}")
+        while True:
+            if not _prepare_controller_attempt():
+                _record_run_outcome("stopped", "User requested stop")
+                break
+            if _auto_retry_cancelled():
+                _record_run_outcome("stopped", "User requested stop")
+                break
+            try:
+                run_master_controller()
+            except QuitException:
+                _record_run_outcome("stopped", "Run stopped")
+            except SkipMinigameException:
+                print("[UI] Manual skip raised during startup — ignored. Press Start again.")
+                _record_run_outcome("error", "Manual skip interrupted startup")
+            except RuntimeError as e:
+                _record_run_outcome(
+                    "error",
+                    f"RuntimeError: {e}",
+                    retryable=_runtime_error_is_retryable(e),
+                )
+                print(f"[UI] Macro stopped safely: {e}")
+            except Exception as e:
+                import traceback
+                _record_run_outcome("error", f"{e.__class__.__name__}: {e}")
+                print(f"[UI] Macro thread error ({e.__class__.__name__}): {e}")
+                for ln in traceback.format_exc().splitlines()[-6:]:
+                    if ln.strip():
+                        print(f"[UI] {ln}")
+
+            monitor_stopped = _stop_background_game_monitor()
+            if not monitor_stopped or not _auto_retry_can_run(retries_used):
+                break
+
+            retries_used += 1
+            TELEMETRY["recovery_attempts"] += 1
+            with _run_result_lock:
+                failed_reason = _CURRENT_RUN_REASON or "Unknown controller error"
+            print(
+                f"[RECOVERY] Attempt {retries_used}/{AUTO_RETRY_MAX_ATTEMPTS} "
+                f"after: {failed_reason}"
+            )
+            if not _auto_retry_recover():
+                if _auto_retry_cancelled():
+                    _record_run_outcome("stopped", "User requested stop")
+                    break
+                _record_run_outcome(
+                    "error", f"Recovery attempt {retries_used} could not be confirmed"
+                )
+                break
+            if _auto_retry_cancelled():
+                _record_run_outcome("stopped", "User requested stop")
+                break
+            _clear_attempt_outcome()
+            print(f"[RECOVERY] Restarting selected training plan ({retries_used})")
     finally:
         _stop_background_game_monitor()
         if sleep_hold_active:
             _set_thread_sleep_hold(False)
         _finalize_run_result()
         CURRENT_TRAINING_STATE = None
+        TRAINING_MENU_VISIBLE = False
         CONTROLLER_PAUSED = False
         PROGRESSION_COMPLETE_REQUESTED.clear()
         SENZU_STATUS = "idle"
@@ -5942,8 +7067,12 @@ def _bounded_int(value, minimum, maximum):
 _config_lock = threading.RLock()
 
 
-def _ui_apply_setting(key, value):
+def _ui_apply_setting_unlocked(key, value):
     global START_DELAY, GC_GRAVITY_TARGET_G, PREVENT_SLEEP_WHILE_RUNNING
+    global SHUTDOWN_PC_WHEN_FINISHED, AFTER_RUN_GAME_ACTION, AFTER_RUN_ON_FAILURE
+    global AUTO_RETRY_ON_FAILURE, AUTO_RETRY_MAX_ATTEMPTS
+    global AUTO_RETRY_RECOVERY_MODE, AUTO_RETRY_WALK_OUT, AUTO_RETRY_WALK_SECONDS
+    global DIAGNOSTIC_MODE
     global NEW_GAME_WAIT, NO_YELLOW_TIMEOUT_SEC
     global MANUAL_NEXT_KEY, HEALTH_HIT_COOLDOWN_SEC, HEALTH_MODE, START_STOP_HOTKEY, PAUSE_HOTKEY
     global KEY_PRESS_DELAY, STABILIZE_DELAY, POST_COMBO_DELAY
@@ -5956,6 +7085,26 @@ def _ui_apply_setting(key, value):
         GC_GRAVITY_TARGET_G = _normalize_gravity_target(value, strict=True)
     elif key == "prevent_sleep_while_running":
         PREVENT_SLEEP_WHILE_RUNNING = _ui_bool(value)
+    elif key == "shutdown_pc_when_finished":
+        SHUTDOWN_PC_WHEN_FINISHED = _ui_bool(value)
+    elif key == "after_run_game_action":
+        AFTER_RUN_GAME_ACTION = _normalize_after_run_game_action(value, strict=True)
+    elif key == "after_run_on_failure":
+        AFTER_RUN_ON_FAILURE = _ui_bool(value)
+    elif key == "auto_retry_on_failure":
+        AUTO_RETRY_ON_FAILURE = _ui_bool(value)
+    elif key == "auto_retry_max_attempts":
+        AUTO_RETRY_MAX_ATTEMPTS = _bounded_int(value, 1, 10)
+    elif key == "auto_retry_recovery_mode":
+        AUTO_RETRY_RECOVERY_MODE = _normalize_auto_retry_recovery_mode(
+            value, strict=True
+        )
+    elif key == "auto_retry_walk_out":
+        AUTO_RETRY_WALK_OUT = _ui_bool(value)
+    elif key == "auto_retry_walk_seconds":
+        AUTO_RETRY_WALK_SECONDS = _bounded_float(value, 0.5, 10.0)
+    elif key == "diagnostic_mode":
+        DIAGNOSTIC_MODE = _ui_bool(value)
     elif key == "after_switch_wait_sec":
         NEW_GAME_WAIT = _bounded_float(value, 0.0, 10.0)
     elif key == "no_yellow_fallback_enabled":
@@ -6054,7 +7203,21 @@ def _ui_apply_setting(key, value):
     else:
         raise ValueError(f"Unknown key: {key}")
 
-    save_master_config()
+
+def _ui_apply_setting(key, value):
+    # Keep the global mutation and its persisted snapshot in one critical
+    # section. Otherwise two quick UI changes can save in reverse order and
+    # restore a stale value on the next launch.
+    with _config_lock:
+        previous_settings = _ui_config_snapshot()
+        _ui_apply_setting_unlocked(key, value)
+        try:
+            save_master_config()
+        except Exception:
+            # Keep the live state consistent with the UI and the last complete
+            # config when persistence fails.
+            _ui_apply_setting_unlocked(key, previous_settings[key])
+            raise
 
 
 _macro_start_lock = threading.Lock()
@@ -6147,9 +7310,18 @@ def _ui_start_macro():
             return True, "Already running"
         if not _sanitize_training_order(TRAINING_ORDER_CUSTOM):
             return False, "Add at least one stat to Training Order."
-        # Refresh game-window detection so coords reflect the current DBOG position.
-        # Macro proceeds even if detection fails — the previous offset (default 0,0) is kept.
-        update_game_window()
+        # Refuse before the countdown or worker starts. Waiting until the first
+        # capture makes Start look successful for several seconds and risks any
+        # future startup input landing in whichever window currently has focus.
+        if not update_game_window() or GAME_HWND is None:
+            return False, "Open Roblox before starting XynMacro."
+        if (
+            _background_monitor_thread is not None
+            and _background_monitor_thread.is_alive()
+            and _background_monitor_stop is not None
+            and _background_monitor_stop.is_set()
+        ):
+            return False, "Previous game monitor is still stopping. Try Start again shortly."
         UI_STOP_REQUESTED = False
         MACRO_LAST_ERROR = None
         _begin_run_result()
@@ -6161,10 +7333,12 @@ def _ui_start_macro():
 
 
 def _ui_stop_macro():
-    global UI_STOP_REQUESTED
+    global UI_STOP_REQUESTED, _USER_STOP_LATCHED
+    with _stop_input_gate:
+        _USER_STOP_LATCHED = True
+        UI_STOP_REQUESTED = True
     if _ui_is_running():
         _record_run_outcome("stopped", "User requested stop")
-    UI_STOP_REQUESTED = True
     return True, "Stop requested"
 
 
@@ -6333,6 +7507,10 @@ def run_ui_server(sidecar_pid=None, auth_token=None):
     def health():
         return jsonify(_health_snapshot())
 
+    @app.route("/diagnostics", methods=["GET"])
+    def diagnostics():
+        return jsonify(_diagnostic_report())
+
     @app.route("/logs", methods=["GET"])
     def logs():
         since = request.args.get("since", type=float, default=0)
@@ -6342,7 +7520,7 @@ def run_ui_server(sidecar_pid=None, auth_token=None):
     @app.route("/preview", methods=["GET"])
     def preview():
         """Return a base64-PNG snapshot of a named region.
-        Usage: /preview?region=health_box | agility_box | game_window
+        Usage: /preview?region=health_box | agility_box | game_window | diagnostics
         Used by the Calibration tab to show users exactly what the macro sees."""
         region = (request.args.get("region") or "").strip().lower()
         try:
@@ -6357,11 +7535,19 @@ def run_ui_server(sidecar_pid=None, auth_token=None):
                         return jsonify({"ok": False, "msg": "Roblox window not found"})
                     box = {"left": GAME_OFFSET_X, "top": GAME_OFFSET_Y,
                            "width": GAME_WIDTH, "height": GAME_HEIGHT}
+                elif region == "diagnostics":
+                    if GAME_HWND is None:
+                        update_game_window()
+                    if GAME_HWND is None:
+                        return jsonify({"ok": False, "msg": "Roblox window not found"})
+                    box = _confirmed_game_capture_rect()
+                    bgr = _diagnostic_overlay_frame(_sct, box)
                 else:
                     return jsonify({"ok": False, "msg": f"Unknown region: {region}"})
 
-                raw = np.array(_sct.grab(box))
-                bgr = raw[:, :, :3]
+                if region != "diagnostics":
+                    raw = np.array(_sct.grab(box))
+                    bgr = raw[:, :, :3]
                 ok, buf = cv2.imencode(".png", bgr)
                 if not ok:
                     return jsonify({"ok": False, "msg": "Encode failed"})
@@ -6499,8 +7685,9 @@ def run_ui_server(sidecar_pid=None, auth_token=None):
             if action == "reset_defaults":
                 if _ui_is_running():
                     return jsonify({"ok": False, "msg": "Stop the macro before resetting settings"})
-                reset_user_settings_to_defaults()
-                save_master_config()
+                with _config_lock:
+                    reset_user_settings_to_defaults()
+                    save_master_config()
                 register_start_stop_hotkey()
                 register_manual_next_hotkey()
                 register_pause_hotkey()
@@ -6508,7 +7695,8 @@ def run_ui_server(sidecar_pid=None, auth_token=None):
             if action == "factory_reset":
                 if _ui_is_running():
                     return jsonify({"ok": False, "msg": "Stop the macro before factory reset"})
-                factory_reset_configuration()
+                with _config_lock:
+                    factory_reset_configuration()
                 register_start_stop_hotkey()
                 register_manual_next_hotkey()
                 register_pause_hotkey()

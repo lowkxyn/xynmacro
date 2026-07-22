@@ -176,6 +176,32 @@
       </div>
       <div class="run-summary" id="runSummary" hidden></div>
 
+      <div class="section-title">After Run</div>
+      <div class="panel shutdown-panel">
+        <div class="row-item">
+          <span class="row-label">Game Action</span>
+          <div class="row-ctrl">
+            <select class="inp after-run-select" id="afterRunGameAction" aria-label="Game action after the training order finishes">
+              <option value="none">Do Nothing</option>
+              <option value="main_menu">Go to Main Menu</option>
+              <option value="close_game">Close Roblox</option>
+              <option value="zero_gravity">Stay in GC at 0G</option>
+            </select>
+          </div>
+        </div>
+        <div class="row-hint">Runs only after every selected stat finishes. The 0G action keeps Roblox open and confirms the GC gravity control reached 0G.</div>
+        <div class="row-item">
+          <span class="row-label">Shut Down PC</span>
+          <div class="row-ctrl"><button type="button" class="toggle" id="toggleShutdownFinished" role="switch" aria-checked="false" aria-label="Shut down PC when the training order finishes" onclick="toggleSetting('shutdown_pc_when_finished',this)"></button></div>
+        </div>
+        <div class="row-hint">Schedules a cancellable Windows shutdown 60 seconds after the run.</div>
+        <div class="row-item shutdown-dependent" id="afterRunFailureRow">
+          <span class="row-label">Run Enabled Actions If Macro Fails</span>
+          <div class="row-ctrl"><button type="button" class="toggle" id="toggleAfterRunFailure" role="switch" aria-checked="false" aria-label="Run enabled after-run actions if the macro fails" onclick="toggleSetting('after_run_on_failure',this)"></button></div>
+        </div>
+        <div class="row-hint shutdown-dependent-hint" id="afterRunFailureHint">Applies to both the selected game action and PC shutdown. Manual Stop never runs after-run actions.</div>
+      </div>
+
       <div class="section-title">Setup Checklist</div>
       <div class="panel panel-static">
         <div class="check-item">
@@ -269,6 +295,38 @@
           <div class="row-ctrl"><button type="button" class="toggle" id="togglePreventSleep" role="switch" aria-checked="false" aria-label="Prevent PC sleep while running" onclick="toggleSetting('prevent_sleep_while_running',this)"></button></div>
         </div>
         <div class="row-hint">Keeps Windows and the display awake while the macro is active so screen detection continues. The hold is released immediately when the run stops or errors.</div>
+      </div>
+
+      <div class="section-title">Error Recovery</div>
+      <div class="panel">
+        <div class="row-item">
+          <span class="row-label">Retry After Error</span>
+          <div class="row-ctrl"><button type="button" class="toggle" id="toggleAutoRetry" role="switch" aria-checked="false" aria-label="Retry the training plan after a recoverable error" onclick="toggleSetting('auto_retry_on_failure',this)"></button></div>
+        </div>
+        <div class="row-hint">Off by default. Manual Stop never retries. After-run failure actions wait until every recovery attempt is exhausted.</div>
+        <div class="row-item">
+          <span class="row-label">Maximum Retries</span>
+          <div class="row-ctrl"><input type="number" class="inp" id="autoRetryMaxAttempts" value="3" step="1" min="1" max="10" aria-label="Maximum recovery retries"></div>
+        </div>
+        <div class="row-item">
+          <span class="row-label">Recovery Method</span>
+          <div class="row-ctrl">
+            <select class="inp" id="autoRetryRecoveryMode" aria-label="Error recovery method">
+              <option value="reset">Reset Character</option>
+              <option value="wait_for_death">Wait for GC Death</option>
+            </select>
+          </div>
+        </div>
+        <div class="row-hint">Reset sends Tab, then Esc + R + Enter. Wait for GC Death sends no reset input. Both methods confirm GC's death dialog, click Respawn, and wait for it to close before retrying.</div>
+        <div class="row-item">
+          <span class="row-label">Walk Out After Respawn</span>
+          <div class="row-ctrl"><button type="button" class="toggle" id="toggleAutoRetryWalkOut" role="switch" aria-checked="false" aria-label="Walk forward after respawn" onclick="toggleSetting('auto_retry_walk_out',this)"></button></div>
+        </div>
+        <div class="row-item">
+          <span class="row-label">Walk Forward</span>
+          <div class="row-ctrl"><input type="number" class="inp" id="autoRetryWalkSeconds" value="2.5" step="0.5" min="0.5" max="10" aria-label="Walk forward duration after respawn"><span class="unit">sec</span></div>
+        </div>
+        <div class="row-hint">Movement is character/camera-relative. Different spawn angles can still send the character the wrong way, so the restarted run must confirm the Training Mode menu before clicking anything.</div>
       </div>
 
       <div class="section-title">Hotkeys</div>
@@ -573,6 +631,23 @@
           <button class="btn-sm" onclick="clearLogs()" title="Clear this view only; the backend session log is kept">Clear view</button>
         </div>
       </div>
+      <div class="section-title">Support Diagnostics</div>
+      <div class="panel diagnostic-panel">
+        <div class="row-item">
+          <span class="row-label">Diagnostic Mode</span>
+          <div class="row-ctrl"><button type="button" class="toggle" id="toggleDiagnosticMode" role="switch" aria-checked="false" aria-label="Diagnostic mode" onclick="toggleSetting('diagnostic_mode',this)"></button></div>
+        </div>
+        <div class="row-hint">Adds exact client size, monitor, DPI, focus, menu scores, and setting checks to each run log. It does not change macro timing.</div>
+        <div class="diagnostic-actions">
+          <button class="btn-sm" onclick="togglePreview('diagnostics')" id="previewBtnDiagnostics">Vision preview</button>
+          <button class="btn-sm" onclick="copyDiagnostics()">Copy report</button>
+        </div>
+        <div class="preview-row diagnostic-preview-row" id="previewRowDiagnostics" style="display:none">
+          <img class="region-preview diagnostic-preview" id="previewImgDiagnostics" alt="Live diagnostic preview of macro scan regions">
+          <div class="preview-meta" id="previewMetaDiagnostics">Loading&hellip;</div>
+        </div>
+        <div class="row-hint">The preview labels exactly what the macro scans. Ki scans the full Roblox client. A visible taskbar doesn't shift client-relative boxes; minimizing or covering Roblox can break capture.</div>
+      </div>
       <div class="log-viewer log-feed" id="logViewer"></div>
       <div class="log-note">Clear view only hides lines already shown. Save session log copies the full active session file to the configured save folder.</div>
     </div>
@@ -870,6 +945,7 @@
 
 <script src="screen-state.js"></script>
 <script src="update-state.js"></script>
+<script src="preference-migration.js"></script>
 <script src="main.js"></script>
 </body>
 </html>

@@ -3,7 +3,7 @@ import test from 'node:test';
 
 await import('./update-state.js');
 
-const { reminderDecision } = globalThis.XMacroUpdateState;
+const { reminderDecision } = globalThis.XynMacroUpdateState;
 
 test('automatic checks suppress only the ignored exact version', () => {
   assert.deepEqual(reminderDecision('1.0.6', '1.0.6', true), {

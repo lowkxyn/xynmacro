@@ -10,7 +10,7 @@ import numpy as np
 PYTHON_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PYTHON_DIR))
 
-import xmacro_core as core
+import xynmacro_core as core
 
 
 class GravityControlTests(unittest.TestCase):
@@ -39,6 +39,18 @@ class GravityControlTests(unittest.TestCase):
         value, score, second = core._gravity_value_from_mask(blank, self.templates)
         self.assertIsNone(value)
         self.assertEqual((score, second), (0.0, 0.0))
+
+    def test_live_quality_match_is_accepted_only_with_a_clear_margin(self):
+        self.assertTrue(core._gravity_match_is_reliable(0.850, 0.356))
+        self.assertFalse(core._gravity_match_is_reliable(0.799, 0.200))
+        self.assertFalse(core._gravity_match_is_reliable(0.850, 0.820))
+
+    def test_delayed_redraw_can_confirm_safe_forward_progress(self):
+        self.assertTrue(core._gravity_advance_is_safe(0, 20, 100))
+        self.assertTrue(core._gravity_advance_is_safe(70, 100, 100))
+        self.assertFalse(core._gravity_advance_is_safe(40, 60, 50))
+        self.assertFalse(core._gravity_advance_is_safe(100, 0, 100))
+        self.assertFalse(core._gravity_advance_is_safe(40, 30, 100))
 
     def test_only_real_ten_g_steps_are_accepted(self):
         self.assertEqual(core._normalize_gravity_target(0, strict=True), 0)

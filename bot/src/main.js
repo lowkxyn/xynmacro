@@ -1,5 +1,15 @@
-/* Apply saved appearance before first paint. */
-(function(){var u=localStorage.getItem('xmacro-ui-style')||'classic';if(u==='aero')document.documentElement.setAttribute('data-ui','aero');var t=localStorage.getItem('dbog-theme');if(t&&t!=='graphite'&&t!=='custom'&&t.indexOf('p:')!==0)document.documentElement.setAttribute('data-theme',t);var b=localStorage.getItem('dbog-bg')||'flow';if(b!=='none')document.documentElement.setAttribute('data-bg',b)})();
+const XYNMACRO_PREFERENCE_PREFIX = 'xynmacro-';
+
+/* Migrate pre-1.1 preference keys locally, remove the legacy copies, then apply
+   saved appearance before first paint. No preference data leaves the WebView. */
+(function(){
+  const legacyPrefix = ['x', 'macro-'].join('');
+  const suffixes = ['ui-style', 'auto-update', 'update-ignored-version', 'changelog-seen', 'announcement-seen', 'welcome-seen', 'wspain-seen'];
+  XynMacroPreferenceMigration.migratePreferences(
+    localStorage, legacyPrefix, XYNMACRO_PREFERENCE_PREFIX, suffixes
+  );
+  var u=localStorage.getItem(XYNMACRO_PREFERENCE_PREFIX+'ui-style')||'classic';if(u==='aero')document.documentElement.setAttribute('data-ui','aero');var t=localStorage.getItem('dbog-theme');if(t&&t!=='graphite'&&t!=='custom'&&t.indexOf('p:')!==0)document.documentElement.setAttribute('data-theme',t);var b=localStorage.getItem('dbog-bg')||'flow';if(b!=='none')document.documentElement.setAttribute('data-bg',b)
+})();
 
 /* Splash: stays until Python sidecar reports healthy (Rust fires `backend-ready`)
    OR a hard cap (8s) — whichever comes first. Minimum hold of 900ms so the splash
@@ -40,7 +50,7 @@ window.addEventListener('DOMContentLoaded', () => {
 /* One-time "W spain" moment: a centred card plus an emoji shower as the splash
    fades. Fires once per install — the flag lives in ACTIVE_PREFERENCE_KEYS, so a
    config reset replays it. Everything is pointer-events:none and self-removing. */
-const WSPAIN_SEEN_KEY = 'xmacro-wspain-seen';
+const WSPAIN_SEEN_KEY = XYNMACRO_PREFERENCE_PREFIX + 'wspain-seen';
 function celebrateWSpain() {
   const frame = document.querySelector('.window-frame');
   if (!frame || localStorage.getItem(WSPAIN_SEEN_KEY)) return;
@@ -111,14 +121,14 @@ const ACTIVE_PREFERENCE_KEYS = [
   'dbog-theme',
   'dbog-bg',
   'dbog-bg-speed',
-  'xmacro-ui-style',
+  'xynmacro-ui-style',
   'dbog-sidebar-width',
-  'xmacro-auto-update',
-  'xmacro-update-ignored-version',
-  'xmacro-changelog-seen',
-  'xmacro-announcement-seen',
-  'xmacro-welcome-seen',
-  'xmacro-wspain-seen',
+  'xynmacro-auto-update',
+  'xynmacro-update-ignored-version',
+  'xynmacro-changelog-seen',
+  'xynmacro-announcement-seen',
+  'xynmacro-welcome-seen',
+  'xynmacro-wspain-seen',
 ];
 
 // Deleting the visible macro_config.json is a complete reset on next launch.
@@ -179,14 +189,23 @@ window.wcOnTop = () => {
 let _isCompact = false;
 window.wcCompact = () => {
   const frame = document.querySelector('.window-frame');
+  const compactButton = document.getElementById('btnCompact');
   _isCompact = !_isCompact;
   if (_isCompact) {
     frame.classList.add('compact');
-    document.getElementById('btnCompact')?.classList.add('active');
+    compactButton?.classList.add('active');
+    if (compactButton) {
+      compactButton.title = 'Expand';
+      compactButton.setAttribute('aria-label', 'Expand');
+    }
     _wcSend('compact');
   } else {
     frame.classList.remove('compact');
-    document.getElementById('btnCompact')?.classList.remove('active');
+    compactButton?.classList.remove('active');
+    if (compactButton) {
+      compactButton.title = 'Roll up';
+      compactButton.setAttribute('aria-label', 'Roll up');
+    }
     _wcSend('uncompact');
   }
 };
@@ -651,14 +670,14 @@ window.wcCompact = () => {
     const selected = style === 'aero' ? 'aero' : 'classic';
     document.documentElement.toggleAttribute('data-ui', selected === 'aero');
     if (selected === 'aero') document.documentElement.setAttribute('data-ui', 'aero');
-    localStorage.setItem('xmacro-ui-style', selected);
+    localStorage.setItem('xynmacro-ui-style', selected);
     document.querySelectorAll('[data-ui-style]').forEach((button) => {
       button.classList.toggle('active', button.dataset.uiStyle === selected);
       button.setAttribute('aria-pressed', button.dataset.uiStyle === selected ? 'true' : 'false');
     });
     if (resetScroll) _resetScroll();
   }
-  const uiStyle = localStorage.getItem('xmacro-ui-style') === 'aero' ? 'aero' : 'classic';
+  const uiStyle = localStorage.getItem('xynmacro-ui-style') === 'aero' ? 'aero' : 'classic';
   document.querySelectorAll('[data-ui-style]').forEach((button) => {
     button.addEventListener('click', () => applyUiStyle(button.dataset.uiStyle));
   });
@@ -805,6 +824,7 @@ window.wcCompact = () => {
   let toastTimeout = null;
   let toastHideTimeout = null;
   let _macroRunning = false;
+  let _gameWindowFound = false;
   let _macroUiAction = '';
   let _macroActionSeq = 0;
   let _startTask = null;
@@ -817,8 +837,9 @@ window.wcCompact = () => {
     const start = document.getElementById('btnStart');
     const stop = document.getElementById('btnStop');
     if (start) {
-      start.disabled = starting || stopping || _macroRunning;
+      start.disabled = starting || stopping || _macroRunning || !_gameWindowFound;
       start.textContent = starting ? 'STARTING…' : 'START MACRO';
+      start.title = _gameWindowFound ? '' : 'Open Roblox before starting XynMacro';
       start.classList.toggle('running', _macroRunning && !stopping);
     }
     if (stop) {
@@ -828,7 +849,11 @@ window.wcCompact = () => {
     const hudToggle = document.getElementById('hudMacroToggle');
     if (hudToggle) {
       hudToggle.classList.toggle('error', !!_compactAlert);
-      hudToggle.disabled = stopping;
+      hudToggle.disabled = stopping || (!_macroRunning && !starting && !_gameWindowFound);
+      if (!_gameWindowFound && !_macroRunning && !starting) {
+        hudToggle.title = 'Open Roblox before starting XynMacro';
+        hudToggle.setAttribute('aria-label', hudToggle.title);
+      }
     }
   }
 
@@ -1224,7 +1249,7 @@ window.wcCompact = () => {
   /* Actions */
   let _cancelResolutionWarning = null;
   // First Start of the session on a non-1080p display: a brief warning that
-  // auto-confirms after a 3s countdown (or Cancel to back out). The macro still
+  // auto-confirms after a 5s countdown (or Cancel to back out). The macro still
   // runs at any resolution — this is only a heads-up.
   function _confirmResStart(screen) {
     return new Promise((resolve) => {
@@ -1272,6 +1297,10 @@ window.wcCompact = () => {
 
   window.startMacro = () => {
     if (_startTask || _stopTask || _macroRunning) return _startTask || _stopTask;
+    if (!_gameWindowFound) {
+      showToast('Open Roblox before starting XynMacro', 'err');
+      return Promise.resolve();
+    }
     const actionSeq = ++_macroActionSeq;
     _compactAlert = '';
     _setMacroUiAction('starting');
@@ -1279,7 +1308,7 @@ window.wcCompact = () => {
     const task = (async () => {
       // Non-1080p heads-up. Continue = accept for this session (don't warn again);
       // Cancel = not accepted, so it reappears on the next Start.
-      while (XMacroScreenState.needsResolutionWarning(_screenRes, _acceptedDisplaySignature)) {
+      while (XynMacroScreenState.needsResolutionWarning(_screenRes, _acceptedDisplaySignature)) {
         const warnedScreen = _screenRes;
         const ok = await _confirmResStart(warnedScreen);
         if (!ok || actionSeq !== _macroActionSeq) return;
@@ -1438,9 +1467,31 @@ window.wcCompact = () => {
       el.classList.toggle('active', next);
       el.setAttribute('aria-checked', next ? 'true' : 'false');
       _pushUndo(key, isActive, next);
+      if (key === 'shutdown_pc_when_finished' || key === 'after_run_on_failure') {
+        _syncAfterRunControls();
+      }
     }
-    showToast(r.msg || `${key}: ${next ? 'ON' : 'OFF'}`, r.ok !== false ? 'ok' : 'err');
+    const shutdownLabels = {
+      shutdown_pc_when_finished: 'Shutdown when finished',
+      after_run_on_failure: 'After-run actions on failure',
+    };
+    const message = r.ok !== false && shutdownLabels[key]
+      ? `${shutdownLabels[key]} ${next ? 'enabled' : 'disabled'}`
+      : (r.msg || `${key}: ${next ? 'ON' : 'OFF'}`);
+    showToast(message, r.ok !== false ? 'ok' : 'err');
   };
+
+  function _syncAfterRunControls() {
+    const failureToggle = document.getElementById('toggleAfterRunFailure');
+    const failureRow = document.getElementById('afterRunFailureRow');
+    const failureHint = document.getElementById('afterRunFailureHint');
+    const gameAction = document.getElementById('afterRunGameAction')?.value || 'none';
+    const shutdownEnabled = document.getElementById('toggleShutdownFinished')?.classList.contains('active');
+    const disabled = gameAction === 'none' && !shutdownEnabled;
+    if (failureToggle) disabled ? failureToggle.setAttribute('disabled', '') : failureToggle.removeAttribute('disabled');
+    failureRow?.classList.toggle('is-disabled', disabled);
+    failureHint?.classList.toggle('is-disabled', disabled);
+  }
 
   function _readInputValue(el) {
     if (!el) return null;
@@ -1489,6 +1540,7 @@ window.wcCompact = () => {
           if (!el._suppressUndo && savedValue !== ov) {
             _pushUndo(key, ov, savedValue);
           }
+          if (key === 'after_run_game_action') _syncAfterRunControls();
           el.classList.add('saved-flash');
           setTimeout(() => el.classList.remove('saved-flash'), 450);
         }
@@ -1646,6 +1698,7 @@ window.wcCompact = () => {
     const map = {
       health_box:  { rowId: 'previewRowHealth',  imgId: 'previewImgHealth',  metaId: 'previewMetaHealth',  btnId: 'previewBtnHealth'  },
       agility_box: { rowId: 'previewRowAgility', imgId: 'previewImgAgility', metaId: 'previewMetaAgility', btnId: 'previewBtnAgility' },
+      diagnostics: { rowId: 'previewRowDiagnostics', imgId: 'previewImgDiagnostics', metaId: 'previewMetaDiagnostics', btnId: 'previewBtnDiagnostics' },
     }[region];
     if (!map) return;
     const row = document.getElementById(map.rowId);
@@ -1668,6 +1721,31 @@ window.wcCompact = () => {
       metaEl: document.getElementById(map.metaId),
     };
     _fetchPreview(region);
+  };
+
+  window.copyDiagnostics = async () => {
+    try {
+      const report = await invoke('proxy_get', { path: '/diagnostics' });
+      if (!report || report.ok === false) {
+        showToast(report?.summary || 'Diagnostics unavailable', 'err');
+        return;
+      }
+      const lines = [
+        `XynMacro ${document.getElementById('appVer')?.textContent || ''}`.trim(),
+        report.summary,
+        `Monitor: ${JSON.stringify(report.monitor || {})}`,
+        `Mode: ${report.window_mode}; DPI: ${report.dpi}; foreground: ${report.foreground}; minimized: ${report.minimized}`,
+        `Template scores: ${JSON.stringify(report.template_scores || {})}`,
+        `Settings: ${JSON.stringify(report.settings || {})}`,
+        `Calibration: ${JSON.stringify(report.calibration || {})}`,
+        report.capture_note || '',
+        ...(report.issues || []).map(issue => `WARNING: ${issue}`),
+      ].filter(Boolean);
+      await navigator.clipboard.writeText(lines.join('\n'));
+      showToast('Diagnostic report copied', 'ok');
+    } catch (error) {
+      showToast(`Could not copy diagnostics: ${error}`, 'err');
+    }
   };
 
   function _selectedSegmentValue(segmentId) {
@@ -1744,10 +1822,19 @@ window.wcCompact = () => {
     senzu_zero_gravity_on_empty: 'toggleSenzuZeroGravity',
     no_yellow_fallback_enabled: 'toggleNoYellowFallback',
     prevent_sleep_while_running: 'togglePreventSleep',
+    diagnostic_mode: 'toggleDiagnosticMode',
+    shutdown_pc_when_finished: 'toggleShutdownFinished',
+    after_run_on_failure: 'toggleAfterRunFailure',
+    auto_retry_on_failure: 'toggleAutoRetry',
+    auto_retry_walk_out: 'toggleAutoRetryWalkOut',
   };
 
   const entryMap = {
     start_delay_sec:                 'startDelay',
+    after_run_game_action:           'afterRunGameAction',
+    auto_retry_max_attempts:         'autoRetryMaxAttempts',
+    auto_retry_recovery_mode:        'autoRetryRecoveryMode',
+    auto_retry_walk_seconds:         'autoRetryWalkSeconds',
     gc_gravity_target_g:             'gcGravityTarget',
     no_yellow_timeout_sec:           'noYellowTimeout',
     after_switch_wait_sec:           'afterSwitchWait',
@@ -1824,11 +1911,18 @@ window.wcCompact = () => {
   _refreshBackendPort();
   window.addEventListener('backend-ready', () => _refreshBackendPort());
 
-  function _renderRunSummary(telemetry) {
+  function _renderRunSummary(run) {
     const el = document.getElementById('runSummary');
     if (!el) return;
-    const tel = telemetry || {};
+    const tel = run?.telemetry || {};
+    const outcomeLabels = {
+      completed: 'Completed',
+      incomplete: 'Incomplete',
+      stopped: 'Stopped',
+      error: 'Error',
+    };
     const parts = [
+      outcomeLabels[run?.outcome] || 'Ended',
       `${tel.switches || 0} switches`,
       `${tel.health_hits || 0} health hits`,
       `${tel.ki_clicks || 0} Ki clicks`,
@@ -1853,9 +1947,11 @@ window.wcCompact = () => {
 
     const cfg = state.config || {};
     const running = !!state.running;
+    _gameWindowFound = !!state.game_window?.found;
     const backendActivity = state.stop_requested ? 'Stopping'
       : state.controller_paused_for_senzu ? 'Auto-Senzu'
       : state.controller_paused ? 'Paused'
+      : state.training_menu_visible ? 'Training Menu'
       : (running && !state.current_state) ? 'Starting'
       : (running ? 'Active' : 'Idle');
     const runStarted = _lastBackendRunning === false && running;
@@ -1934,7 +2030,8 @@ window.wcCompact = () => {
                     : (running && state.progression_status === 'complete') ? ' · complete'
                     : (running && state.progression_status === 'tracking') ? ' · tracking'
                     : '';
-      curStat.textContent = (running && state.current_state) ? state.current_state + progTxt : '—';
+      const menuTxt = state.training_menu_visible ? ' · menu open' : '';
+      curStat.textContent = (running && state.current_state) ? state.current_state + progTxt + menuTxt : '—';
     }
     // Compact HUD: show current stat (and separator) only when actually running.
     const hudStat = document.getElementById('hudStat');
@@ -1983,7 +2080,6 @@ window.wcCompact = () => {
         el.setAttribute('aria-checked', enabled ? 'true' : 'false');
       }
     }
-
     _syncAgilityModeSeg(cfg.agility_mode || 'v2');
     _syncHealthModeSeg(cfg.health_mode || 'v2_track');
     if (cfg.ki_v8_mode) _syncKiV8ModeSeg(cfg.ki_v8_mode);
@@ -1998,6 +2094,7 @@ window.wcCompact = () => {
           : ((el.type === 'number' || el.type === 'range') ? Number(v) : v);
       }
     }
+    _syncAfterRunControls();
     _renderGravityValue(cfg.gc_gravity_target_g);
 
     // Keybind buttons: sync display only when not actively capturing.
@@ -2038,7 +2135,7 @@ window.wcCompact = () => {
     const setResolutionButton = document.getElementById('btnRes1080');
     const revertResolutionButton = document.getElementById('btnResRevert');
     if (resIcon && resText) {
-      const nextScreen = XMacroScreenState.normalizeScreen(scr);
+      const nextScreen = XynMacroScreenState.normalizeScreen(scr);
       if (setResolutionButton) setResolutionButton.disabled = running || !nextScreen;
       // Revert can still restore a display changed earlier when Roblox has
       // temporarily disappeared, so only an active macro blocks it here.
@@ -2174,7 +2271,12 @@ window.wcCompact = () => {
     if (switchesEl) switchesEl.textContent = String(tel.switches || 0);
     const runSummary = document.getElementById('runSummary');
     if (runStarted && runSummary) runSummary.hidden = true;
-    if (runEnded) _renderRunSummary(tel);
+    if (runEnded) {
+      _renderRunSummary(state.last_run);
+      if (state.last_run?.outcome === 'incomplete') {
+        showToast(state.last_run.reason || 'Training order ended with skipped stats', 'warn');
+      }
+    }
 
   }
 
@@ -2432,6 +2534,11 @@ window.wcCompact = () => {
   }
 
   function openPalette() {
+    if (_isCompact) {
+      window.wcCompact();
+      setTimeout(openPalette, 260);
+      return;
+    }
     paletteOpen = true;
     paletteInput.value = '';
     paletteActiveIdx = 0;
@@ -2522,6 +2629,11 @@ window.wcCompact = () => {
     }
   }
   function openShortcuts() {
+    if (_isCompact) {
+      window.wcCompact();
+      setTimeout(openShortcuts, 260);
+      return;
+    }
     shortcutsOpen = true;
     shortcutsBackdrop.classList.add('open');
     renderShortcuts();
@@ -2592,15 +2704,41 @@ window.wcCompact = () => {
   }
 
   /* ── Signed GitHub updates + changelog overlay ── */
-  const AUTO_UPDATE_KEY = 'xmacro-auto-update';
-  const IGNORED_UPDATE_KEY = 'xmacro-update-ignored-version';
-  const SEEN_VERSION_KEY = 'xmacro-changelog-seen';
-  const ANNOUNCEMENT_SEEN_KEY = 'xmacro-announcement-seen';
-  const WELCOME_SEEN_KEY = 'xmacro-welcome-seen';
+  const AUTO_UPDATE_KEY = 'xynmacro-auto-update';
+  const IGNORED_UPDATE_KEY = 'xynmacro-update-ignored-version';
+  const SEEN_VERSION_KEY = 'xynmacro-changelog-seen';
+  const ANNOUNCEMENT_SEEN_KEY = 'xynmacro-announcement-seen';
+  const WELCOME_SEEN_KEY = 'xynmacro-welcome-seen';
   const ANNOUNCEMENT_URL = 'https://raw.githubusercontent.com/lowkxyn/xynmacro/main/announcements.json';
 
   // What's-new content, newest first. Each entry: {version, notes:[{h, items[]}]}.
   const CHANGELOG = [
+    { version: '1.1.0', notes: [
+      { h: 'Error Recovery', items: [
+        'Added bounded retry-after-error controls with a configurable retry limit, recovery method, and walk duration.',
+        'GC death is detected directly, the Respawn dialog is confirmed before clicking, and completed stats are rechecked after recovery.',
+        'Starting the macro while already on GC\'s death screen is detected before any menu input is sent.',
+      ]},
+      { h: 'Safety', items: [
+        'Manual Stop never retries, stale monitor input is stopped before recovery, and after-run failure actions wait until retries are exhausted.',
+        'Standardized remaining internal module, browser-state, and build names under XynMacro with a one-time local preference migration.',
+      ]},
+    ]},
+    { version: '1.0.5', notes: [
+      { h: 'Interface', items: [
+        'Added After Run choices for Main Menu, closing Roblox, staying in GC at 0G, and optional PC shutdown.',
+        'Added Support Diagnostics with a live labelled vision preview and copyable environment report.',
+      ]},
+      { h: 'Fixes', items: [
+        'Training Mode is detected during a run, so minigame input stops and an unfinished stat resumes safely.',
+        'Manually skipped stats now mark the order incomplete and never trigger successful after-run actions.',
+      ]},
+    ]},
+    { version: '1.0.4', notes: [
+      { h: 'Interface', items: [
+        'Added the W spain titlebar tag and one-time launch celebration.',
+      ]},
+    ]},
     { version: '1.0.3', notes: [
       { h: 'Fixes', items: [
         'Removed a stray empty notification pill that could briefly appear in the top-right corner.',
@@ -2804,7 +2942,7 @@ window.wcCompact = () => {
           return null;
         }
         const ignoredVersion = localStorage.getItem(IGNORED_UPDATE_KEY);
-        const reminder = XMacroUpdateState.reminderDecision(
+        const reminder = XynMacroUpdateState.reminderDecision(
           info.version,
           ignoredVersion,
           automatic,

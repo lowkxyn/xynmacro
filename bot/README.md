@@ -10,7 +10,7 @@ input through Windows APIs. The shell owns the window, sidecar lifecycle, update
 | --- | --- |
 | `src/` | HTML, CSS, JavaScript, frontend tests |
 | `src-tauri/` | Rust shell, Tauri configuration, native window and update handling |
-| `python/xmacro_core.py` | Screen detection, automation, settings, logs, and local HTTP API |
+| `python/xynmacro_core.py` | Screen detection, automation, settings, logs, and local HTTP API |
 | `python/defaults/` | Calibration seeded into app data on first launch |
 | `python/tests/` | Python unit and regression tests |
 | `scripts/` | Sidecar packaging, icon generation, and release smoke checks |
