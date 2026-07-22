@@ -1815,11 +1815,16 @@ window.wcCompact = () => {
     diagnostic_mode: 'toggleDiagnosticMode',
     shutdown_pc_when_finished: 'toggleShutdownFinished',
     after_run_on_failure: 'toggleAfterRunFailure',
+    auto_retry_on_failure: 'toggleAutoRetry',
+    auto_retry_walk_out: 'toggleAutoRetryWalkOut',
   };
 
   const entryMap = {
     start_delay_sec:                 'startDelay',
     after_run_game_action:           'afterRunGameAction',
+    auto_retry_max_attempts:         'autoRetryMaxAttempts',
+    auto_retry_recovery_mode:        'autoRetryRecoveryMode',
+    auto_retry_walk_seconds:         'autoRetryWalkSeconds',
     gc_gravity_target_g:             'gcGravityTarget',
     no_yellow_timeout_sec:           'noYellowTimeout',
     after_switch_wait_sec:           'afterSwitchWait',
@@ -2698,6 +2703,15 @@ window.wcCompact = () => {
 
   // What's-new content, newest first. Each entry: {version, notes:[{h, items[]}]}.
   const CHANGELOG = [
+    { version: '1.1.0', notes: [
+      { h: 'Error Recovery', items: [
+        'Added bounded retry-after-error controls with a configurable retry limit, recovery method, and walk duration.',
+        'GC death is detected directly, the Respawn dialog is confirmed before clicking, and completed stats are rechecked after recovery.',
+      ]},
+      { h: 'Safety', items: [
+        'Manual Stop never retries, stale monitor input is stopped before recovery, and after-run failure actions wait until retries are exhausted.',
+      ]},
+    ]},
     { version: '1.0.5', notes: [
       { h: 'Interface', items: [
         'Added After Run choices for Main Menu, closing Roblox, staying in GC at 0G, and optional PC shutdown.',

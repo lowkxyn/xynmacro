@@ -22,6 +22,7 @@ Node.js, and Rust are not required.
 - HTC and GC support, including starts from gameplay, menus, or an active minigame
 - Per-stat progression tracking and automatic training-order advancement
 - Auto-Senzu with full-bean, half-bean, and preference-order modes
+- Optional bounded error recovery with confirmed GC respawn and configurable walk-out
 - GC gravity control from 0G to 100G, with optional 0G fallback when beans run out
 - Live telemetry, session time, saved logs, and progression status
 - Monitor-aware capture, calibration tools, and display-specific 1080p switching

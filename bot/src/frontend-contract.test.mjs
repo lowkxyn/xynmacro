@@ -16,7 +16,7 @@ const packageMetadata = JSON.parse(packageText);
 
 test('custom switches and segmented controls expose their state', () => {
   const toggles = [...html.matchAll(/<button\b[^>]*class="toggle(?: active)?"[^>]*>/g)].map((match) => match[0]);
-  assert.equal(toggles.length, 8);
+  assert.equal(toggles.length, 10);
   for (const toggle of toggles) {
     assert.match(toggle, /role="switch"/);
     assert.match(toggle, /aria-checked="(?:true|false)"/);

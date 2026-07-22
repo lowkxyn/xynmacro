@@ -20,6 +20,11 @@ class SettingsContractTests(unittest.TestCase):
         self.shutdown_finished = core.SHUTDOWN_PC_WHEN_FINISHED
         self.after_run_game_action = core.AFTER_RUN_GAME_ACTION
         self.after_run_on_failure = core.AFTER_RUN_ON_FAILURE
+        self.auto_retry_on_failure = core.AUTO_RETRY_ON_FAILURE
+        self.auto_retry_max_attempts = core.AUTO_RETRY_MAX_ATTEMPTS
+        self.auto_retry_recovery_mode = core.AUTO_RETRY_RECOVERY_MODE
+        self.auto_retry_walk_out = core.AUTO_RETRY_WALK_OUT
+        self.auto_retry_walk_seconds = core.AUTO_RETRY_WALK_SECONDS
         self.diagnostic_mode = core.DIAGNOSTIC_MODE
 
     def tearDown(self):
@@ -31,6 +36,11 @@ class SettingsContractTests(unittest.TestCase):
         core.SHUTDOWN_PC_WHEN_FINISHED = self.shutdown_finished
         core.AFTER_RUN_GAME_ACTION = self.after_run_game_action
         core.AFTER_RUN_ON_FAILURE = self.after_run_on_failure
+        core.AUTO_RETRY_ON_FAILURE = self.auto_retry_on_failure
+        core.AUTO_RETRY_MAX_ATTEMPTS = self.auto_retry_max_attempts
+        core.AUTO_RETRY_RECOVERY_MODE = self.auto_retry_recovery_mode
+        core.AUTO_RETRY_WALK_OUT = self.auto_retry_walk_out
+        core.AUTO_RETRY_WALK_SECONDS = self.auto_retry_walk_seconds
         core.DIAGNOSTIC_MODE = self.diagnostic_mode
 
     @patch.object(core, "save_master_config")
@@ -133,6 +143,11 @@ class SettingsContractTests(unittest.TestCase):
         self.assertIn("shutdown_pc_when_finished", config)
         self.assertIn("after_run_game_action", config)
         self.assertIn("after_run_on_failure", config)
+        self.assertIn("auto_retry_on_failure", config)
+        self.assertIn("auto_retry_max_attempts", config)
+        self.assertIn("auto_retry_recovery_mode", config)
+        self.assertIn("auto_retry_walk_out", config)
+        self.assertIn("auto_retry_walk_seconds", config)
         self.assertIn("diagnostic_mode", config)
         self.assertIn("senzu_recovery_timeout_sec", config)
         self.assertNotIn("mouse_method", config)
@@ -164,6 +179,24 @@ class SettingsContractTests(unittest.TestCase):
 
         self.assertTrue(core.DIAGNOSTIC_MODE)
         save_config.assert_called_once()
+
+    @patch.object(core, "save_master_config")
+    def test_auto_retry_settings_are_bounded_and_validated(self, save_config):
+        core._ui_apply_setting("auto_retry_on_failure", True)
+        core._ui_apply_setting("auto_retry_max_attempts", 99)
+        core._ui_apply_setting("auto_retry_recovery_mode", "wait_for_death")
+        core._ui_apply_setting("auto_retry_walk_out", False)
+        core._ui_apply_setting("auto_retry_walk_seconds", 0)
+
+        self.assertTrue(core.AUTO_RETRY_ON_FAILURE)
+        self.assertEqual(core.AUTO_RETRY_MAX_ATTEMPTS, 10)
+        self.assertEqual(core.AUTO_RETRY_RECOVERY_MODE, "wait_for_death")
+        self.assertFalse(core.AUTO_RETRY_WALK_OUT)
+        self.assertEqual(core.AUTO_RETRY_WALK_SECONDS, 0.5)
+        self.assertEqual(save_config.call_count, 5)
+
+        with self.assertRaises(ValueError):
+            core._ui_apply_setting("auto_retry_recovery_mode", "unsafe")
 
 
 if __name__ == "__main__":
