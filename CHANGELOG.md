@@ -26,8 +26,6 @@ All notable changes to XynMacro. This file is generated from the in-app
 - Manual Stop never retries, stale monitor input is stopped before recovery, and after-run failure actions wait until retries are exhausted.
 - Standardized remaining internal module, browser-state, and build names under XynMacro with a one-time local preference migration.
 
-## 1.0.5
-
 ### Interface
 - Added After Run choices for Main Menu, closing Roblox, staying in GC at 0G, and optional PC shutdown.
 - Added Support Diagnostics with a live labelled vision preview and copyable environment report.
