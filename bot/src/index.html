@@ -132,6 +132,8 @@
         <button class="btn-start" id="btnStart" onclick="startMacro()">START MACRO</button>
         <button class="btn-stop" id="btnStop" onclick="stopMacro()">STOP</button>
       </div>
+      <!-- Why Start is unavailable. Hidden while there is nothing to explain. -->
+      <div class="action-reason" id="startReason" role="status" hidden></div>
       <div class="keybind-bar">
         <span class="keybind-hint"><span class="kbd" id="hintStartStop">F6</span> Start / Stop</span>
         <span class="keybind-hint"><span class="kbd" id="hintManualNext">L</span> Skip Category</span>
@@ -295,6 +297,16 @@
           <div class="row-ctrl"><button type="button" class="toggle" id="togglePreventSleep" role="switch" aria-checked="false" aria-label="Prevent PC sleep while running" onclick="toggleSetting('prevent_sleep_while_running',this)"></button></div>
         </div>
         <div class="row-hint">Keeps Windows and the display awake while the macro is active so screen detection continues. The hold is released immediately when the run stops or errors.</div>
+        <div class="row-item">
+          <span class="row-label">Fullscreen On Start</span>
+          <div class="row-ctrl"><button type="button" class="toggle" id="toggleRestoreFullscreen" role="switch" aria-checked="false" aria-label="Put Roblox back into fullscreen when the macro starts" onclick="toggleSetting('restore_fullscreen_on_start',this)"></button></div>
+        </div>
+        <div class="row-hint">Roblox restored from the taskbar comes back windowed even when it was fullscreen, which shifts every scan region. On Start, XynMacro measures the window and presses F11 only if it is smaller than its monitor. Turn this off if you deliberately play windowed.</div>
+        <div class="row-item">
+          <span class="row-label">Confirm Resolution Changes</span>
+          <div class="row-ctrl"><button type="button" class="toggle" id="toggleDisplayConfirm" role="switch" aria-checked="false" aria-label="Ask to confirm a display resolution change before keeping it" onclick="toggleSetting('display_confirm_changes',this)"></button></div>
+        </div>
+        <div class="row-hint">After "Set 1080p", asks you to confirm and reverts automatically after 10 seconds if you don't — the safety net for a mode your monitor can't display. The timer runs in the backend, so it still fires if the window is unreadable. Off applies the change immediately, as before.</div>
       </div>
 
       <div class="section-title">Error Recovery</div>
@@ -815,7 +827,8 @@
   </div>
 </div>
 
-<!-- One-time non-1080p heads-up on the first Start press; auto-confirms at 0. -->
+<!-- One-time non-1080p heads-up on the first Start press. Continue unlocks at 0; it
+     never starts on its own, so the run always begins on a deliberate click. -->
 <div class="countdown-overlay" id="startWarnOverlay">
   <div class="countdown-content" role="dialog" aria-modal="true" aria-label="Resolution warning" tabindex="-1">
     <div class="countdown-label warn-step">Heads up</div>
@@ -823,6 +836,19 @@
     <div class="warn-actions">
       <button class="btn-primary warn-step" id="warnYes" disabled>Continue (5)</button>
       <button class="btn-sm warn-step" id="warnCancel">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- Resolution confirm. The auto-revert timer runs in the backend, so a mode that
+     leaves the screen unreadable still undoes itself even if this never renders. -->
+<div class="countdown-overlay" id="resConfirmOverlay">
+  <div class="countdown-content" role="dialog" aria-modal="true" aria-label="Keep display resolution" tabindex="-1">
+    <div class="countdown-label warn-step">Keep this resolution?</div>
+    <div class="warn-res-msg warn-step" id="resConfirmMsg">Reverting to your Windows setting if you don't confirm.</div>
+    <div class="warn-actions">
+      <button class="btn-primary warn-step" id="resConfirmKeep">Keep (10)</button>
+      <button class="btn-sm warn-step" id="resConfirmRevert">Revert now</button>
     </div>
   </div>
 </div>

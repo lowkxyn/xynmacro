@@ -23,7 +23,7 @@ test('XynMacro branding migrates and removes legacy preference keys', () => {
 
 test('custom switches and segmented controls expose their state', () => {
   const toggles = [...html.matchAll(/<button\b[^>]*class="toggle(?: active)?"[^>]*>/g)].map((match) => match[0]);
-  assert.equal(toggles.length, 10);
+  assert.equal(toggles.length, 12);
   for (const toggle of toggles) {
     assert.match(toggle, /role="switch"/);
     assert.match(toggle, /aria-checked="(?:true|false)"/);
@@ -54,7 +54,7 @@ test('visible form fields and titlebar icon buttons have accessible names', () =
 
 test('dialogs are labelled, modal, keyboard dismissible, and focus-managed', () => {
   const dialogs = [...html.matchAll(/<div\b[^>]*role="dialog"[^>]*>/g)].map((match) => match[0]);
-  assert.equal(dialogs.length, 6);
+  assert.equal(dialogs.length, 7);
   for (const dialog of dialogs) {
     assert.match(dialog, /aria-modal="true"/);
     assert.match(dialog, /aria-label="[^"]+"/);
@@ -112,8 +112,62 @@ test('the in-app changelog includes the shipped version', () => {
 test('start controls stay disabled until Roblox is detected', () => {
   assert.match(main, /let _gameWindowFound = false/);
   assert.match(main, /_gameWindowFound = !!state\.game_window\?\.found/);
-  assert.match(main, /start\.disabled = starting \|\| stopping \|\| _macroRunning \|\| !_gameWindowFound/);
-  assert.ok(main.includes("showToast('Open Roblox before starting XynMacro', 'err')"));
+  // A minimized Roblox reports a 0x0 client rect, so it reads as "not found".
+  // It still counts as available — the backend restores the window on Start.
+  assert.match(main, /let _gameWindowMinimized = false/);
+  assert.match(main, /_gameWindowMinimized = !!state\.game_window\?\.minimized/);
+  assert.match(main, /const gameReady = _gameWindowFound \|\| _gameWindowMinimized/);
+  assert.match(main, /start\.disabled = starting \|\| stopping \|\| _macroRunning \|\| !gameReady/);
+  assert.ok(main.includes("showToast('Roblox is not open — launch the game, then Start', 'err')"));
+});
+
+test('an unavailable Start always explains itself', () => {
+  // Grey with no reason reads as broken. Every blocked path names its cause, and
+  // the reason is visible on the page, not only in a hover tooltip.
+  assert.match(main, /const blockedReason = starting \?/);
+  assert.match(main, /start\.title = blockedReason/);
+  assert.match(main, /'Roblox is not open\. Launch the game, then press Start\.'/);
+  assert.match(main, /'The macro is already running — press STOP first\.'/);
+  assert.match(main, /'Roblox is minimized\. Start will restore it first\.'/);
+  assert.match(html, /id="startReason"/);
+  assert.match(styles, /\.action-reason\{/);
+});
+
+test('a failed command is never silent', () => {
+  // These three used `if (r.ok !== false)` with no else, so a failure changed
+  // nothing on screen and looked identical to a dead button.
+  for (const label of ['Agility mode change failed', 'Health mode change failed', 'Ki mode change failed']) {
+    assert.ok(main.includes(label), `missing failure toast: ${label}`);
+  }
+  // A hung command must resolve into an error rather than awaiting forever.
+  assert.match(main, /function _withTimeout\(promise, ms, label\)/);
+  assert.match(main, /_withTimeout\(\s*invoke\('send_to_python'/);
+  // A throw inside an inline onclick is swallowed by the WebView otherwise.
+  assert.match(main, /window\.addEventListener\('error', \(e\) => _reportUiError/);
+  assert.match(main, /window\.addEventListener\('unhandledrejection', \(e\) => _reportUiError/);
+});
+
+test('fullscreen restore and resolution confirm are both optional', () => {
+  for (const key of ['restore_fullscreen_on_start', 'display_confirm_changes']) {
+    assert.match(html, new RegExp(`toggleSetting\\('${key}',this\\)`));
+    assert.ok(main.includes(`${key}: 'toggle`), `${key} missing from toggleMap`);
+  }
+  // The revert timer must be the backend's — a mode the monitor can't display
+  // leaves nothing clickable on screen.
+  assert.match(main, /the backend is what actually reverts/);
+  assert.match(main, /sendCommand\('display_keep'\)/);
+  assert.match(html, /id="resConfirmOverlay"/);
+});
+
+test('the resolution warning never starts the macro by itself', () => {
+  // The countdown is a read-the-warning delay. Auto-confirming would launch the
+  // macro at a moment the user never chose.
+  assert.match(main, /remaining <= 0\) \{[\s\S]*?yes\.disabled = false;\s*yes\.textContent = 'Continue';/);
+  // The entrance animation ends dimmed with fill-mode both, so clearing it is
+  // what actually lets the button reach full opacity once it's live.
+  assert.match(main, /yes\.style\.animation = 'none';/);
+  assert.doesNotMatch(main, /remaining <= 0\)[\s\S]{0,120}done\(true\)/);
+  assert.match(html, /id="warnYes" disabled/);
 });
 
 test('compact-only shortcuts expand before opening overlays', () => {

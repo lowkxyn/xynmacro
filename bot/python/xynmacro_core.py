@@ -142,6 +142,12 @@ VERBOSE_DETECTOR_LOGS = False
 START_DELAY = 5.0  # seconds before the macro starts (lets you tab into the game)
 GC_GRAVITY_TARGET_G = 0  # 0 leaves the current GC gravity unchanged
 PREVENT_SLEEP_WHILE_RUNNING = True
+# Roblox restored from the taskbar comes back windowed even when it was fullscreen,
+# which moves every scan region. Put it back to fullscreen before a run.
+RESTORE_FULLSCREEN_ON_START = True
+# A resolution change can leave an unreadable screen. Keep it only if confirmed.
+DISPLAY_CONFIRM_CHANGES = True
+DISPLAY_CONFIRM_TIMEOUT_SEC = 10.0
 SHUTDOWN_PC_WHEN_FINISHED = False
 AFTER_RUN_GAME_ACTION = "none"
 AFTER_RUN_ON_FAILURE = False
@@ -258,6 +264,9 @@ SUPPORTED_ROBLOX_EXECUTABLES = {
     "windows10universal.exe",
 }
 GAME_HWND = None
+# True when Roblox is running but minimized — a minimized window reports a 0x0
+# client rect, so find_dbog_window() can't see it even though the game is open.
+GAME_WINDOW_MINIMIZED = False
 GAME_OFFSET_X = 0
 GAME_OFFSET_Y = 0
 GAME_WIDTH = 1920
@@ -681,6 +690,8 @@ DEFAULT_USER_SETTINGS = {
     "start_delay_sec": float(START_DELAY),
     "gc_gravity_target_g": int(GC_GRAVITY_TARGET_G),
     "prevent_sleep_while_running": bool(PREVENT_SLEEP_WHILE_RUNNING),
+    "restore_fullscreen_on_start": bool(RESTORE_FULLSCREEN_ON_START),
+    "display_confirm_changes": bool(DISPLAY_CONFIRM_CHANGES),
     "shutdown_pc_when_finished": bool(SHUTDOWN_PC_WHEN_FINISHED),
     "after_run_game_action": str(AFTER_RUN_GAME_ACTION),
     "after_run_on_failure": bool(AFTER_RUN_ON_FAILURE),
@@ -742,6 +753,7 @@ def reset_user_settings_to_defaults():
     The UI command persists the reset immediately after calling this function.
     """
     global START_DELAY, GC_GRAVITY_TARGET_G, PREVENT_SLEEP_WHILE_RUNNING
+    global RESTORE_FULLSCREEN_ON_START, DISPLAY_CONFIRM_CHANGES
     global SHUTDOWN_PC_WHEN_FINISHED, AFTER_RUN_GAME_ACTION, AFTER_RUN_ON_FAILURE
     global AUTO_RETRY_ON_FAILURE, AUTO_RETRY_MAX_ATTEMPTS
     global AUTO_RETRY_RECOVERY_MODE, AUTO_RETRY_WALK_OUT, AUTO_RETRY_WALK_SECONDS
@@ -757,6 +769,12 @@ def reset_user_settings_to_defaults():
     GC_GRAVITY_TARGET_G = int(DEFAULT_USER_SETTINGS["gc_gravity_target_g"])
     PREVENT_SLEEP_WHILE_RUNNING = bool(
         DEFAULT_USER_SETTINGS["prevent_sleep_while_running"]
+    )
+    RESTORE_FULLSCREEN_ON_START = bool(
+        DEFAULT_USER_SETTINGS["restore_fullscreen_on_start"]
+    )
+    DISPLAY_CONFIRM_CHANGES = bool(
+        DEFAULT_USER_SETTINGS["display_confirm_changes"]
     )
     SHUTDOWN_PC_WHEN_FINISHED = bool(
         DEFAULT_USER_SETTINGS["shutdown_pc_when_finished"]
@@ -856,6 +874,111 @@ def _is_supported_roblox_window(hwnd):
     """Reject title-only matches such as browsers showing a Roblox page."""
     executable = _window_process_executable(hwnd)
     return executable in SUPPORTED_ROBLOX_EXECUTABLES
+
+def find_minimized_roblox_hwnd():
+    """Return the hwnd of a minimized Roblox game window, or None.
+
+    Minimized windows report a 0x0 client rect, so find_dbog_window() rejects
+    them by size. This lets the UI say "Roblox is minimized" instead of "not
+    found", and lets Start restore it rather than refusing.
+    """
+    if os.name != "nt":
+        return None
+    try:
+        import ctypes
+        user32 = ctypes.windll.user32
+        found = []
+        WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+
+        @WNDENUMPROC
+        def _cb(hwnd, lparam):
+            try:
+                if not user32.IsIconic(hwnd):
+                    return True
+                length = user32.GetWindowTextLengthW(hwnd)
+                if length <= 0:
+                    return True
+                buf = ctypes.create_unicode_buffer(length + 1)
+                user32.GetWindowTextW(hwnd, buf, length + 1)
+                title = (buf.value or "").lower()
+                if not any(target.lower() in title for target in DBOG_WINDOW_TITLES):
+                    return True
+                if not _is_supported_roblox_window(hwnd):
+                    return True
+                found.append(hwnd)
+                return False
+            except Exception:
+                return True
+
+        user32.EnumWindows(_cb, 0)
+        return found[0] if found else None
+    except Exception as e:
+        print(f"[window] find_minimized_roblox_hwnd error: {e}")
+        return None
+
+
+def restore_game_window(wait=1.5):
+    """Un-minimize Roblox and wait for a real client rect. Returns True on success."""
+    hwnd = find_minimized_roblox_hwnd()
+    if not hwnd:
+        return update_game_window()
+    import ctypes
+    ctypes.windll.user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+    print("[window] Roblox was minimized — restoring it.")
+    deadline = time.monotonic() + wait
+    while time.monotonic() < deadline:
+        if update_game_window():
+            return True
+        time.sleep(0.1)
+    return False
+
+
+def game_window_is_fullscreen():
+    """True when the Roblox client area covers its whole monitor.
+
+    Returns None when the monitor can't be identified, so callers can tell
+    "definitely windowed" apart from "don't know" and leave the window alone.
+    """
+    if GAME_HWND is None:
+        return None
+    monitor = _monitor_info_for_window(GAME_HWND)
+    if monitor is None:
+        return None
+    # Roblox's fullscreen client area matches the monitor exactly; a maximized
+    # window loses the title bar and borders, so it always falls short.
+    return GAME_WIDTH >= monitor["width"] and GAME_HEIGHT >= monitor["height"]
+
+
+def ensure_game_fullscreen(wait=2.0):
+    """Put a windowed Roblox back into fullscreen with F11. Returns True if fullscreen.
+
+    Restoring from the taskbar brings Roblox back windowed even when it was
+    fullscreen before, which shifts every scan region. F11 is a toggle, so this
+    only fires when the window is measurably smaller than its monitor — pressing
+    it blind would kick an already-fullscreen client back into a window.
+    """
+    if not update_game_window():
+        return False
+    state = game_window_is_fullscreen()
+    if state is not False:  # already fullscreen, or monitor unknown — don't guess
+        return bool(state)
+    if not focus_game_window():
+        print("[window] Could not focus Roblox to set fullscreen.")
+        return False
+    print("[window] Roblox is windowed — pressing F11 for fullscreen.")
+    pydirectinput.keyDown("f11")
+    time.sleep(0.030)
+    pydirectinput.keyUp("f11")
+    deadline = time.monotonic() + wait
+    while time.monotonic() < deadline:
+        time.sleep(0.15)
+        update_game_window()
+        if game_window_is_fullscreen():
+            print(f"[window] Roblox is fullscreen: {GAME_WIDTH}x{GAME_HEIGHT}")
+            return True
+    print("[window] Roblox did not reach fullscreen; continuing windowed.")
+    return False
+
 
 def find_dbog_window():
     """Locate the DBOG game window. Returns (hwnd, (client_x, client_y, w, h)) or (None, None).
@@ -994,19 +1117,22 @@ def update_game_window():
     Only logs when the detected state changes (UI polls this every 800ms).
     """
     global GAME_HWND, GAME_OFFSET_X, GAME_OFFSET_Y, GAME_WIDTH, GAME_HEIGHT
-    global GAME_MONITOR_INFO
+    global GAME_MONITOR_INFO, GAME_WINDOW_MINIMIZED
     global _last_logged_window_state
     global _last_game_window_refresh_at
     _last_game_window_refresh_at = time.monotonic()
     hwnd, rect = find_dbog_window()
     if not hwnd or not rect:
         GAME_HWND = None
+        GAME_WINDOW_MINIMIZED = find_minimized_roblox_hwnd() is not None
         new_state = (None, None)
         if new_state != _last_logged_window_state:
-            print("[window] Roblox window not found.")
+            print("[window] Roblox window minimized." if GAME_WINDOW_MINIMIZED
+                  else "[window] Roblox window not found.")
             _last_logged_window_state = new_state
         return False
     GAME_HWND = hwnd
+    GAME_WINDOW_MINIMIZED = False
     GAME_OFFSET_X, GAME_OFFSET_Y, GAME_WIDTH, GAME_HEIGHT = rect
     monitor_info = _monitor_info_for_window(hwnd)
     if monitor_info is not None:
@@ -2609,6 +2735,67 @@ def display_set_resolution(width=1920, height=1080):
         return ok, result
 
 
+# ─── Resolution confirm / auto-revert ────────────────────────────────────────
+# A bad mode can leave the screen unreadable, and then the user can't click
+# "Revert" to undo it. So the timer lives here, not in the WebView: it still
+# fires if the UI is unreachable. Windows' own display dialog works this way.
+_display_confirm_lock = threading.Lock()
+_display_confirm_timer = None
+_display_confirm_deadline = 0.0
+
+
+def _display_confirm_state():
+    """Pending-confirmation state for /state. Seconds are clamped at 0."""
+    with _display_confirm_lock:
+        pending = _display_confirm_timer is not None
+        remaining = max(0.0, _display_confirm_deadline - time.monotonic())
+    return {
+        "pending": pending,
+        "seconds_remaining": round(remaining, 1) if pending else 0.0,
+        "timeout_sec": DISPLAY_CONFIRM_TIMEOUT_SEC,
+    }
+
+
+def _cancel_display_confirm():
+    """Stop a pending auto-revert. Safe to call when nothing is armed."""
+    global _display_confirm_timer, _display_confirm_deadline
+    with _display_confirm_lock:
+        timer, _display_confirm_timer = _display_confirm_timer, None
+        _display_confirm_deadline = 0.0
+    if timer is not None:
+        timer.cancel()
+        return True
+    return False
+
+
+def _arm_display_confirm(timeout=None):
+    global _display_confirm_timer, _display_confirm_deadline
+    _cancel_display_confirm()
+    seconds = float(DISPLAY_CONFIRM_TIMEOUT_SEC if timeout is None else timeout)
+
+    def _expire():
+        print("[display] No confirmation — reverting resolution.")
+        _cancel_display_confirm()
+        display_revert_resolution()
+        update_game_window()
+
+    timer = threading.Timer(seconds, _expire)
+    timer.daemon = True
+    with _display_confirm_lock:
+        _display_confirm_timer = timer
+        _display_confirm_deadline = time.monotonic() + seconds
+    timer.start()
+    print(f"[display] Awaiting confirmation; reverting in {seconds:.0f}s.")
+
+
+def display_keep_resolution():
+    """User confirmed the new mode — cancel the pending auto-revert."""
+    if _cancel_display_confirm():
+        print("[display] Resolution kept.")
+        return True, "Resolution kept"
+    return False, "Nothing waiting for confirmation"
+
+
 def display_revert_resolution():
     """Restore the display and exact mode changed by Set, even after a move."""
     global _DISPLAY_RESTORE
@@ -3778,6 +3965,7 @@ def load_master_config():
     If missing, creates a default config file using the values in this script.
     """
     global START_DELAY, GC_GRAVITY_TARGET_G, PREVENT_SLEEP_WHILE_RUNNING
+    global RESTORE_FULLSCREEN_ON_START, DISPLAY_CONFIRM_CHANGES
     global SHUTDOWN_PC_WHEN_FINISHED, AFTER_RUN_GAME_ACTION, AFTER_RUN_ON_FAILURE
     global AUTO_RETRY_ON_FAILURE, AUTO_RETRY_MAX_ATTEMPTS
     global AUTO_RETRY_RECOVERY_MODE, AUTO_RETRY_WALK_OUT, AUTO_RETRY_WALK_SECONDS
@@ -3793,6 +3981,7 @@ def load_master_config():
         # IMPORTANT: this is a nested function; we must declare globals here
         # or assignments will create locals and the config won't actually apply.
         global START_DELAY, GC_GRAVITY_TARGET_G, PREVENT_SLEEP_WHILE_RUNNING
+        global RESTORE_FULLSCREEN_ON_START, DISPLAY_CONFIRM_CHANGES
         global SHUTDOWN_PC_WHEN_FINISHED, AFTER_RUN_GAME_ACTION, AFTER_RUN_ON_FAILURE
         global AUTO_RETRY_ON_FAILURE, AUTO_RETRY_MAX_ATTEMPTS
         global AUTO_RETRY_RECOVERY_MODE, AUTO_RETRY_WALK_OUT, AUTO_RETRY_WALK_SECONDS
@@ -3817,6 +4006,12 @@ def load_master_config():
             PREVENT_SLEEP_WHILE_RUNNING = _ui_bool(
                 data["prevent_sleep_while_running"]
             )
+        if "restore_fullscreen_on_start" in data:
+            RESTORE_FULLSCREEN_ON_START = _ui_bool(
+                data["restore_fullscreen_on_start"]
+            )
+        if "display_confirm_changes" in data:
+            DISPLAY_CONFIRM_CHANGES = _ui_bool(data["display_confirm_changes"])
         if "shutdown_pc_when_finished" in data:
             SHUTDOWN_PC_WHEN_FINISHED = _ui_bool(
                 data["shutdown_pc_when_finished"]
@@ -4016,6 +4211,8 @@ def _master_config_snapshot():
         "start_delay_sec": float(START_DELAY),
         "gc_gravity_target_g": int(GC_GRAVITY_TARGET_G),
         "prevent_sleep_while_running": bool(PREVENT_SLEEP_WHILE_RUNNING),
+        "restore_fullscreen_on_start": bool(RESTORE_FULLSCREEN_ON_START),
+        "display_confirm_changes": bool(DISPLAY_CONFIRM_CHANGES),
         "shutdown_pc_when_finished": bool(SHUTDOWN_PC_WHEN_FINISHED),
         "after_run_game_action": AFTER_RUN_GAME_ACTION,
         "after_run_on_failure": bool(AFTER_RUN_ON_FAILURE),
@@ -6117,6 +6314,8 @@ def _ui_config_snapshot():
         "start_delay_sec": START_DELAY,
         "gc_gravity_target_g": GC_GRAVITY_TARGET_G,
         "prevent_sleep_while_running": PREVENT_SLEEP_WHILE_RUNNING,
+        "restore_fullscreen_on_start": RESTORE_FULLSCREEN_ON_START,
+        "display_confirm_changes": DISPLAY_CONFIRM_CHANGES,
         "shutdown_pc_when_finished": SHUTDOWN_PC_WHEN_FINISHED,
         "after_run_game_action": AFTER_RUN_GAME_ACTION,
         "after_run_on_failure": AFTER_RUN_ON_FAILURE,
@@ -6195,8 +6394,11 @@ def _ui_state_snapshot():
         "display_restore_pending": bool(
             _DISPLAY_RESTORE is not None or os.path.isfile(_display_restore_path())
         ),
+        "display_confirm": _display_confirm_state(),
         "game_window": {
             "found": GAME_HWND is not None,
+            "minimized": GAME_WINDOW_MINIMIZED,
+            "fullscreen": game_window_is_fullscreen(),
             "x": GAME_OFFSET_X,
             "y": GAME_OFFSET_Y,
             "width": GAME_WIDTH,
@@ -7069,6 +7271,7 @@ _config_lock = threading.RLock()
 
 def _ui_apply_setting_unlocked(key, value):
     global START_DELAY, GC_GRAVITY_TARGET_G, PREVENT_SLEEP_WHILE_RUNNING
+    global RESTORE_FULLSCREEN_ON_START, DISPLAY_CONFIRM_CHANGES
     global SHUTDOWN_PC_WHEN_FINISHED, AFTER_RUN_GAME_ACTION, AFTER_RUN_ON_FAILURE
     global AUTO_RETRY_ON_FAILURE, AUTO_RETRY_MAX_ATTEMPTS
     global AUTO_RETRY_RECOVERY_MODE, AUTO_RETRY_WALK_OUT, AUTO_RETRY_WALK_SECONDS
@@ -7085,6 +7288,10 @@ def _ui_apply_setting_unlocked(key, value):
         GC_GRAVITY_TARGET_G = _normalize_gravity_target(value, strict=True)
     elif key == "prevent_sleep_while_running":
         PREVENT_SLEEP_WHILE_RUNNING = _ui_bool(value)
+    elif key == "restore_fullscreen_on_start":
+        RESTORE_FULLSCREEN_ON_START = _ui_bool(value)
+    elif key == "display_confirm_changes":
+        DISPLAY_CONFIRM_CHANGES = _ui_bool(value)
     elif key == "shutdown_pc_when_finished":
         SHUTDOWN_PC_WHEN_FINISHED = _ui_bool(value)
     elif key == "after_run_game_action":
@@ -7313,8 +7520,15 @@ def _ui_start_macro():
         # Refuse before the countdown or worker starts. Waiting until the first
         # capture makes Start look successful for several seconds and risks any
         # future startup input landing in whichever window currently has focus.
-        if not update_game_window() or GAME_HWND is None:
+        # A minimized Roblox has no client rect; restore it instead of refusing.
+        if not update_game_window() and not restore_game_window():
             return False, "Open Roblox before starting XynMacro."
+        if GAME_HWND is None:
+            return False, "Open Roblox before starting XynMacro."
+        # Do this before the countdown so the scan regions are measured against
+        # the window the run will actually use.
+        if RESTORE_FULLSCREEN_ON_START:
+            ensure_game_fullscreen()
         if (
             _background_monitor_thread is not None
             and _background_monitor_thread.is_alive()
@@ -7712,14 +7926,26 @@ def run_ui_server(sidecar_pid=None, auth_token=None):
                     })
                 ok, code = display_set_resolution(1920, 1080)
                 update_game_window()
+                if ok and DISPLAY_CONFIRM_CHANGES:
+                    _arm_display_confirm()
+                    return jsonify({
+                        "ok": True,
+                        "msg": f"Display set to 1920x1080 — confirm within "
+                               f"{int(DISPLAY_CONFIRM_TIMEOUT_SEC)}s or it reverts",
+                        "confirm": _display_confirm_state(),
+                    })
                 return jsonify({"ok": ok, "msg": "Display set to 1920x1080"
                                 if ok else f"Display change failed (code {code})"})
+            if action == "display_keep":
+                ok, msg = display_keep_resolution()
+                return jsonify({"ok": ok, "msg": msg})
             if action == "display_revert":
                 if _ui_is_running():
                     return jsonify({
                         "ok": False,
                         "msg": "Stop the macro before reverting display resolution",
                     })
+                _cancel_display_confirm()
                 ok, code = display_revert_resolution()
                 update_game_window()
                 return jsonify({"ok": ok, "msg": "Display reverted to your Windows setting"

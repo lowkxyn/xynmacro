@@ -330,7 +330,14 @@ fn install_pending_update(app: AppHandle) -> bool {
 /// connection each time. No explicit timeout, matching the old Client::new().
 fn http_client() -> &'static reqwest::blocking::Client {
     static CLIENT: OnceLock<reqwest::blocking::Client> = OnceLock::new();
-    CLIENT.get_or_init(reqwest::blocking::Client::new)
+    // Without a timeout a stalled sidecar leaves the WebView `await`ing forever, so a
+    // click looks like it did nothing instead of reporting an error.
+    CLIENT.get_or_init(|| {
+        reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(10))
+            .build()
+            .expect("building the loopback HTTP client cannot fail")
+    })
 }
 
 /// Where the Python sidecar script + read-only assets live.

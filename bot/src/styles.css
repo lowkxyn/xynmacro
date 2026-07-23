@@ -993,6 +993,15 @@ body.sidebar-dragging *{user-select:none!important}
   background:#000;
   align-self:flex-start;
 }
+/* Why Start is unavailable, shown under the action bar. */
+.action-reason{
+  margin:-4px 0 10px;font-size:12px;line-height:1.45;color:var(--text2);
+}
+.action-reason.is-blocking{color:var(--warn,#e0a33c)}
+
+/* No capture yet — an <img> with no src renders the broken-image glyph. */
+.region-preview:not([src]),
+.region-preview[src=""]{display:none}
 .preview-meta{font-size:11px;color:var(--text2);font-family:var(--font-mono)}
 
 /* Start countdown overlay. Stays hidden by default; .open fades it in. */
@@ -1107,6 +1116,13 @@ body.sidebar-dragging *{user-select:none!important}
 #startWarnOverlay.open .warn-res-msg{animation-delay:.12s}
 #startWarnOverlay.open #warnYes{animation:warn-step-btn .54s cubic-bezier(.22,.7,.2,1) both;animation-delay:.24s}
 #startWarnOverlay.open #warnCancel{animation-delay:.24s}
+/* The resolution confirm reuses the same staged entrance. Its Keep button is live
+   immediately, so it uses warn-step-in (ends at full opacity), not warn-step-btn. */
+#resConfirmOverlay.open .warn-step{animation:warn-step-in .54s cubic-bezier(.22,.7,.2,1) both}
+#resConfirmOverlay.open .countdown-label{animation-delay:0s}
+#resConfirmOverlay.open .warn-res-msg{animation-delay:.12s}
+#resConfirmOverlay.open #resConfirmKeep,
+#resConfirmOverlay.open #resConfirmRevert{animation-delay:.24s}
 @keyframes warn-step-in{from{opacity:0;transform:translateY(40px)}to{opacity:1;transform:translateY(0)}}
 @keyframes warn-step-btn{from{opacity:0;transform:translateY(40px)}to{opacity:.42;transform:translateY(0)}}
 #warnYes{transition:opacity .5s ease}

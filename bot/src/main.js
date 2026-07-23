@@ -116,6 +116,19 @@ window.addEventListener('backend-error', (e) => {
   document.body.appendChild(bar);
 });
 
+/* A throw inside an inline onclick handler is swallowed by the WebView, so a broken
+   control looks identical to one that simply did nothing. Surface it instead. The
+   toast helper lives further down, so fall back to the error bar until it exists. */
+function _reportUiError(what, error) {
+  const detail = (error && (error.stack || error.message)) || String(error);
+  console.error(what, error);
+  const message = `${what}: ${(error && error.message) || error}`;
+  if (typeof window.showToast === 'function') window.showToast(message, 'err');
+  else window.dispatchEvent(new CustomEvent('backend-error', { detail: { message: detail } }));
+}
+window.addEventListener('error', (e) => _reportUiError('UI error', e.error || e.message));
+window.addEventListener('unhandledrejection', (e) => _reportUiError('UI error', e.reason));
+
 const { invoke } = window.__TAURI__.core;
 const ACTIVE_PREFERENCE_KEYS = [
   'dbog-theme',
@@ -708,6 +721,7 @@ window.wcCompact = () => {
     'paletteBackdrop',
     'shortcutsBackdrop',
     'startWarnOverlay',
+    'resConfirmOverlay',
     'welcomeOverlay',
     'changelogOverlay',
     'announcementOverlay',
@@ -825,6 +839,7 @@ window.wcCompact = () => {
   let toastHideTimeout = null;
   let _macroRunning = false;
   let _gameWindowFound = false;
+  let _gameWindowMinimized = false;
   let _macroUiAction = '';
   let _macroActionSeq = 0;
   let _startTask = null;
@@ -836,11 +851,33 @@ window.wcCompact = () => {
     const stopping = _macroUiAction === 'stopping';
     const start = document.getElementById('btnStart');
     const stop = document.getElementById('btnStop');
+    // Minimized counts as available — the backend restores the window on start.
+    const gameReady = _gameWindowFound || _gameWindowMinimized;
+    // Single source of truth for "why can't I press Start", used by the button
+    // tooltip, the visible hint under the action bar, and the compact HUD.
+    const blockedReason = starting ? 'Start already in progress.'
+      : stopping ? 'Waiting for the current run to stop.'
+      : _macroRunning ? 'The macro is already running — press STOP first.'
+      : !gameReady ? 'Roblox is not open. Launch the game, then press Start.'
+      : _gameWindowMinimized ? ''
+      : '';
     if (start) {
-      start.disabled = starting || stopping || _macroRunning || !_gameWindowFound;
-      start.textContent = starting ? 'STARTING…' : 'START MACRO';
-      start.title = _gameWindowFound ? '' : 'Open Roblox before starting XynMacro';
+      start.disabled = starting || stopping || _macroRunning || !gameReady;
+      start.textContent = starting ? 'STARTING…'
+        : gameReady ? 'START MACRO'
+        : 'OPEN ROBLOX';
+      start.title = blockedReason;
       start.classList.toggle('running', _macroRunning && !stopping);
+    }
+    const reason = document.getElementById('startReason');
+    if (reason) {
+      // Minimized isn't blocking any more, but say so — otherwise a Start that
+      // suddenly un-minimizes the game looks like the macro grabbed the window.
+      const note = blockedReason
+        || (_gameWindowMinimized ? 'Roblox is minimized. Start will restore it first.' : '');
+      reason.textContent = note;
+      reason.hidden = !note;
+      reason.classList.toggle('is-blocking', !!blockedReason);
     }
     if (stop) {
       stop.disabled = stopping || (!_macroRunning && !starting);
@@ -849,9 +886,9 @@ window.wcCompact = () => {
     const hudToggle = document.getElementById('hudMacroToggle');
     if (hudToggle) {
       hudToggle.classList.toggle('error', !!_compactAlert);
-      hudToggle.disabled = stopping || (!_macroRunning && !starting && !_gameWindowFound);
-      if (!_gameWindowFound && !_macroRunning && !starting) {
-        hudToggle.title = 'Open Roblox before starting XynMacro';
+      hudToggle.disabled = stopping || (!_macroRunning && !starting && !gameReady);
+      if (blockedReason) {
+        hudToggle.title = blockedReason;
         hudToggle.setAttribute('aria-label', hudToggle.title);
       }
     }
@@ -926,12 +963,29 @@ window.wcCompact = () => {
   };
 
   /* API helpers — all routed through Tauri to the Python sidecar. */
+
+  /* A command that never settles makes a click look like it did nothing. Bound the
+     wait so the UI always gets an answer it can show. */
+  function _withTimeout(promise, ms, label) {
+    let timer;
+    return Promise.race([
+      promise.finally(() => clearTimeout(timer)),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms / 1000}s`)), ms);
+      }),
+    ]);
+  }
+
   async function sendCommand(action, value) {
     try {
-      return await invoke('send_to_python', { action, value: value ?? null });
+      return await _withTimeout(
+        invoke('send_to_python', { action, value: value ?? null }),
+        12000,
+        action,
+      );
     } catch (e) {
       console.error('command failed:', e);
-      return { ok: false, msg: String(e) };
+      return { ok: false, msg: String(e && e.message ? e.message : e) };
     }
   }
 
@@ -940,12 +994,58 @@ window.wcCompact = () => {
   if (_btnRes1080) _btnRes1080.addEventListener('click', async () => {
     const r = await sendCommand('display_set_1080');
     showToast(r.msg || 'Display change requested', r.ok ? 'ok' : 'err');
+    if (r.ok && r.confirm?.pending) _openResConfirm(r.confirm);
   });
   const _btnResRevert = document.getElementById('btnResRevert');
   if (_btnResRevert) _btnResRevert.addEventListener('click', async () => {
     const r = await sendCommand('display_revert');
     showToast(r.msg || 'Revert requested', r.ok ? 'ok' : 'err');
   });
+
+  /* Resolution confirm. The countdown shown here only mirrors the backend timer —
+     the backend is what actually reverts, so an unreadable screen recovers even
+     if this dialog never paints. Closing it without an answer changes nothing;
+     the revert still happens on schedule. */
+  let _resConfirmTimer = null;
+  function _closeResConfirm() {
+    const ov = document.getElementById('resConfirmOverlay');
+    if (_resConfirmTimer) { clearInterval(_resConfirmTimer); _resConfirmTimer = null; }
+    if (!ov || !ov.classList.contains('open')) return;
+    ov.classList.remove('open');
+    ov.classList.add('closing');
+    _restoreModalFocus(ov);
+    setTimeout(() => ov.classList.remove('closing'), 500);
+  }
+
+  function _openResConfirm(confirm) {
+    const ov = document.getElementById('resConfirmOverlay');
+    const keep = document.getElementById('resConfirmKeep');
+    const revert = document.getElementById('resConfirmRevert');
+    if (!ov || !keep || !revert || ov.classList.contains('open')) return;
+    let remaining = Math.ceil(confirm?.seconds_remaining || confirm?.timeout_sec || 10);
+    keep.textContent = `Keep (${remaining})`;
+    ov.classList.add('open');
+    _focusModal(ov, keep);
+    keep.onclick = async () => {
+      _closeResConfirm();
+      const r = await sendCommand('display_keep');
+      showToast(r.msg || 'Resolution kept', r.ok !== false ? 'ok' : 'err');
+    };
+    revert.onclick = async () => {
+      _closeResConfirm();
+      const r = await sendCommand('display_revert');
+      showToast(r.msg || 'Reverted', r.ok !== false ? 'ok' : 'err');
+    };
+    _resConfirmTimer = setInterval(() => {
+      remaining -= 1;
+      if (remaining <= 0) {
+        _closeResConfirm();
+        showToast('No confirmation — resolution reverted', 'err');
+      } else {
+        keep.textContent = `Keep (${remaining})`;
+      }
+    }, 1000);
+  }
 
   async function getState() {
     try {
@@ -1248,9 +1348,11 @@ window.wcCompact = () => {
 
   /* Actions */
   let _cancelResolutionWarning = null;
-  // First Start of the session on a non-1080p display: a brief warning that
-  // auto-confirms after a 5s countdown (or Cancel to back out). The macro still
-  // runs at any resolution — this is only a heads-up.
+  // First Start of the session on a non-1080p display. The 5s countdown is a
+  // read-the-warning delay, not a timer to launch on: at 0 Continue simply
+  // becomes clickable. Starting by itself would launch the macro at a moment the
+  // user never picked. The macro still runs at any resolution — this is only a
+  // heads-up, so Cancel backs out.
   function _confirmResStart(screen) {
     return new Promise((resolve) => {
       const ov = document.getElementById('startWarnOverlay');
@@ -1287,7 +1389,13 @@ window.wcCompact = () => {
         remaining -= 1;
         if (remaining <= 0) {
           clearInterval(timer); timer = null;
-          done(true);
+          // The entrance animation ends at opacity .42 with fill-mode `both`, so it
+          // pins the button dim no matter what `disabled` says. Drop the animation
+          // and #warnYes's opacity transition fades it up to full.
+          yes.style.animation = 'none';
+          yes.disabled = false;
+          yes.textContent = 'Continue';
+          yes.focus();
         } else {
           yes.textContent = `Continue (${remaining})`;
         }
@@ -1297,8 +1405,8 @@ window.wcCompact = () => {
 
   window.startMacro = () => {
     if (_startTask || _stopTask || _macroRunning) return _startTask || _stopTask;
-    if (!_gameWindowFound) {
-      showToast('Open Roblox before starting XynMacro', 'err');
+    if (!_gameWindowFound && !_gameWindowMinimized) {
+      showToast('Roblox is not open — launch the game, then Start', 'err');
       return Promise.resolve();
     }
     const actionSeq = ++_macroActionSeq;
@@ -1755,10 +1863,9 @@ window.wcCompact = () => {
   window.setAgilityMode = async (mode) => {
     const previous = _selectedSegmentValue('agilityModeSeg');
     const r = await sendCommand('set', { key: 'agility_mode', value: mode });
-    if (r.ok !== false) {
-      _syncAgilityModeSeg(mode);
-      if (previous !== null) _pushUndo('agility_mode', previous, mode);
-    }
+    if (r.ok === false) return showToast(r.msg || 'Agility mode change failed', 'err');
+    _syncAgilityModeSeg(mode);
+    if (previous !== null) _pushUndo('agility_mode', previous, mode);
   };
 
   function _syncAgilityModeSeg(mode) {
@@ -1774,10 +1881,9 @@ window.wcCompact = () => {
   window.setHealthMode = async (mode) => {
     const previous = _selectedSegmentValue('healthModeSeg');
     const r = await sendCommand('set', { key: 'health_mode', value: mode });
-    if (r.ok !== false) {
-      _syncHealthModeSeg(mode);
-      if (previous !== null) _pushUndo('health_mode', previous, mode);
-    }
+    if (r.ok === false) return showToast(r.msg || 'Health mode change failed', 'err');
+    _syncHealthModeSeg(mode);
+    if (previous !== null) _pushUndo('health_mode', previous, mode);
   };
 
   function _syncHealthModeSeg(mode) {
@@ -1800,10 +1906,9 @@ window.wcCompact = () => {
   window.setKiV8Mode = async (mode) => {
     const previous = _selectedSegmentValue('kiV8ModeSeg');
     const r = await sendCommand('set', { key: 'ki_v8_mode', value: mode });
-    if (r.ok !== false) {
-      _syncKiV8ModeSeg(mode);
-      if (previous !== null) _pushUndo('ki_v8_mode', previous, mode);
-    }
+    if (r.ok === false) return showToast(r.msg || 'Ki mode change failed', 'err');
+    _syncKiV8ModeSeg(mode);
+    if (previous !== null) _pushUndo('ki_v8_mode', previous, mode);
   };
 
   function _syncKiV8ModeSeg(mode) {
@@ -1822,6 +1927,8 @@ window.wcCompact = () => {
     senzu_zero_gravity_on_empty: 'toggleSenzuZeroGravity',
     no_yellow_fallback_enabled: 'toggleNoYellowFallback',
     prevent_sleep_while_running: 'togglePreventSleep',
+    restore_fullscreen_on_start: 'toggleRestoreFullscreen',
+    display_confirm_changes: 'toggleDisplayConfirm',
     diagnostic_mode: 'toggleDiagnosticMode',
     shutdown_pc_when_finished: 'toggleShutdownFinished',
     after_run_on_failure: 'toggleAfterRunFailure',
@@ -1948,6 +2055,7 @@ window.wcCompact = () => {
     const cfg = state.config || {};
     const running = !!state.running;
     _gameWindowFound = !!state.game_window?.found;
+    _gameWindowMinimized = !!state.game_window?.minimized;
     const backendActivity = state.stop_requested ? 'Stopping'
       : state.controller_paused_for_senzu ? 'Auto-Senzu'
       : state.controller_paused ? 'Paused'
@@ -2713,6 +2821,18 @@ window.wcCompact = () => {
 
   // What's-new content, newest first. Each entry: {version, notes:[{h, items[]}]}.
   const CHANGELOG = [
+    { version: '1.2.0', notes: [
+      { h: 'Fixes', items: [
+        'Settings toggles and the v1/v2 mode buttons now always respond; a failed change reports why instead of doing nothing.',
+        'The resolution heads-up no longer starts the macro on its own — at zero the Continue button simply becomes clickable.',
+        'Removed the broken-image icon that flashed in the scan previews before the first capture.',
+      ]},
+      { h: 'Window handling', items: [
+        'A minimized Roblox is recognized instead of read as closed; Start restores it, and when it isn\'t running the button says so.',
+        'Fullscreen On Start puts a windowed Roblox back to fullscreen so the scan regions line up (toggle in Settings).',
+        'Set 1080p now asks you to confirm and reverts automatically after 10 seconds if you don\'t — the timer runs in the backend so an unreadable screen still recovers.',
+      ]},
+    ]},
     { version: '1.1.0', notes: [
       { h: 'Error Recovery', items: [
         'Added bounded retry-after-error controls with a configurable retry limit, recovery method, and walk duration.',

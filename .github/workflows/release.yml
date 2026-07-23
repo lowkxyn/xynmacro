@@ -141,6 +141,22 @@ jobs:
         working-directory: bot/src-tauri
         run: cargo test --quiet
 
+      - name: Build release notes from the changelog
+        id: notes
+        shell: pwsh
+        working-directory: bot
+        run: |
+          $body = node scripts/changelog.mjs --version ${{ steps.release.outputs.version }}
+          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($body)) {
+            throw "No changelog notes for ${{ steps.release.outputs.version }}. Add an entry in src/main.js."
+          }
+          $body = ($body -join "`n").TrimEnd() + "`n`nSee the assets below to install or update XynMacro."
+          # Multiline value via a random heredoc delimiter, per GitHub Actions.
+          $eof = "NOTES_EOF_$([guid]::NewGuid().ToString('N'))"
+          "notes<<$eof"  | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          $body          | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          $eof           | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
       - name: Build and publish signed updater
         uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1
         env:
@@ -151,7 +167,7 @@ jobs:
           projectPath: bot
           tagName: ${{ steps.release.outputs.tag }}
           releaseName: XynMacro v${{ steps.release.outputs.version }}
-          releaseBody: See the assets below to install or update XynMacro.
+          releaseBody: ${{ steps.notes.outputs.notes }}
           releaseDraft: false
           prerelease: false
           args: --bundles nsis --config src-tauri/tauri.updater.ci.json
