@@ -3,6 +3,13 @@
 All notable changes to XynMacro. This file is generated from the in-app
 "What's new" notes by `scripts/changelog.mjs` — edit those, not this file.
 
+## 1.2.1
+
+### Fixes
+- Fixed the buttons going dead after the app had been open for a long time — backend requests no longer run on the window's own thread, so a single slow one can't block every click behind it.
+- The status and log refreshes skip a tick instead of stacking up when the backend is slow to answer.
+- A scan preview left running now stops when you leave Calibration instead of capturing in the background forever.
+
 ## 1.2.0
 
 ### Fixes

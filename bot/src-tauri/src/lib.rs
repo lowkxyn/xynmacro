@@ -327,7 +327,7 @@ fn install_pending_update(app: AppHandle) -> bool {
 
 /// One shared keep-alive client for all proxy traffic. The UI polls /state and
 /// /logs several times a second; a fresh Client per call meant a fresh TCP
-/// connection each time. No explicit timeout, matching the old Client::new().
+/// connection each time.
 fn http_client() -> &'static reqwest::blocking::Client {
     static CLIENT: OnceLock<reqwest::blocking::Client> = OnceLock::new();
     // Without a timeout a stalled sidecar leaves the WebView `await`ing forever, so a
@@ -738,8 +738,35 @@ fn get_backend_port(app: AppHandle) -> u16 {
         .unwrap_or(0)
 }
 
+/// Build `http://127.0.0.1:{port}{path}`, tolerating a path with or without the
+/// leading slash.
+fn loopback_url(port: u16, path: &str) -> String {
+    if path.starts_with('/') {
+        format!("http://127.0.0.1:{port}{path}")
+    } else {
+        format!("http://127.0.0.1:{port}/{path}")
+    }
+}
+
+/// Run one blocking loopback request off the main thread.
+///
+/// These commands must be `async` and hand the blocking reqwest call to
+/// `spawn_blocking`: a synchronous `#[tauri::command]` runs on the event-loop
+/// thread, so a single stalled request serialises every other `invoke` behind it.
+/// The UI polls /state and /logs ~4x a second, so once service time exceeded the
+/// poll interval the invoke queue never drained and every button went dead
+/// (silently — the renderer keeps animating in its own process).
+async fn run_blocking_request<F>(request: F) -> Result<serde_json::Value, String>
+where
+    F: FnOnce() -> Result<serde_json::Value, String> + Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(request)
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
-fn send_to_python(
+async fn send_to_python(
     app: AppHandle,
     action: String,
     value: Option<serde_json::Value>,
@@ -750,42 +777,42 @@ fn send_to_python(
     }
     let body = serde_json::json!({ "action": action, "value": value });
     let auth_token = backend_auth_token(&app)?;
-    http_client()
-        .post(format!("http://127.0.0.1:{port}/command"))
-        .header(BACKEND_AUTH_HEADER, auth_token)
-        .json(&body)
-        .send()
-        .map_err(|e| e.to_string())?
-        .json::<serde_json::Value>()
-        .map_err(|e| e.to_string())
+    let url = loopback_url(port, "/command");
+    run_blocking_request(move || {
+        http_client()
+            .post(url)
+            .header(BACKEND_AUTH_HEADER, auth_token)
+            .json(&body)
+            .send()
+            .map_err(|e| e.to_string())?
+            .json::<serde_json::Value>()
+            .map_err(|e| e.to_string())
+    })
+    .await
 }
 
 #[tauri::command]
-fn proxy_get(app: AppHandle, path: String) -> Result<serde_json::Value, String> {
+async fn proxy_get(app: AppHandle, path: String) -> Result<serde_json::Value, String> {
     let port = get_backend_port(app.clone());
     if port == 0 {
         return Err("Backend not ready".into());
     }
-    let url = format!(
-        "http://127.0.0.1:{port}{}",
-        if path.starts_with('/') {
-            path
-        } else {
-            format!("/{path}")
-        }
-    );
+    let url = loopback_url(port, &path);
     let auth_token = backend_auth_token(&app)?;
-    http_client()
-        .get(url)
-        .header(BACKEND_AUTH_HEADER, auth_token)
-        .send()
-        .map_err(|e| e.to_string())?
-        .json::<serde_json::Value>()
-        .map_err(|e| e.to_string())
+    run_blocking_request(move || {
+        http_client()
+            .get(url)
+            .header(BACKEND_AUTH_HEADER, auth_token)
+            .send()
+            .map_err(|e| e.to_string())?
+            .json::<serde_json::Value>()
+            .map_err(|e| e.to_string())
+    })
+    .await
 }
 
 #[tauri::command]
-fn proxy_post(
+async fn proxy_post(
     app: AppHandle,
     path: String,
     body: Option<serde_json::Value>,
@@ -794,23 +821,21 @@ fn proxy_post(
     if port == 0 {
         return Err("Backend not ready".into());
     }
-    let url = format!(
-        "http://127.0.0.1:{port}{}",
-        if path.starts_with('/') {
-            path
-        } else {
-            format!("/{path}")
+    let url = loopback_url(port, &path);
+    let auth_token = backend_auth_token(&app)?;
+    run_blocking_request(move || {
+        let mut req = http_client()
+            .post(url)
+            .header(BACKEND_AUTH_HEADER, auth_token);
+        if let Some(b) = body {
+            req = req.json(&b);
         }
-    );
-    let mut req = http_client().post(url);
-    req = req.header(BACKEND_AUTH_HEADER, backend_auth_token(&app)?);
-    if let Some(b) = body {
-        req = req.json(&b);
-    }
-    req.send()
-        .map_err(|e| e.to_string())?
-        .json::<serde_json::Value>()
-        .map_err(|e| e.to_string())
+        req.send()
+            .map_err(|e| e.to_string())?
+            .json::<serde_json::Value>()
+            .map_err(|e| e.to_string())
+    })
+    .await
 }
 
 /// Let Win11 round the window corners (~8px) so the native drop shadow follows the rounded
@@ -1163,7 +1188,9 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::{generate_backend_auth_token, runtime_app_version, sidecar_runtime_args};
+    use super::{
+        generate_backend_auth_token, loopback_url, runtime_app_version, sidecar_runtime_args,
+    };
     use std::path::Path;
 
     #[test]
@@ -1200,5 +1227,15 @@ mod tests {
         assert_eq!(first.len(), 64);
         assert!(first.bytes().all(|byte| byte.is_ascii_hexdigit()));
         assert_ne!(first, second);
+    }
+
+    #[test]
+    fn loopback_urls_keep_exactly_one_slash_before_the_path() {
+        assert_eq!(loopback_url(8765, "/state"), "http://127.0.0.1:8765/state");
+        assert_eq!(loopback_url(8765, "state"), "http://127.0.0.1:8765/state");
+        assert_eq!(
+            loopback_url(8765, "/logs?since=12"),
+            "http://127.0.0.1:8765/logs?since=12"
+        );
     }
 }

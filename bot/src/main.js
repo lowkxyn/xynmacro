@@ -712,6 +712,9 @@ window.wcCompact = () => {
   }
 
   function openView(target) {
+    // Leaving a view abandons any live preview loop it owns — the toggle is the only
+    // other thing that stops them, so without this they poll /preview forever.
+    if (document.querySelector('.view.active')?.id !== target) _stopAllPreviews();
     switchView(target);
     _resetScroll();
   }
@@ -1785,9 +1788,18 @@ window.wcCompact = () => {
   };
 
   /* Live region preview. One auto-refresh loop per open preview. Stops on toggle-off. */
-  const _previewState = {}; // {region: {timer, rowEl, imgEl, metaEl}}
+  const _previewState = {}; // {region: {timer, busy, rowEl, imgEl, metaEl}}
+
+  const PREVIEW_TARGETS = {
+    health_box:  { rowId: 'previewRowHealth',  imgId: 'previewImgHealth',  metaId: 'previewMetaHealth',  btnId: 'previewBtnHealth'  },
+    agility_box: { rowId: 'previewRowAgility', imgId: 'previewImgAgility', metaId: 'previewMetaAgility', btnId: 'previewBtnAgility' },
+    diagnostics: { rowId: 'previewRowDiagnostics', imgId: 'previewImgDiagnostics', metaId: 'previewMetaDiagnostics', btnId: 'previewBtnDiagnostics' },
+  };
 
   async function _fetchPreview(region) {
+    const state = _previewState[region];
+    if (!state || state.busy) return; // a screen capture can outlast the 1s tick
+    state.busy = true;
     try {
       const r = await invoke('proxy_get', { path: '/preview?region=' + encodeURIComponent(region) });
       if (!r || r.ok === false) {
@@ -1799,15 +1811,29 @@ window.wcCompact = () => {
       if (!ps) return;
       ps.imgEl.src = r.image;
       ps.metaEl.textContent = `(${r.left}, ${r.top}) ${r.width}×${r.height}`;
-    } catch (_) {}
+    } catch (_) {
+    } finally {
+      state.busy = false;
+    }
+  }
+
+  // Preview loops are per-region and only stopped by their own toggle, so leaving a
+  // calibration view with one open kept polling heavy /preview captures forever.
+  function _stopAllPreviews() {
+    for (const region of Object.keys(_previewState)) {
+      clearInterval(_previewState[region].timer);
+      delete _previewState[region];
+      const map = PREVIEW_TARGETS[region];
+      if (!map) continue;
+      const row = document.getElementById(map.rowId);
+      if (row) row.style.display = 'none';
+      const btn = document.getElementById(map.btnId);
+      if (btn) btn.classList.remove('active');
+    }
   }
 
   window.togglePreview = (region) => {
-    const map = {
-      health_box:  { rowId: 'previewRowHealth',  imgId: 'previewImgHealth',  metaId: 'previewMetaHealth',  btnId: 'previewBtnHealth'  },
-      agility_box: { rowId: 'previewRowAgility', imgId: 'previewImgAgility', metaId: 'previewMetaAgility', btnId: 'previewBtnAgility' },
-      diagnostics: { rowId: 'previewRowDiagnostics', imgId: 'previewImgDiagnostics', metaId: 'previewMetaDiagnostics', btnId: 'previewBtnDiagnostics' },
-    }[region];
+    const map = PREVIEW_TARGETS[region];
     if (!map) return;
     const row = document.getElementById(map.rowId);
     const btn = document.getElementById(map.btnId);
@@ -1824,6 +1850,7 @@ window.wcCompact = () => {
     if (btn) btn.classList.add('active');
     _previewState[region] = {
       timer: setInterval(() => _fetchPreview(region), 1000),
+      busy: false,
       rowEl: row,
       imgEl: document.getElementById(map.imgId),
       metaEl: document.getElementById(map.metaId),
@@ -1975,6 +2002,7 @@ window.wcCompact = () => {
   let _logSince = 0;
   let _logTimer = null;
   let _logsRefreshing = false;
+  let _logsPolling = false;
   let _logGeneration = 0;
   let _lastBackendRunning = null;
   let _lastOperationalStop = '';
@@ -2395,9 +2423,12 @@ window.wcCompact = () => {
   }
 
   async function pollLogs(replace = false) {
-    if (_logsRefreshing && !replace) return;
+    // Same overlap guard as poll(): the 400ms tick must not stack a second /logs
+    // invoke on top of one that hasn't come back yet.
+    if ((_logsRefreshing || _logsPolling) && !replace) return;
     const generation = replace ? ++_logGeneration : _logGeneration;
     if (replace) _logsRefreshing = true;
+    else _logsPolling = true;
     try {
       const since = replace ? 0 : _logSince;
       const entries = await invoke('proxy_get', { path: '/logs?since=' + since });
@@ -2443,6 +2474,7 @@ window.wcCompact = () => {
       if (replace) showToast('Could not refresh session log', 'err');
     } finally {
       if (replace && generation === _logGeneration) _logsRefreshing = false;
+      if (!replace) _logsPolling = false;
     }
   }
 
@@ -2511,10 +2543,20 @@ window.wcCompact = () => {
     } catch (e) { showToast('Could not open folder', 'err'); }
   };
 
+  // Skip a tick while the previous /state is still in flight. Without this a slow
+  // backend lets 800ms ticks stack invokes faster than they complete, and the queue
+  // never drains — which is what left every button unresponsive.
+  let _pollBusy = false;
   async function poll() {
-    const state = await getState();
-    applyState(state);
-    _updateFooter(state); // footer shares this poll — it used to run its own /state interval
+    if (_pollBusy) return;
+    _pollBusy = true;
+    try {
+      const state = await getState();
+      applyState(state);
+      _updateFooter(state); // footer shares this poll — it used to run its own /state interval
+    } finally {
+      _pollBusy = false;
+    }
   }
 
   let _frontendRefreshTask = null;
@@ -2821,6 +2863,13 @@ window.wcCompact = () => {
 
   // What's-new content, newest first. Each entry: {version, notes:[{h, items[]}]}.
   const CHANGELOG = [
+    { version: '1.2.1', notes: [
+      { h: 'Fixes', items: [
+        'Fixed the buttons going dead after the app had been open for a long time — backend requests no longer run on the window\'s own thread, so a single slow one can\'t block every click behind it.',
+        'The status and log refreshes skip a tick instead of stacking up when the backend is slow to answer.',
+        'A scan preview left running now stops when you leave Calibration instead of capturing in the background forever.',
+      ]},
+    ]},
     { version: '1.2.0', notes: [
       { h: 'Fixes', items: [
         'Settings toggles and the v1/v2 mode buttons now always respond; a failed change reports why instead of doing nothing.',
