@@ -141,53 +141,9 @@ jobs:
       # the launcher hands it a real pipe. Prove it on the actual artifact: a silent
       # regression here would ship an app whose backend never starts.
       - name: Smoke-test the frozen sidecar's stdin auth
+        working-directory: bot
         shell: pwsh
-        run: |
-          $exe = "bot/src-tauri/binaries/XynMacro-core-x86_64-pc-windows-msvc.exe"
-          $dataDir = Join-Path $env:RUNNER_TEMP "sidecar-smoke"
-          New-Item -ItemType Directory -Force -Path $dataDir | Out-Null
-          $token = "smoke-" + [guid]::NewGuid().ToString('N')
-          $fakePid = 424242
-
-          $psi = [Diagnostics.ProcessStartInfo]::new()
-          $psi.FileName = (Resolve-Path $exe).Path
-          foreach ($a in @('--sidecar','--pid',"$fakePid",'--data-dir',$dataDir,
-                           '--app-version','0.0.0-smoke','--auth-token-stdin')) {
-            $psi.ArgumentList.Add($a)
-          }
-          $psi.RedirectStandardInput = $true
-          $psi.UseShellExecute = $false
-          $proc = [Diagnostics.Process]::Start($psi)
-          $proc.StandardInput.WriteLine($token)
-          $proc.StandardInput.Close()
-
-          try {
-            $portFile = Join-Path $dataDir "port_$fakePid.json"
-            $port = $null
-            foreach ($i in 1..60) {
-              if (Test-Path $portFile) {
-                $port = (Get-Content $portFile -Raw | ConvertFrom-Json).port
-                if ($port) { break }
-              }
-              if ($proc.HasExited) { throw "Sidecar exited early (code $($proc.ExitCode)) — it never accepted the token over stdin." }
-              Start-Sleep -Milliseconds 500
-            }
-            if (-not $port) { throw "Sidecar never published a port file; stdin auth handover likely failed." }
-
-            $ok = Invoke-RestMethod -Uri "http://127.0.0.1:$port/health" -Headers @{ 'X-XynMacro-Token' = $token }
-            if (-not $ok.ok) { throw "Authenticated /health did not report ok." }
-
-            # The token must actually be enforced, not merely accepted.
-            try {
-              Invoke-RestMethod -Uri "http://127.0.0.1:$port/health" -ErrorAction Stop | Out-Null
-              throw "Unauthenticated /health succeeded — the packaged sidecar is not enforcing its token."
-            } catch [Microsoft.PowerShell.Commands.HttpResponseException] {
-              if ($_.Exception.Response.StatusCode.value__ -ne 401) { throw "Expected 401 without a token, got $($_.Exception.Response.StatusCode.value__)." }
-            }
-            Write-Output "Sidecar stdin auth verified on port $port."
-          } finally {
-            if (-not $proc.HasExited) { $proc.Kill() }
-          }
+        run: ./scripts/smoke_sidecar_auth.ps1 -Exe src-tauri/binaries/XynMacro-core-x86_64-pc-windows-msvc.exe
 
       - name: Run Rust tests
         working-directory: bot/src-tauri
