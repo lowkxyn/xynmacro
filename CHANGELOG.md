@@ -10,6 +10,10 @@ All notable changes to XynMacro. This file is generated from the in-app
 - The status and log refreshes skip a tick instead of stacking up when the backend is slow to answer.
 - A scan preview left running now stops when you leave Calibration instead of capturing in the background forever.
 
+### Security
+- The key that lets XynMacro talk to its own backend is no longer visible in the Windows process list — it's handed over privately at startup instead.
+- Backend requests refuse to follow redirects, so that key can only ever be sent to XynMacro's own local backend.
+
 ## 1.2.0
 
 ### Fixes

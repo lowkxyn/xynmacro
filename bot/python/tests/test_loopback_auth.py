@@ -1,3 +1,4 @@
+import io
 import sys
 import unittest
 from pathlib import Path
@@ -66,6 +67,26 @@ class LoopbackAuthTests(unittest.TestCase):
             core._validated_auth_token(" launch-secret ", frozen=False),
             "launch-secret",
         )
+
+    def test_token_is_read_from_the_first_stdin_line(self):
+        self.assertEqual(
+            core._read_auth_token_from_stdin(io.StringIO("launch-secret\nignored\n")),
+            "launch-secret",
+        )
+
+    def test_closed_or_empty_stdin_fails_closed(self):
+        # The launcher closes the pipe after one line; nothing there must not become
+        # an unauthenticated backend.
+        self.assertEqual(core._read_auth_token_from_stdin(io.StringIO("")), "")
+        with self.assertRaises(ValueError):
+            core._validated_auth_token(
+                core._read_auth_token_from_stdin(io.StringIO("")), frozen=True
+            )
+
+    def test_unreadable_stdin_fails_closed(self):
+        closed = io.StringIO("launch-secret\n")
+        closed.close()
+        self.assertEqual(core._read_auth_token_from_stdin(closed), "")
 
 
 if __name__ == "__main__":

@@ -335,6 +335,11 @@ fn http_client() -> &'static reqwest::blocking::Client {
     CLIENT.get_or_init(|| {
         reqwest::blocking::Client::builder()
             .timeout(Duration::from_secs(10))
+            // Every request carries the backend token in a custom header, and reqwest
+            // only strips the *standard* auth headers when a redirect crosses hosts —
+            // a custom one would be forwarded verbatim. The sidecar never redirects, so
+            // refusing to follow any redirect keeps the token on loopback.
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .expect("building the loopback HTTP client cannot fail")
     })
@@ -390,11 +395,17 @@ fn update_error_path(app: &AppHandle) -> PathBuf {
     data_dir(app).join("update_install_error.txt")
 }
 
+/// The sidecar's launch arguments.
+///
+/// The auth token is deliberately NOT here: a command line is readable by any
+/// same-user process on Windows (`Win32_Process.CommandLine`), which would hand
+/// out the credential for an API that injects raw mouse and keyboard input. It
+/// goes over the stdin pipe in `spawn_sidecar` instead, where it never lands
+/// anywhere queryable.
 fn sidecar_runtime_args(
     launcher_pid: u32,
     data_dir: &std::path::Path,
     app_version: &str,
-    auth_token: &str,
 ) -> Vec<std::ffi::OsString> {
     vec![
         "--sidecar".into(),
@@ -404,8 +415,7 @@ fn sidecar_runtime_args(
         data_dir.as_os_str().to_owned(),
         "--app-version".into(),
         app_version.into(),
-        "--auth-token".into(),
-        auth_token.into(),
+        "--auth-token-stdin".into(),
     ]
 }
 
@@ -491,14 +501,10 @@ fn spawn_sidecar(
         Command::new(sidecar)
     };
 
-    cmd.args(sidecar_runtime_args(
-        launcher_pid,
-        &ddir,
-        app_version,
-        auth_token,
-    ))
-    .stdout(Stdio::inherit())
-    .stderr(Stdio::inherit());
+    cmd.args(sidecar_runtime_args(launcher_pid, &ddir, app_version))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit());
 
     // On Windows, suppress the console window the `py` launcher pops up for child python.exe.
     #[cfg(target_os = "windows")]
@@ -508,8 +514,27 @@ fn spawn_sidecar(
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
 
-    cmd.spawn()
-        .map_err(|e| format!("Failed to spawn sidecar: {e}"))
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("Failed to spawn sidecar: {e}"))?;
+
+    // Hand over the token and close the pipe immediately: the sidecar blocks on this
+    // one line before it serves anything, and dropping the writer is what ends its
+    // read. On any failure kill the child rather than leaving it waiting forever.
+    let handed_over = match child.stdin.take() {
+        Some(mut stdin) => {
+            use std::io::Write as _;
+            writeln!(stdin, "{auth_token}").and_then(|()| stdin.flush())
+            // `stdin` drops here, closing the pipe.
+        }
+        None => Err(std::io::Error::other("sidecar stdin was not captured")),
+    };
+    if let Err(error) = handed_over {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(format!("Failed to send the backend token: {error}"));
+    }
+    Ok(child)
 }
 
 fn read_backend_port(app: &AppHandle, launcher_pid: u32) -> Option<u16> {
@@ -531,6 +556,8 @@ fn read_backend_port(app: &AppHandle, launcher_pid: u32) -> Option<u16> {
 fn wait_for_backend(port: u16, auth_token: &str) -> bool {
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(2))
+        // Same reasoning as http_client(): this probe sends the token too.
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .ok();
     let Some(client) = client else { return false };
@@ -1195,7 +1222,7 @@ mod tests {
 
     #[test]
     fn sidecar_receives_tauri_package_version() {
-        let args = sidecar_runtime_args(4242, Path::new(r"C:\runtime"), "1.7.3", "test-auth-token");
+        let args = sidecar_runtime_args(4242, Path::new(r"C:\runtime"), "1.7.3");
         let args: Vec<_> = args.iter().map(|arg| arg.to_string_lossy()).collect();
 
         assert_eq!(
@@ -1208,10 +1235,22 @@ mod tests {
                 r"C:\runtime",
                 "--app-version",
                 "1.7.3",
-                "--auth-token",
-                "test-auth-token",
+                "--auth-token-stdin",
             ]
         );
+    }
+
+    /// The command line of a running process is readable by any same-user process,
+    /// so the token must never be passed as an argument.
+    #[test]
+    fn sidecar_arguments_never_carry_the_auth_token() {
+        let args = sidecar_runtime_args(4242, Path::new(r"C:\runtime"), "1.7.3");
+
+        assert!(args.iter().all(|arg| arg != "--auth-token"));
+        let token = generate_backend_auth_token().unwrap();
+        assert!(args
+            .iter()
+            .all(|arg| !arg.to_string_lossy().contains(&token)));
     }
 
     #[test]

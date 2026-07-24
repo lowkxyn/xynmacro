@@ -7623,6 +7623,31 @@ def register_start_stop_hotkey():
         print(f"[sidecar] Start/stop hotkey registration failed: {e}")
 
 
+def _read_auth_token_from_stdin(stream=None):
+    """Read the launcher-supplied token from the first line of stdin.
+
+    The launcher writes one line and closes the pipe, so a missing token returns ""
+    and the caller fails closed instead of hanging. This is a console=False build,
+    where sys.stdin can be None even though the launcher handed us a real pipe, so
+    fall back to file descriptor 0 before giving up.
+    """
+    source = sys.stdin if stream is None else stream
+    if source is not None:
+        try:
+            token = source.readline().strip()
+            if token:
+                return token
+        except (OSError, ValueError):
+            pass
+    if stream is not None:
+        return ""
+    try:
+        with os.fdopen(os.dup(0), "r", encoding="utf-8", errors="replace") as pipe:
+            return pipe.readline().strip()
+    except (OSError, ValueError):
+        return ""
+
+
 def _validated_auth_token(auth_token, frozen=None):
     """Return the configured launch token, or allow an unauthenticated source run.
 
@@ -8048,7 +8073,13 @@ if __name__ == "__main__":
     ap.add_argument("--app-version", type=str, default=None,
                     help="Authoritative Tauri package version reported by /state and /health.")
     ap.add_argument("--auth-token", type=str, default=None,
-                    help="Per-launch token supplied by the Tauri launcher.")
+                    help="Per-launch token. Development use only — a command line is "
+                         "readable by any same-user process. The packaged launcher uses "
+                         "--auth-token-stdin.")
+    ap.add_argument("--auth-token-stdin", action="store_true",
+                    help="Read the per-launch token from the first line of stdin. This is "
+                         "how the Tauri launcher supplies it, so the credential never "
+                         "appears in the process list.")
     args = ap.parse_args()
     if not args.sidecar:
         ap.error("--sidecar is required. This is XynMacro's backend; the desktop app "
@@ -8058,7 +8089,9 @@ if __name__ == "__main__":
     if not args.app_version:
         ap.error("--app-version is required when the Tauri shell launches the sidecar")
     try:
-        auth_token = _validated_auth_token(args.auth_token)
+        auth_token = _validated_auth_token(
+            _read_auth_token_from_stdin() if args.auth_token_stdin else args.auth_token
+        )
     except ValueError as error:
         ap.error(str(error))
     if auth_token is None:
