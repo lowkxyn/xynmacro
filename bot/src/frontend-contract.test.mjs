@@ -23,7 +23,7 @@ test('XynMacro branding migrates and removes legacy preference keys', () => {
 
 test('custom switches and segmented controls expose their state', () => {
   const toggles = [...html.matchAll(/<button\b[^>]*class="toggle(?: active)?"[^>]*>/g)].map((match) => match[0]);
-  assert.equal(toggles.length, 12);
+  assert.equal(toggles.length, 13);
   for (const toggle of toggles) {
     assert.match(toggle, /role="switch"/);
     assert.match(toggle, /aria-checked="(?:true|false)"/);

@@ -303,6 +303,14 @@
         </div>
         <div class="row-hint">Roblox restored from the taskbar comes back windowed even when it was fullscreen, which shifts every scan region. On Start, XynMacro measures the window and presses F11 only if it is smaller than its monitor. Turn this off if you deliberately play windowed.</div>
         <div class="row-item">
+          <span class="row-label">Windowed Mode</span>
+          <div class="row-ctrl">
+            <button type="button" class="btn" id="btnWindowNow" onclick="setGameWindowed()">Size Window Now</button>
+            <button type="button" class="toggle" id="toggleWindowedMode" role="switch" aria-checked="false" aria-label="Size Roblox to a 1920x1080 window when the macro starts" onclick="toggleSetting('windowed_mode_on_start',this)"></button>
+          </div>
+        </div>
+        <div class="row-hint">Sizes Roblox to a 1920&times;1080 window centred on screen, without changing your display resolution — the alternative to "Set 1080p" if your monitor is bigger than 1080p. Needs room for the title bar, so a 1920&times;1080 display can't use this; use Fullscreen On Start there instead. When both this and Fullscreen On Start are on, this one wins.</div>
+        <div class="row-item">
           <span class="row-label">Confirm Resolution Changes</span>
           <div class="row-ctrl"><button type="button" class="toggle" id="toggleDisplayConfirm" role="switch" aria-checked="false" aria-label="Ask to confirm a display resolution change before keeping it" onclick="toggleSetting('display_confirm_changes',this)"></button></div>
         </div>

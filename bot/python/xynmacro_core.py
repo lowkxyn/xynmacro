@@ -145,6 +145,9 @@ PREVENT_SLEEP_WHILE_RUNNING = True
 # Roblox restored from the taskbar comes back windowed even when it was fullscreen,
 # which moves every scan region. Put it back to fullscreen before a run.
 RESTORE_FULLSCREEN_ON_START = True
+# Size Roblox to a 1920x1080 window instead of changing the display resolution.
+# Off by default: it only fits on displays larger than 1080p.
+WINDOWED_MODE_ON_START = False
 # A resolution change can leave an unreadable screen. Keep it only if confirmed.
 DISPLAY_CONFIRM_CHANGES = True
 DISPLAY_CONFIRM_TIMEOUT_SEC = 10.0
@@ -691,6 +694,7 @@ DEFAULT_USER_SETTINGS = {
     "gc_gravity_target_g": int(GC_GRAVITY_TARGET_G),
     "prevent_sleep_while_running": bool(PREVENT_SLEEP_WHILE_RUNNING),
     "restore_fullscreen_on_start": bool(RESTORE_FULLSCREEN_ON_START),
+    "windowed_mode_on_start": bool(WINDOWED_MODE_ON_START),
     "display_confirm_changes": bool(DISPLAY_CONFIRM_CHANGES),
     "shutdown_pc_when_finished": bool(SHUTDOWN_PC_WHEN_FINISHED),
     "after_run_game_action": str(AFTER_RUN_GAME_ACTION),
@@ -753,7 +757,7 @@ def reset_user_settings_to_defaults():
     The UI command persists the reset immediately after calling this function.
     """
     global START_DELAY, GC_GRAVITY_TARGET_G, PREVENT_SLEEP_WHILE_RUNNING
-    global RESTORE_FULLSCREEN_ON_START, DISPLAY_CONFIRM_CHANGES
+    global RESTORE_FULLSCREEN_ON_START, WINDOWED_MODE_ON_START, DISPLAY_CONFIRM_CHANGES
     global SHUTDOWN_PC_WHEN_FINISHED, AFTER_RUN_GAME_ACTION, AFTER_RUN_ON_FAILURE
     global AUTO_RETRY_ON_FAILURE, AUTO_RETRY_MAX_ATTEMPTS
     global AUTO_RETRY_RECOVERY_MODE, AUTO_RETRY_WALK_OUT, AUTO_RETRY_WALK_SECONDS
@@ -772,6 +776,9 @@ def reset_user_settings_to_defaults():
     )
     RESTORE_FULLSCREEN_ON_START = bool(
         DEFAULT_USER_SETTINGS["restore_fullscreen_on_start"]
+    )
+    WINDOWED_MODE_ON_START = bool(
+        DEFAULT_USER_SETTINGS["windowed_mode_on_start"]
     )
     DISPLAY_CONFIRM_CHANGES = bool(
         DEFAULT_USER_SETTINGS["display_confirm_changes"]
@@ -949,6 +956,146 @@ def game_window_is_fullscreen():
     return GAME_WIDTH >= monitor["width"] and GAME_HEIGHT >= monitor["height"]
 
 
+def _game_window_frame_padding():
+    """Return (width, height) of Roblox's non-client frame, or None.
+
+    Measured as window rect minus client rect rather than derived from
+    AdjustWindowRect: DWM, the Windows version and the DPI all change the real
+    title-bar and border sizes, and a wrong guess offsets every scan region.
+    """
+    if os.name != "nt" or GAME_HWND is None:
+        return None
+    try:
+        import ctypes
+        user32 = ctypes.windll.user32
+
+        class _RECT(ctypes.Structure):
+            _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long),
+                        ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
+
+        window = _RECT()
+        client = _RECT()
+        if not user32.GetWindowRect(int(GAME_HWND), ctypes.byref(window)):
+            return None
+        if not user32.GetClientRect(int(GAME_HWND), ctypes.byref(client)):
+            return None
+        frame_width = (window.right - window.left) - (client.right - client.left)
+        frame_height = (window.bottom - window.top) - (client.bottom - client.top)
+        if frame_width < 0 or frame_height < 0:
+            return None
+        return frame_width, frame_height
+    except Exception as e:
+        print(f"[window] frame measurement failed: {e}")
+        return None
+
+
+def _move_game_window(x, y, width, height):
+    """Move and resize the Roblox window. Returns True when Windows accepted it."""
+    if os.name != "nt" or GAME_HWND is None:
+        return False
+    try:
+        import ctypes
+        SWP_NOZORDER = 0x0004
+        SWP_NOACTIVATE = 0x0010
+        return bool(ctypes.windll.user32.SetWindowPos(
+            int(GAME_HWND), 0, int(x), int(y), int(width), int(height),
+            SWP_NOZORDER | SWP_NOACTIVATE,
+        ))
+    except Exception as e:
+        print(f"[window] move failed: {e}")
+        return False
+
+
+def _windowed_target_bounds(monitor, frame_width, frame_height,
+                            client_width=GAME_REFERENCE_WIDTH,
+                            client_height=GAME_REFERENCE_HEIGHT):
+    """Where to put a windowed Roblox so its client area is exactly the reference size.
+
+    Returns ``(x, y, width, height)`` for the whole window (client + frame), or None
+    when the display cannot fit it. The scan regions are authored against a
+    1920x1080 client, so a smaller client would have to be scaled and a non-16:9 one
+    would skew every template — refusing beats silently scanning the wrong pixels.
+
+    Centring uses the work area, not the raw monitor rect, so the window never ends
+    up under the taskbar where the macro's own clicks would land on it.
+    """
+    if not monitor:
+        return None
+    left = int(monitor.get("work_left", monitor["left"]))
+    top = int(monitor.get("work_top", monitor["top"]))
+    width = int(monitor.get("work_width", monitor["width"]))
+    height = int(monitor.get("work_height", monitor["height"]))
+    window_width = int(client_width) + max(0, int(frame_width))
+    window_height = int(client_height) + max(0, int(frame_height))
+    if window_width > width or window_height > height:
+        return None
+    return (
+        left + (width - window_width) // 2,
+        top + (height - window_height) // 2,
+        window_width,
+        window_height,
+    )
+
+
+def ensure_game_windowed(wait=2.0):
+    """Size and centre Roblox so its client area is exactly 1920x1080. Returns (ok, message).
+
+    Roblox has to leave fullscreen first (F11 is a toggle, so this only presses it
+    when the client really does cover the monitor), and the frame is measured rather
+    than assumed: the title bar height depends on the Windows version and DPI, and
+    getting it wrong shifts every scan region by exactly that many pixels.
+    """
+    if not update_game_window():
+        return False, "Open Roblox before using Windowed Mode."
+    if GAME_HWND is None:
+        return False, "Open Roblox before using Windowed Mode."
+
+    monitor = _monitor_info_for_window(GAME_HWND)
+    if monitor is None:
+        return False, "Could not identify the display Roblox is on."
+
+    if game_window_is_fullscreen():
+        if not focus_game_window():
+            return False, "Could not focus Roblox to leave fullscreen."
+        print("[window] Leaving fullscreen with F11 before sizing the window.")
+        pydirectinput.keyDown("f11")
+        time.sleep(0.030)
+        pydirectinput.keyUp("f11")
+        deadline = time.monotonic() + wait
+        while time.monotonic() < deadline:
+            time.sleep(0.15)
+            update_game_window()
+            if game_window_is_fullscreen() is False:
+                break
+
+    frame = _game_window_frame_padding()
+    if frame is None:
+        return False, "Could not measure the Roblox window frame."
+    frame_width, frame_height = frame
+    bounds = _windowed_target_bounds(monitor, frame_width, frame_height)
+    if bounds is None:
+        return False, (
+            f"This display is {monitor['width']}x{monitor['height']} — too small for a "
+            "1920x1080 window. Use Fullscreen On Start or Set 1080p instead."
+        )
+
+    x, y, window_width, window_height = bounds
+    if not _move_game_window(x, y, window_width, window_height):
+        return False, "Windows refused to move the Roblox window."
+
+    deadline = time.monotonic() + wait
+    while time.monotonic() < deadline:
+        time.sleep(0.15)
+        update_game_window()
+        if (GAME_WIDTH, GAME_HEIGHT) == (GAME_REFERENCE_WIDTH, GAME_REFERENCE_HEIGHT):
+            print(f"[window] Roblox windowed at {GAME_WIDTH}x{GAME_HEIGHT}, centred on screen.")
+            return True, f"Roblox set to {GAME_WIDTH}x{GAME_HEIGHT}, centred."
+    return False, (
+        f"Roblox ended up {GAME_WIDTH}x{GAME_HEIGHT} instead of "
+        f"{GAME_REFERENCE_WIDTH}x{GAME_REFERENCE_HEIGHT}."
+    )
+
+
 def ensure_game_fullscreen(wait=2.0):
     """Put a windowed Roblox back into fullscreen with F11. Returns True if fullscreen.
 
@@ -1073,6 +1220,12 @@ def _monitor_info_for_window(hwnd):
         device = str(raw.get("Device") or "").strip()
         if not device or right <= left or bottom <= top:
             return None
+        # The work area excludes the taskbar. Windowed Mode centres inside it so the
+        # game never sits under the taskbar, where the macro's clicks would hit it.
+        work = raw.get("Work") or raw["Monitor"]
+        work_left, work_top, work_right, work_bottom = [int(value) for value in work]
+        if work_right <= work_left or work_bottom <= work_top:
+            work_left, work_top, work_right, work_bottom = left, top, right, bottom
         return {
             "device": device,
             "left": left,
@@ -1081,6 +1234,10 @@ def _monitor_info_for_window(hwnd):
             "bottom": bottom,
             "width": right - left,
             "height": bottom - top,
+            "work_left": work_left,
+            "work_top": work_top,
+            "work_width": work_right - work_left,
+            "work_height": work_bottom - work_top,
             "primary": bool(int(raw.get("Flags", 0)) & 1),
         }
     except Exception as e:
@@ -3965,7 +4122,7 @@ def load_master_config():
     If missing, creates a default config file using the values in this script.
     """
     global START_DELAY, GC_GRAVITY_TARGET_G, PREVENT_SLEEP_WHILE_RUNNING
-    global RESTORE_FULLSCREEN_ON_START, DISPLAY_CONFIRM_CHANGES
+    global RESTORE_FULLSCREEN_ON_START, WINDOWED_MODE_ON_START, DISPLAY_CONFIRM_CHANGES
     global SHUTDOWN_PC_WHEN_FINISHED, AFTER_RUN_GAME_ACTION, AFTER_RUN_ON_FAILURE
     global AUTO_RETRY_ON_FAILURE, AUTO_RETRY_MAX_ATTEMPTS
     global AUTO_RETRY_RECOVERY_MODE, AUTO_RETRY_WALK_OUT, AUTO_RETRY_WALK_SECONDS
@@ -3981,7 +4138,7 @@ def load_master_config():
         # IMPORTANT: this is a nested function; we must declare globals here
         # or assignments will create locals and the config won't actually apply.
         global START_DELAY, GC_GRAVITY_TARGET_G, PREVENT_SLEEP_WHILE_RUNNING
-        global RESTORE_FULLSCREEN_ON_START, DISPLAY_CONFIRM_CHANGES
+        global RESTORE_FULLSCREEN_ON_START, WINDOWED_MODE_ON_START, DISPLAY_CONFIRM_CHANGES
         global SHUTDOWN_PC_WHEN_FINISHED, AFTER_RUN_GAME_ACTION, AFTER_RUN_ON_FAILURE
         global AUTO_RETRY_ON_FAILURE, AUTO_RETRY_MAX_ATTEMPTS
         global AUTO_RETRY_RECOVERY_MODE, AUTO_RETRY_WALK_OUT, AUTO_RETRY_WALK_SECONDS
@@ -4010,6 +4167,8 @@ def load_master_config():
             RESTORE_FULLSCREEN_ON_START = _ui_bool(
                 data["restore_fullscreen_on_start"]
             )
+        if "windowed_mode_on_start" in data:
+            WINDOWED_MODE_ON_START = _ui_bool(data["windowed_mode_on_start"])
         if "display_confirm_changes" in data:
             DISPLAY_CONFIRM_CHANGES = _ui_bool(data["display_confirm_changes"])
         if "shutdown_pc_when_finished" in data:
@@ -4212,6 +4371,7 @@ def _master_config_snapshot():
         "gc_gravity_target_g": int(GC_GRAVITY_TARGET_G),
         "prevent_sleep_while_running": bool(PREVENT_SLEEP_WHILE_RUNNING),
         "restore_fullscreen_on_start": bool(RESTORE_FULLSCREEN_ON_START),
+        "windowed_mode_on_start": bool(WINDOWED_MODE_ON_START),
         "display_confirm_changes": bool(DISPLAY_CONFIRM_CHANGES),
         "shutdown_pc_when_finished": bool(SHUTDOWN_PC_WHEN_FINISHED),
         "after_run_game_action": AFTER_RUN_GAME_ACTION,
@@ -6315,6 +6475,7 @@ def _ui_config_snapshot():
         "gc_gravity_target_g": GC_GRAVITY_TARGET_G,
         "prevent_sleep_while_running": PREVENT_SLEEP_WHILE_RUNNING,
         "restore_fullscreen_on_start": RESTORE_FULLSCREEN_ON_START,
+        "windowed_mode_on_start": WINDOWED_MODE_ON_START,
         "display_confirm_changes": DISPLAY_CONFIRM_CHANGES,
         "shutdown_pc_when_finished": SHUTDOWN_PC_WHEN_FINISHED,
         "after_run_game_action": AFTER_RUN_GAME_ACTION,
@@ -7271,7 +7432,7 @@ _config_lock = threading.RLock()
 
 def _ui_apply_setting_unlocked(key, value):
     global START_DELAY, GC_GRAVITY_TARGET_G, PREVENT_SLEEP_WHILE_RUNNING
-    global RESTORE_FULLSCREEN_ON_START, DISPLAY_CONFIRM_CHANGES
+    global RESTORE_FULLSCREEN_ON_START, WINDOWED_MODE_ON_START, DISPLAY_CONFIRM_CHANGES
     global SHUTDOWN_PC_WHEN_FINISHED, AFTER_RUN_GAME_ACTION, AFTER_RUN_ON_FAILURE
     global AUTO_RETRY_ON_FAILURE, AUTO_RETRY_MAX_ATTEMPTS
     global AUTO_RETRY_RECOVERY_MODE, AUTO_RETRY_WALK_OUT, AUTO_RETRY_WALK_SECONDS
@@ -7290,6 +7451,8 @@ def _ui_apply_setting_unlocked(key, value):
         PREVENT_SLEEP_WHILE_RUNNING = _ui_bool(value)
     elif key == "restore_fullscreen_on_start":
         RESTORE_FULLSCREEN_ON_START = _ui_bool(value)
+    elif key == "windowed_mode_on_start":
+        WINDOWED_MODE_ON_START = _ui_bool(value)
     elif key == "display_confirm_changes":
         DISPLAY_CONFIRM_CHANGES = _ui_bool(value)
     elif key == "shutdown_pc_when_finished":
@@ -7526,8 +7689,13 @@ def _ui_start_macro():
         if GAME_HWND is None:
             return False, "Open Roblox before starting XynMacro."
         # Do this before the countdown so the scan regions are measured against
-        # the window the run will actually use.
-        if RESTORE_FULLSCREEN_ON_START:
+        # the window the run will actually use. Windowed Mode wins when both are on:
+        # it is the more specific request, and fullscreen would undo it.
+        if WINDOWED_MODE_ON_START:
+            windowed_ok, windowed_message = ensure_game_windowed()
+            if not windowed_ok:
+                return False, windowed_message
+        elif RESTORE_FULLSCREEN_ON_START:
             ensure_game_fullscreen()
         if (
             _background_monitor_thread is not None
@@ -7943,6 +8111,14 @@ def run_ui_server(sidecar_pid=None, auth_token=None):
                     "ok": True,
                     "msg": "Macro settings, calibration, and save location restored",
                 })
+            if action == "game_window_windowed":
+                if _ui_is_running():
+                    return jsonify({
+                        "ok": False,
+                        "msg": "Stop the macro before resizing the game window",
+                    })
+                ok, msg = ensure_game_windowed()
+                return jsonify({"ok": ok, "msg": msg})
             if action == "display_set_1080":
                 if _ui_is_running():
                     return jsonify({

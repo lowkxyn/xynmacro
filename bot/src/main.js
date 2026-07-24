@@ -999,6 +999,13 @@ window.wcCompact = () => {
     showToast(r.msg || 'Display change requested', r.ok ? 'ok' : 'err');
     if (r.ok && r.confirm?.pending) _openResConfirm(r.confirm);
   });
+  // Sizing the window on demand is how you check the scan boxes still line up
+  // without having to start a run first.
+  window.setGameWindowed = async () => {
+    const r = await sendCommand('game_window_windowed');
+    showToast(r.msg || 'Window resize requested', r.ok ? 'ok' : 'err');
+  };
+
   const _btnResRevert = document.getElementById('btnResRevert');
   if (_btnResRevert) _btnResRevert.addEventListener('click', async () => {
     const r = await sendCommand('display_revert');
@@ -1955,6 +1962,7 @@ window.wcCompact = () => {
     no_yellow_fallback_enabled: 'toggleNoYellowFallback',
     prevent_sleep_while_running: 'togglePreventSleep',
     restore_fullscreen_on_start: 'toggleRestoreFullscreen',
+    windowed_mode_on_start: 'toggleWindowedMode',
     display_confirm_changes: 'toggleDisplayConfirm',
     diagnostic_mode: 'toggleDiagnosticMode',
     shutdown_pc_when_finished: 'toggleShutdownFinished',
