@@ -5,12 +5,13 @@ import test from 'node:test';
 const sourceRoot = new URL('./', import.meta.url);
 const repoRoot = new URL('../../', import.meta.url);
 
-const [html, main, styles, readme, packageText] = await Promise.all([
+const [html, main, styles, readme, packageText, tauriConfText] = await Promise.all([
   readFile(new URL('index.html', sourceRoot), 'utf8'),
   readFile(new URL('main.js', sourceRoot), 'utf8'),
   readFile(new URL('styles.css', sourceRoot), 'utf8'),
   readFile(new URL('README.md', repoRoot), 'utf8'),
   readFile(new URL('package.json', new URL('../', sourceRoot)), 'utf8'),
+  readFile(new URL('src-tauri/tauri.conf.json', new URL('../', sourceRoot)), 'utf8'),
 ]);
 const packageMetadata = JSON.parse(packageText);
 
@@ -199,4 +200,35 @@ test('support diagnostics expose a live scan preview and copyable report', () =>
   assert.match(html, /id="previewImgDiagnostics"/);
   assert.match(main, /path: '\/diagnostics'/);
   assert.match(main, /Diagnostic report copied/);
+});
+
+/* The UI wires most controls with inline onclick= attributes. Those are governed by
+   CSP's script-src-attr, which falls back to script-src — and script-src carries a
+   Tauri-injected nonce, which makes its 'unsafe-inline' be ignored under CSP3. A
+   WebView2 update started enforcing that and killed every button in bundled builds
+   while addEventListener-wired controls kept working. script-src-attr must therefore
+   stay declared explicitly, and it must not be given a nonce. */
+test('CSP allows the inline event handlers the UI is built on', () => {
+  const csp = JSON.parse(tauriConfText).app.security.csp;
+  assert.match(csp, /script-src-attr 'unsafe-inline'/);
+  assert.doesNotMatch(csp, /script-src-attr[^;]*nonce/);
+});
+
+test('inline onclick handlers still exist, so the CSP guard above stays relevant', () => {
+  assert.ok(html.split('onclick=').length - 1 > 20);
+});
+
+test('window controls surface failures instead of swallowing them', () => {
+  // A silently failing minimize is indistinguishable from a dead UI. Scoped to
+  // _wcSend: the splash reveal and drag handler are deliberately fire-and-forget.
+  const body = main.slice(main.indexOf('function _wcSend('));
+  const wcSend = body.slice(0, body.indexOf('window.wcMinimize'));
+  assert.doesNotMatch(wcSend, /catch\(\(\)\s*=>\s*\{\}\)/);
+  assert.match(wcSend, /_reportUiError\('Window control failed'/);
+});
+
+test('the vestigial drag region that the ACL forbids is gone', () => {
+  // data-tauri-drag-region calls plugin:window|start_dragging, which core:default
+  // does not grant; main.js drags via the wc command instead.
+  assert.doesNotMatch(html, /data-tauri-drag-region/);
 });

@@ -3,6 +3,13 @@
 All notable changes to XynMacro. This file is generated from the in-app
 "What's new" notes by `scripts/changelog.mjs` — edit those, not this file.
 
+## 1.3.1
+
+### Fixes
+- Fixed every button, toggle and window control being dead. A Microsoft Edge WebView2 update began enforcing a stricter content security rule that blocked the way most of the UI was wired, so clicks silently did nothing — the sidebar kept working because it is wired differently. This affected all recent versions, not just the newest.
+- Minimize, maximize and close now report a problem instead of failing silently.
+- Dragging the window by its title no longer logs a permission error.
+
 ## 1.3.0
 
 ### Windowed Mode

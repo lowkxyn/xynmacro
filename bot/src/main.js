@@ -130,6 +130,7 @@ window.addEventListener('error', (e) => _reportUiError('UI error', e.error || e.
 window.addEventListener('unhandledrejection', (e) => _reportUiError('UI error', e.reason));
 
 const { invoke } = window.__TAURI__.core;
+
 const ACTIVE_PREFERENCE_KEYS = [
   'dbog-theme',
   'dbog-bg',
@@ -186,7 +187,10 @@ window.addEventListener('DOMContentLoaded', () => {
 
 /* Window control buttons (custom title bar) */
 function _wcSend(action, value) {
-  invoke('wc', value !== undefined ? { action, value } : { action }).catch(() => {});
+  // Never swallow these: a silently failing minimize/close looks identical to a
+  // dead UI, which is exactly how the CSP breakage hid for so long.
+  invoke('wc', value !== undefined ? { action, value } : { action })
+    .catch((e) => _reportUiError('Window control failed', e));
 }
 window.wcMinimize = () => _wcSend('minimize');
 window.wcMaximize = () => _wcSend('maximize');
@@ -2917,6 +2921,13 @@ window.wcCompact = () => {
 
   // What's-new content, newest first. Each entry: {version, notes:[{h, items[]}]}.
   const CHANGELOG = [
+    { version: '1.3.1', notes: [
+      { h: 'Fixes', items: [
+        'Fixed every button, toggle and window control being dead. A Microsoft Edge WebView2 update began enforcing a stricter content security rule that blocked the way most of the UI was wired, so clicks silently did nothing — the sidebar kept working because it is wired differently. This affected all recent versions, not just the newest.',
+        'Minimize, maximize and close now report a problem instead of failing silently.',
+        'Dragging the window by its title no longer logs a permission error.',
+      ]},
+    ]},
     { version: '1.3.0', notes: [
       { h: 'Windowed Mode', items: [
         'New Windowed Mode sizes Roblox to an exact 1920x1080 window, centred and clear of the taskbar, so the scan regions line up without changing your desktop resolution (toggle in Settings, off by default).',
