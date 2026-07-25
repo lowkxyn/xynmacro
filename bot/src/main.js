@@ -3361,6 +3361,15 @@ window.wcCompact = () => {
       clearTimeout(typingTimer);
       typingTimer = setTimeout(_refreshBugPreview, 400);
     });
+    // The card body scrolls, and the preview sits at the bottom of it: opening it
+    // without this leaves what you just asked to see below the fold.
+    document.getElementById('bugPreviewWrap')?.addEventListener('toggle', (e) => {
+      if (e.target.open) {
+        document.getElementById('bugPreview')
+          ?.scrollIntoView({ block: 'end', behavior: 'smooth' });
+      }
+    });
+
     document.getElementById('bugCancel')?.addEventListener('click', closeBugReport);
     overlay.addEventListener('click', (e) => { if (e.target === overlay) closeBugReport(); });
 
