@@ -1180,7 +1180,9 @@ body.sidebar-dragging *{user-select:none!important}
 .cl-eyebrow{font-size:10px;text-transform:uppercase;letter-spacing:.16em;color:var(--accent);font-weight:600}
 .cl-title{font-size:17px;font-weight:650;margin-top:3px;color:var(--text)}
 .cl-title span{color:var(--text2);font-family:var(--font-mono);font-weight:400;font-size:14px}
-.cl-body{padding:14px 2px 2px;overflow-y:auto;font-size:12.5px;line-height:1.55;color:var(--text2)}
+/* overflow-x is explicit because a single scrollable axis makes the other compute
+   to auto, so one wide child turns the whole card into a sideways scroller. */
+.cl-body{padding:14px 2px 2px;overflow-y:auto;overflow-x:hidden;font-size:12.5px;line-height:1.55;color:var(--text2)}
 .cl-body h4{color:var(--text);font-size:11.5px;margin:14px 0 5px;font-weight:600;letter-spacing:.01em}
 .cl-body h4:first-child{margin-top:0}
 .cl-body ul{margin:0;padding-left:16px}
@@ -1196,7 +1198,7 @@ body.sidebar-dragging *{user-select:none!important}
 .cl-entry{border-bottom:1px solid var(--border-light)}
 .cl-entry:last-child{border-bottom:none}
 .cl-entry-head{
-  width:100%;display:flex;align-items:center;gap:10px;
+  width:100%;min-width:0;display:flex;align-items:center;gap:10px;
   padding:11px 2px;background:none;border:none;cursor:pointer;text-align:left;
   color:var(--text);font-family:inherit;font-size:12.5px;font-weight:600;
   transition:color .15s;
@@ -1208,7 +1210,13 @@ body.sidebar-dragging *{user-select:none!important}
   color:var(--green);border:1px solid color-mix(in srgb,var(--green),transparent 60%);
   border-radius:20px;padding:1px 7px;
 }
-.cl-entry-summary{margin-left:auto;font-size:10.5px;font-weight:400;color:var(--text3);white-space:nowrap}
+/* The summary is every section heading joined together, so its length is whatever
+   that release happened to need. It gets the leftover width and truncates — it is a
+   teaser for the panel below, never the thing that decides how wide the card is. */
+.cl-entry-summary{
+  margin-left:auto;font-size:10.5px;font-weight:400;color:var(--text3);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;
+}
 .cl-chevron{flex-shrink:0;color:var(--text3);transition:transform .28s cubic-bezier(.4,0,.2,1)}
 .cl-entry.open .cl-chevron{transform:rotate(90deg)}
 .cl-entry.open .cl-entry-summary{opacity:0}
@@ -1224,6 +1232,9 @@ body.sidebar-dragging *{user-select:none!important}
 /* First-run welcome — same card shell as the changelog overlay, but roomier:
    type runs ~2 sizes up and the card is wider, it's the first thing a new
    user reads. */
+/* The release list is the one card with content that genuinely wants width: a row
+   per version, each summarising several sections. 530px squeezed it for no reason. */
+#changelogOverlay .changelog-card{width:min(780px,92vw)}
 #welcomeOverlay .changelog-card{width:min(620px,92vw)}
 #welcomeOverlay .cl-eyebrow{font-size:12px}
 #welcomeOverlay .cl-title{font-size:21px}
