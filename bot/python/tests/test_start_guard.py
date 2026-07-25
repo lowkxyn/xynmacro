@@ -26,7 +26,7 @@ class StartGuardTests(unittest.TestCase):
             patch.object(core, "update_game_window", return_value=False),
             patch.object(core.threading.Thread, "start") as start_thread,
         ):
-            ok, message = core._ui_start_macro()
+            ok, message, _code = core._ui_start_macro()
 
         self.assertFalse(ok)
         self.assertEqual(message, "Open Roblox before starting XynMacro.")
@@ -76,7 +76,7 @@ class StartGuardTests(unittest.TestCase):
                 patch.object(core.threading.Thread, "start") as start_thread,
             ):
                 core.GAME_HWND = 123
-                ok, message = core._ui_start_macro()
+                ok, message, _code = core._ui_start_macro()
 
             self.assertFalse(ok)
             self.assertIn("still stopping", message)

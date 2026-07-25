@@ -150,6 +150,9 @@ RESTORE_FULLSCREEN_ON_START = True
 # Size Roblox to a 1920x1080 window instead of changing the display resolution.
 # Off by default: it only fits on displays larger than 1080p.
 WINDOWED_MODE_ON_START = False
+# Why the last ensure_game_windowed() refused, when the reason is one the UI can
+# offer a way past. Only "windowed_too_small" is meaningful; everything else clears it.
+WINDOWED_BLOCK_CODE = None
 # A resolution change can leave an unreadable screen. Keep it only if confirmed.
 DISPLAY_CONFIRM_CHANGES = True
 DISPLAY_CONFIRM_TIMEOUT_SEC = 10.0
@@ -667,6 +670,82 @@ class _TeeBuffer(_io.TextIOBase):
         return getattr(self._orig, "encoding", "utf-8")
 
 
+def _session_marker_path():
+    return os.path.join(JSON_DIR, "last_session.json")
+
+
+# Filled in at boot when the previous sidecar never got to mark itself clean.
+# None means the last shutdown was orderly (or this is a first run).
+PREVIOUS_SESSION_CRASH = None
+
+
+def _claim_session_marker(log_path):
+    """Record this session as in-progress and report on how the last one ended.
+
+    A file is the only thing that survives the process it describes. The marker is
+    written unclean and only flipped to clean on the way out, so anything that stops
+    the sidecar without running that code — an unhandled exception, a kill, a power
+    cut — leaves the evidence behind for the next launch to find.
+    """
+    global PREVIOUS_SESSION_CRASH
+    path = _session_marker_path()
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            previous = json.load(fh)
+    except Exception:
+        previous = None
+    # A live PID means a second copy is running, not a crash — don't cry wolf.
+    if (previous and not previous.get("clean")
+            and not _pid_alive(int(previous.get("pid") or 0))):
+        PREVIOUS_SESSION_CRASH = {
+            "version": previous.get("version"),
+            "started_at": previous.get("started_at"),
+            "log": previous.get("log"),
+            "log_tail": _read_log_tail(previous.get("log")),
+        }
+    try:
+        os.makedirs(JSON_DIR, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump({
+                "pid": os.getpid(),
+                "version": APP_VERSION,
+                "started_at": time.time(),
+                "log": log_path,
+                "clean": False,
+            }, fh)
+    except Exception as e:
+        print(f"[sidecar] Could not write the session marker: {e}")
+
+
+def _release_session_marker():
+    """Mark this session as having shut down on purpose."""
+    path = _session_marker_path()
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except Exception:
+        return
+    if int(data.get("pid") or 0) != os.getpid():
+        return  # a newer sidecar owns the marker now; leave its state alone
+    data["clean"] = True
+    data["ended_at"] = time.time()
+    try:
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(data, fh)
+    except Exception:
+        pass
+
+
+def _read_log_tail(path, lines=60):
+    if not path or not os.path.isfile(path):
+        return ""
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            return "".join(fh.readlines()[-lines:]).strip()
+    except Exception:
+        return ""
+
+
 def _open_session_log_file():
     """Open a new timestamped log file for this sidecar instance. Returns the file
     handle or None on failure. Old session logs are kept (rotation = newest 25)."""
@@ -1039,14 +1118,46 @@ def _windowed_target_bounds(monitor, frame_width, frame_height,
     )
 
 
-def ensure_game_windowed(wait=2.0):
+def _windowed_fallback_bounds(monitor, frame_width, frame_height):
+    """The biggest window this display can actually hold, centred in the work area.
+
+    Only reached once the user has accepted the warning: the client ends up smaller
+    than 1920x1080, so every region is scaled, and unless the leftover space happens
+    to be 16:9 the X and Y scales differ and the templates skew. Returns
+    ``(x, y, width, height)`` or None when there is no usable space at all.
+    """
+    if not monitor:
+        return None
+    left = int(monitor.get("work_left", monitor["left"]))
+    top = int(monitor.get("work_top", monitor["top"]))
+    width = int(monitor.get("work_width", monitor["width"]))
+    height = int(monitor.get("work_height", monitor["height"]))
+    window_width = min(int(GAME_REFERENCE_WIDTH) + max(0, int(frame_width)), width)
+    window_height = min(int(GAME_REFERENCE_HEIGHT) + max(0, int(frame_height)), height)
+    if window_width - max(0, int(frame_width)) < 1 or window_height - max(0, int(frame_height)) < 1:
+        return None
+    return (
+        left + (width - window_width) // 2,
+        top + (height - window_height) // 2,
+        window_width,
+        window_height,
+    )
+
+
+def ensure_game_windowed(wait=2.0, allow_fallback=False):
     """Size and centre Roblox so its client area is exactly 1920x1080. Returns (ok, message).
 
     Roblox has to leave fullscreen first (F11 is a toggle, so this only presses it
     when the client really does cover the monitor), and the frame is measured rather
     than assumed: the title bar height depends on the Windows version and DPI, and
     getting it wrong shifts every scan region by exactly that many pixels.
+
+    ``allow_fallback`` accepts an undersized window on a display that cannot hold a
+    1920x1080 one. It is opt-in per call because the result scales (and usually
+    skews) every scan region, so the user has to have agreed to it first.
     """
+    global WINDOWED_BLOCK_CODE
+    WINDOWED_BLOCK_CODE = None
     if not update_game_window():
         return False, "Open Roblox before using Windowed Mode."
     if GAME_HWND is None:
@@ -1075,11 +1186,24 @@ def ensure_game_windowed(wait=2.0):
         return False, "Could not measure the Roblox window frame."
     frame_width, frame_height = frame
     bounds = _windowed_target_bounds(monitor, frame_width, frame_height)
-    if bounds is None:
-        return False, (
-            f"This display is {monitor['width']}x{monitor['height']} — too small for a "
-            "1920x1080 window. Use Fullscreen On Start or Set 1080p instead."
-        )
+    undersized = bounds is None
+    if undersized:
+        if not allow_fallback:
+            # The caller has to be able to tell "wrong size display" from "Windows
+            # refused" so it can offer the warning instead of a dead end. The frame
+            # can only be measured after leaving fullscreen, so this cannot be
+            # predicted before the attempt.
+            WINDOWED_BLOCK_CODE = "windowed_too_small"
+            return False, (
+                f"This display is {monitor['width']}x{monitor['height']} — too small for a "
+                "1920x1080 window. Use Fullscreen On Start or Set 1080p instead."
+            )
+        bounds = _windowed_fallback_bounds(monitor, frame_width, frame_height)
+        if bounds is None:
+            return False, (
+                f"This display is {monitor['width']}x{monitor['height']} — there is no room "
+                "for a Roblox window at all."
+            )
 
     x, y, window_width, window_height = bounds
     if not _move_game_window(x, y, window_width, window_height):
@@ -1092,6 +1216,14 @@ def ensure_game_windowed(wait=2.0):
         if (GAME_WIDTH, GAME_HEIGHT) == (GAME_REFERENCE_WIDTH, GAME_REFERENCE_HEIGHT):
             print(f"[window] Roblox windowed at {GAME_WIDTH}x{GAME_HEIGHT}, centred on screen.")
             return True, f"Roblox set to {GAME_WIDTH}x{GAME_HEIGHT}, centred."
+        if undersized and (GAME_WIDTH, GAME_HEIGHT) == (
+            window_width - frame_width, window_height - frame_height
+        ):
+            print(f"[window] Roblox windowed at {GAME_WIDTH}x{GAME_HEIGHT} (undersized, accepted).")
+            return True, (
+                f"Roblox set to {GAME_WIDTH}x{GAME_HEIGHT} — smaller than 1920x1080, "
+                "so detection is scaled."
+            )
     return False, (
         f"Roblox ended up {GAME_WIDTH}x{GAME_HEIGHT} instead of "
         f"{GAME_REFERENCE_WIDTH}x{GAME_REFERENCE_HEIGHT}."
@@ -6440,6 +6572,7 @@ def _get_screen_info():
         "bottom": 0,
         "device": "",
         "primary": False,
+        "scale": 1.0,
         "source": "unavailable",
     }
     monitor = _current_game_monitor_info()
@@ -6456,10 +6589,21 @@ def _get_screen_info():
         width = monitor["width"]
         height = monitor["height"]
         hz = 0
+    # This process is deliberately DPI-unaware, so GetMonitorInfo hands back the
+    # virtualised (scaled-down) desktop while EnumDisplaySettings reports real
+    # pixels. Their ratio is the Windows scaling factor, and it is the one thing
+    # that silently moves every click: at 125% the macro aims at coordinates 25%
+    # short of where the button actually is. GetDpiForWindow is useless here — an
+    # unaware process is lied to and always sees 96.
+    logical_width = max(1, int(monitor["width"]))
+    logical_height = max(1, int(monitor["height"]))
+    scale_x = width / logical_width if width else 1.0
+    scale_y = height / logical_height if height else 1.0
     return {
         "width": width,
         "height": height,
         "hz": hz,
+        "scale": round(max(scale_x, scale_y), 4),
         "left": monitor["left"],
         "top": monitor["top"],
         "right": monitor["right"],
@@ -6558,6 +6702,12 @@ def _ui_state_snapshot():
             _DISPLAY_RESTORE is not None or os.path.isfile(_display_restore_path())
         ),
         "display_confirm": _display_confirm_state(),
+        # Flag only. The log tail behind it is up to 60 lines and would be resent
+        # on every poll; the bug report fetches it on demand instead.
+        "previous_crash": None if PREVIOUS_SESSION_CRASH is None else {
+            "version": PREVIOUS_SESSION_CRASH.get("version"),
+            "started_at": PREVIOUS_SESSION_CRASH.get("started_at"),
+        },
         "game_window": {
             "found": GAME_HWND is not None,
             "minimized": GAME_WINDOW_MINIMIZED,
@@ -6860,7 +7010,7 @@ ISSUE_URL = "https://github.com/lowkxyn/xynmacro/issues/new"
 # GitHub truncates very long query strings; past this we tell the user to paste instead.
 ISSUE_URL_LIMIT = 6000
 
-BUG_REPORT_SECTIONS = ("system", "display", "game", "settings", "logs")
+BUG_REPORT_SECTIONS = ("system", "display", "game", "settings", "logs", "crash")
 
 
 def _scrub_user_paths(text):
@@ -7019,6 +7169,17 @@ def _bug_report_sections(selected, webview=None, ui_errors=None):
             ("Tail", "\n".join(str(line) for line in recent) if recent else "empty")
         )
         out["Recent log"] = rows
+
+    # The log of the run that died is in a different file from the current one, and
+    # it is the only place the cause could be. Offered only when there was a crash.
+    if "crash" in selected and PREVIOUS_SESSION_CRASH:
+        started = PREVIOUS_SESSION_CRASH.get("started_at")
+        out["Previous session (ended unexpectedly)"] = [
+            ("Version", PREVIOUS_SESSION_CRASH.get("version") or "unknown"),
+            ("Started", time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(started))
+             if started else None),
+            ("Tail", PREVIOUS_SESSION_CRASH.get("log_tail") or "the log file is gone"),
+        ]
 
     return out
 
@@ -7913,6 +8074,10 @@ def _start_parent_watchdog(parent_pid):
                 continue
             if not alive:
                 print(f"[sidecar] Tauri launcher (PID {pid}) is gone. Exiting to avoid orphaning.")
+                # This is the normal way the app closes, so it counts as a clean
+                # shutdown. os._exit below skips atexit, so it has to happen here
+                # or every ordinary close would look like a crash next launch.
+                _release_session_marker()
                 try:
                     os.remove(os.path.join(DATA_DIR, f"port_{pid}.json"))
                 except OSError:
@@ -7924,7 +8089,12 @@ def _start_parent_watchdog(parent_pid):
     threading.Thread(target=_watch, daemon=True, name="parent-watchdog").start()
 
 
-def _ui_start_macro():
+def _ui_start_macro(allow_windowed_fallback=False):
+    """Start the macro. Returns ``(ok, message, block_code)``.
+
+    ``block_code`` names a refusal the UI can offer a way past — currently only
+    "windowed_too_small" — and is None for every other outcome.
+    """
     global MACRO_THREAD, UI_STOP_REQUESTED, MACRO_STARTED_AT, MACRO_LAST_ERROR
     # Lock around the entire check+assign — without it, rapid F6 presses or the
     # `keyboard` lib delivering duplicate events can race past _ui_is_running()
@@ -7932,24 +8102,26 @@ def _ui_start_macro():
     # parallel and only one of them seeing the stop signal.
     with _macro_start_lock:
         if _ui_is_running():
-            return True, "Already running"
+            return True, "Already running", None
         if not _sanitize_training_order(TRAINING_ORDER_CUSTOM):
-            return False, "Add at least one stat to Training Order."
+            return False, "Add at least one stat to Training Order.", None
         # Refuse before the countdown or worker starts. Waiting until the first
         # capture makes Start look successful for several seconds and risks any
         # future startup input landing in whichever window currently has focus.
         # A minimized Roblox has no client rect; restore it instead of refusing.
         if not update_game_window() and not restore_game_window():
-            return False, "Open Roblox before starting XynMacro."
+            return False, "Open Roblox before starting XynMacro.", None
         if GAME_HWND is None:
-            return False, "Open Roblox before starting XynMacro."
+            return False, "Open Roblox before starting XynMacro.", None
         # Do this before the countdown so the scan regions are measured against
         # the window the run will actually use. Windowed Mode wins when both are on:
         # it is the more specific request, and fullscreen would undo it.
         if WINDOWED_MODE_ON_START:
-            windowed_ok, windowed_message = ensure_game_windowed()
+            windowed_ok, windowed_message = ensure_game_windowed(
+                allow_fallback=allow_windowed_fallback
+            )
             if not windowed_ok:
-                return False, windowed_message
+                return False, windowed_message, WINDOWED_BLOCK_CODE
         elif RESTORE_FULLSCREEN_ON_START:
             ensure_game_fullscreen()
         if (
@@ -7958,7 +8130,7 @@ def _ui_start_macro():
             and _background_monitor_stop is not None
             and _background_monitor_stop.is_set()
         ):
-            return False, "Previous game monitor is still stopping. Try Start again shortly."
+            return False, "Previous game monitor is still stopping. Try Start again shortly.", None
         UI_STOP_REQUESTED = False
         MACRO_LAST_ERROR = None
         _begin_run_result()
@@ -7966,7 +8138,7 @@ def _ui_start_macro():
         _telemetry_reset()
         MACRO_THREAD = threading.Thread(target=_run_macro_safe, daemon=True)
         MACRO_THREAD.start()
-    return True, "Started"
+    return True, "Started", None
 
 
 def _ui_stop_macro():
@@ -8127,6 +8299,9 @@ def run_ui_server(sidecar_pid=None, auth_token=None):
                 print(f"[sidecar] Session log: {session_log.name}")
             except Exception:
                 pass
+        _claim_session_marker(getattr(session_log, "name", None))
+        if PREVIOUS_SESSION_CRASH:
+            print("[sidecar] The previous session ended without shutting down cleanly.")
 
     ui_dir = os.path.join(BASE_DIR, "ui")
     app = Flask(__name__, static_folder=ui_dir, static_url_path="")
@@ -8305,8 +8480,11 @@ def run_ui_server(sidecar_pid=None, auth_token=None):
 
         try:
             if action == "start":
-                ok, msg = _ui_start_macro()
-                return jsonify({"ok": ok, "msg": msg})
+                allow_fallback = bool(
+                    isinstance(value, dict) and value.get("allow_windowed_fallback")
+                )
+                ok, msg, code = _ui_start_macro(allow_windowed_fallback=allow_fallback)
+                return jsonify({"ok": ok, "msg": msg, "code": code})
             if action == "stop":
                 ok, msg = _ui_stop_macro()
                 return jsonify({"ok": ok, "msg": msg})

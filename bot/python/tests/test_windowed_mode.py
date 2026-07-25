@@ -142,3 +142,80 @@ class TestEnsureGameWindowed:
 def test_windowed_mode_is_off_by_default():
     # It only fits on displays larger than 1080p, so it must be opt-in.
     assert core.DEFAULT_USER_SETTINGS["windowed_mode_on_start"] is False
+
+
+class TestFallbackBounds:
+    """Accepting an undersized window is opt-in, and only after a warning: the
+    client ends up scaled, and usually skewed, which breaks every template."""
+
+    def test_fills_the_work_area_when_1080p_will_not_fit(self):
+        # 1920x1080 panel, 48px taskbar, 16x39 frame: the client loses the taskbar
+        # and the title bar, so it is 1904x993 rather than 1920x1080.
+        x, y, width, height = core._windowed_fallback_bounds(_monitor(1920, 1080), 16, 39)
+        assert (width, height) == (1920, 1032)
+        assert (width - 16, height - 39) == (1904, 993)
+        assert (x, y) == (0, 0)
+
+    def test_never_grows_past_the_reference_size(self):
+        # A big display fits a real 1920x1080 window, so the fallback must not
+        # stretch the client — the regions are authored for exactly that size.
+        assert core._windowed_fallback_bounds(_monitor(), 16, 39) == (
+            (2560 - 1936) // 2, (1552 - 1119) // 2, 1936, 1119
+        )
+
+    def test_refuses_when_the_frame_alone_fills_the_display(self):
+        assert core._windowed_fallback_bounds(_monitor(40, 40, taskbar=0), 60, 60) is None
+        assert core._windowed_fallback_bounds(None, 16, 39) is None
+
+
+class TestUndersizedFallback:
+    """The refusal has to be distinguishable from every other one, because it is
+    the only one the UI can offer a way past."""
+
+    def test_the_refusal_is_tagged_so_the_ui_can_offer_the_warning(self):
+        core.WINDOWED_BLOCK_CODE = None
+        with patch.object(core, "update_game_window", return_value=True), \
+                patch.object(core, "GAME_HWND", 1), \
+                patch.object(core, "_monitor_info_for_window", return_value=_monitor(1920, 1080)), \
+                patch.object(core, "game_window_is_fullscreen", return_value=False), \
+                patch.object(core, "_game_window_frame_padding", return_value=(16, 39)), \
+                patch.object(core, "_move_game_window"):
+            ok, _ = core.ensure_game_windowed(wait=0.1)
+        assert ok is False
+        assert core.WINDOWED_BLOCK_CODE == "windowed_too_small"
+
+    def test_an_unrelated_refusal_is_not_tagged(self):
+        core.WINDOWED_BLOCK_CODE = "windowed_too_small"   # stale from a previous call
+        with patch.object(core, "update_game_window", return_value=False):
+            ok, _ = core.ensure_game_windowed(wait=0.1)
+        assert ok is False
+        assert core.WINDOWED_BLOCK_CODE is None
+
+    def test_with_consent_an_undersized_client_is_accepted(self):
+        # 1920x1080 panel, 48px taskbar, 16x39 frame -> a 1904x993 client.
+        with patch.object(core, "update_game_window", return_value=True), \
+                patch.object(core, "GAME_HWND", 1), \
+                patch.object(core, "GAME_WIDTH", 1904), patch.object(core, "GAME_HEIGHT", 993), \
+                patch.object(core, "_monitor_info_for_window", return_value=_monitor(1920, 1080)), \
+                patch.object(core, "game_window_is_fullscreen", return_value=False), \
+                patch.object(core, "_game_window_frame_padding", return_value=(16, 39)), \
+                patch.object(core, "_move_game_window", return_value=True) as move:
+            ok, message = core.ensure_game_windowed(wait=0.3, allow_fallback=True)
+        assert ok is True
+        assert "1904x993" in message
+        assert "scaled" in message
+        move.assert_called_once()
+
+    def test_consent_does_not_excuse_a_size_nobody_asked_for(self):
+        # Windows put the window somewhere else entirely — that is a failure even
+        # when an undersized result was allowed.
+        with patch.object(core, "update_game_window", return_value=True), \
+                patch.object(core, "GAME_HWND", 1), \
+                patch.object(core, "GAME_WIDTH", 800), patch.object(core, "GAME_HEIGHT", 600), \
+                patch.object(core, "_monitor_info_for_window", return_value=_monitor(1920, 1080)), \
+                patch.object(core, "game_window_is_fullscreen", return_value=False), \
+                patch.object(core, "_game_window_frame_padding", return_value=(16, 39)), \
+                patch.object(core, "_move_game_window", return_value=True):
+            ok, message = core.ensure_game_windowed(wait=0.3, allow_fallback=True)
+        assert ok is False
+        assert "800x600" in message

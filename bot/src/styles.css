@@ -1431,3 +1431,17 @@ body.sidebar-dragging *{user-select:none!important}
 /* Sits above the report card it was opened from. .countdown-overlay is 9999, so
    this must be higher — a lower value puts it behind and clicks reach the card. */
 #bugConfirmOverlay { z-index: 10000; }
+
+/* Shown only when the startup self-check finds inline onclick handlers dead — a
+   state where the rest of the UI is unusable, so this deliberately depends on no
+   theme variable and no other rule to be readable. */
+.csp-dead-banner {
+  position: fixed; inset: 0 0 auto 0; z-index: 2147483647;
+  display: flex; gap: 12px; align-items: center; justify-content: center;
+  padding: 10px 16px; background: #7f1d1d; color: #fff;
+  font: 500 13px/1.4 system-ui, sans-serif; text-align: center;
+}
+.csp-dead-banner button {
+  padding: 4px 12px; border: 1px solid #fff; border-radius: 6px;
+  background: transparent; color: #fff; font: inherit; cursor: pointer;
+}

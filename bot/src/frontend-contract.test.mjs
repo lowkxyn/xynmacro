@@ -5,9 +5,11 @@ import test from 'node:test';
 const sourceRoot = new URL('./', import.meta.url);
 const repoRoot = new URL('../../', import.meta.url);
 
-const [html, main, styles, readme, packageText, tauriConfText] = await Promise.all([
+const [html, main, hudHtml, hudMain, styles, readme, packageText, tauriConfText] = await Promise.all([
   readFile(new URL('index.html', sourceRoot), 'utf8'),
   readFile(new URL('main.js', sourceRoot), 'utf8'),
+  readFile(new URL('hud.html', sourceRoot), 'utf8'),
+  readFile(new URL('hud.js', sourceRoot), 'utf8'),
   readFile(new URL('styles.css', sourceRoot), 'utf8'),
   readFile(new URL('README.md', repoRoot), 'utf8'),
   readFile(new URL('package.json', new URL('../', sourceRoot)), 'utf8'),
@@ -65,7 +67,7 @@ test('dialogs are labelled, modal, keyboard dismissible, and focus-managed', () 
   for (const closeAction of [
     'closePalette()',
     'closeShortcuts()',
-    '_cancelResolutionWarning()',
+    '_cancelStartWarning()',
     'dismissWelcome()',
     'closeChangelog()',
     'closeAnnouncement()',
@@ -220,6 +222,25 @@ test('inline onclick handlers still exist, so the CSP guard above stays relevant
   assert.ok(html.split('onclick=').length - 1 > 20);
 });
 
+/* The CSP guard above only holds if the config stays right. This is the runtime
+   backstop: whatever the next engine update decides to enforce, the app finds out
+   at startup and says so, rather than presenting a UI where nothing works. */
+test('startup proves inline handlers actually fire', () => {
+  const probe = main.slice(main.indexOf('function checkInlineHandlers'));
+  assert.ok(probe, 'the inline-handler self-check is gone');
+  const body = probe.slice(0, probe.indexOf('})();'));
+  // It has to click a real element with a real inline attribute — reading the CSP
+  // string or trusting a flag would pass in exactly the build that is broken.
+  assert.match(body, /setAttribute\('onclick'/);
+  assert.match(body, /\.click\(\)/);
+  assert.match(body, /securitypolicyviolation/);
+  assert.match(body, /csp-dead-banner/);
+  assert.match(styles, /\.csp-dead-banner/);
+  // The banner must wire its own button with addEventListener — an inline handler
+  // there would be dead in exactly the situation the banner exists for.
+  assert.match(body, /copy\.addEventListener\('click'/);
+});
+
 test('window controls surface failures instead of swallowing them', () => {
   // A silently failing minimize is indistinguishable from a dead UI. Scoped to
   // _wcSend: the splash reveal and drag handler are deliberately fire-and-forget.
@@ -271,4 +292,21 @@ test('the app never tells users to send reports privately to the author', () => 
   for (const source of [html, main]) {
     assert.doesNotMatch(source, /DM|direct message/i);
   }
+});
+
+/* Capture is a screen grab, not a window grab: anything drawn over Roblox is read
+   as part of Roblox. The region outlines land on the exact boxes they describe, and
+   the Ki check scans the whole client, so there is no safe corner for the panel
+   either. The HUD must therefore leave the game window alone while a run is on. */
+test('the HUD refuses to sit over the game while the macro runs', () => {
+  assert.match(hudMain, /if \(running && !wasRunning && docked\)/);
+  assert.match(hudMain, /await setDocked\(false, spot\)/);
+  // The Dock button is the other way back in, and it has to be shut too.
+  const dockButton = hudMain.slice(hudMain.indexOf("el('btnDock')"));
+  assert.match(dockButton.slice(0, dockButton.indexOf('});')), /if \(wasRunning\) return/);
+  // Popped out it can still be dragged back over the game, so it says so.
+  assert.match(hudMain, /action: 'rect'/);
+  assert.match(hudMain, /hudOverlapWarning/);
+  assert.match(hudHtml, /id="hudOverlapWarning"/);
+  assert.match(hudHtml, /\.overlap-warning\{/);
 });

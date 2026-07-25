@@ -1012,6 +1012,22 @@ async fn hud(
             win.show().map_err(|e| e.to_string())?;
             Ok(serde_json::json!({ "open": true }))
         }
+        // Where the window actually is, which is not the same as where the page last
+        // put it: popped out, the user can drag it anywhere, including back over the
+        // game. The page needs the real rect to detect that.
+        "rect" => {
+            let Some(win) = existing else {
+                return Err("HUD is not open".into());
+            };
+            let position = win.outer_position().map_err(|e| e.to_string())?;
+            let size = win.outer_size().map_err(|e| e.to_string())?;
+            Ok(serde_json::json!({
+                "x": position.x,
+                "y": position.y,
+                "width": size.width,
+                "height": size.height,
+            }))
+        }
         "docked" => {
             let Some(win) = existing else {
                 return Err("HUD is not open".into());

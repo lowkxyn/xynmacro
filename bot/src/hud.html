@@ -75,6 +75,10 @@
   .v.bad{color:var(--red)}
   .v.warn{color:var(--amber)}
   .note{color:var(--amber);font-size:11px;margin-top:5px;line-height:1.4}
+  /* Deliberately louder than .note: this one means the readings are actively wrong,
+     not that something is worth knowing. */
+  .overlap-warning{background:#7f1d1d;color:#fff;font-size:11px;line-height:1.4;
+    padding:7px 9px;border-radius:6px;margin-bottom:8px}
 
   .region{display:flex;align-items:center;gap:7px;padding:1px 0}
   .region i{width:9px;height:9px;border-radius:2px;flex-shrink:0}
@@ -93,6 +97,14 @@
       <button type="button" id="btnBoxes">Boxes</button>
       <button type="button" id="btnDock">Dock</button>
     </header>
+
+    <!-- The macro captures screen pixels, so a panel sitting over the game is read
+         as part of the game. Unavoidable on a single fullscreen monitor, hence a
+         warning rather than a silent reposition. -->
+    <div class="overlap-warning" id="hudOverlapWarning" style="display:none">
+      This panel is covering Roblox. The macro reads screen pixels, so it is
+      scanning the HUD instead of the game — drag it off the game window.
+    </div>
 
     <section>
       <h2>Window &amp; scaling</h2>

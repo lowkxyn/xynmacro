@@ -138,6 +138,59 @@ function _reportUiError(what, error) {
 window.addEventListener('error', (e) => _reportUiError('UI error', e.error || e.message));
 window.addEventListener('unhandledrejection', (e) => _reportUiError('UI error', e.reason));
 
+/* Inline-handler self-check. index.html wires its controls with inline onclick=,
+   and a WebView2 update once made CSP drop all of them — every button animated,
+   nothing happened, no error anywhere (1.3.1). Prove they fire at startup instead
+   of letting the user discover it. Cheap: one synthetic click on a hidden button.
+   Uses only addEventListener/DOM APIs, so the check itself cannot be the casualty. */
+window.__xynInlineProbeFired = false;
+(function checkInlineHandlers() {
+  let violation = '';
+  // CSP violation events are queued, not dispatched synchronously, so the reason
+  // arrives after the click returns — hence the listener stays on and the failure
+  // path waits a turn for it. Without it the report just says "did not run".
+  document.addEventListener('securitypolicyviolation', (e) => {
+    if (e.violatedDirective && e.violatedDirective.indexOf('script-src') === 0) {
+      violation = `${e.violatedDirective} blocked ${e.blockedURI || 'inline'}`;
+    }
+  });
+  try {
+    const probe = document.createElement('button');
+    probe.setAttribute('onclick', 'window.__xynInlineProbeFired = true');
+    probe.style.display = 'none';
+    document.body.appendChild(probe);
+    probe.click();
+    probe.remove();
+  } catch (e) {
+    _reportUiError('Inline handler self-check failed', e);
+  }
+  if (window.__xynInlineProbeFired) return;
+
+  // The normal UI is unusable in this state, so the banner is built from scratch
+  // and owns its own listeners rather than relying on anything below this point.
+  window.addEventListener('DOMContentLoaded', () => setTimeout(() => {
+    const detail = violation || 'inline onclick did not run';
+    UI_ERROR_RING.push(`00:00:00 Inline handlers dead: ${detail}`);
+    console.error('Inline handler self-check failed:', detail);
+    const bar = document.createElement('div');
+    bar.className = 'csp-dead-banner';
+    const text = document.createElement('span');
+    text.textContent = 'Buttons in this build are disabled by your browser engine '
+      + '(' + detail + '). Update Microsoft Edge WebView2, or reinstall XynMacro '
+      + 'from GitHub releases.';
+    const copy = document.createElement('button');
+    copy.type = 'button';
+    copy.textContent = 'Copy details';
+    copy.addEventListener('click', () => {
+      navigator.clipboard.writeText(`XynMacro inline handler failure: ${detail}\nUA: ${navigator.userAgent}`);
+      copy.textContent = 'Copied';
+    });
+    bar.appendChild(text);
+    bar.appendChild(copy);
+    document.body.prepend(bar);
+  }, 0));
+})();
+
 const { invoke } = window.__TAURI__.core;
 
 const ACTIVE_PREFERENCE_KEYS = [
@@ -1418,20 +1471,20 @@ window.wcCompact = () => {
   }
 
   /* Actions */
-  let _cancelResolutionWarning = null;
+  let _cancelStartWarning = null;
   // First Start of the session on a non-1080p display. The 5s countdown is a
   // read-the-warning delay, not a timer to launch on: at 0 Continue simply
   // becomes clickable. Starting by itself would launch the macro at a moment the
   // user never picked. The macro still runs at any resolution — this is only a
   // heads-up, so Cancel backs out.
-  function _confirmResStart(screen) {
+  function _confirmStartWarning(text) {
     return new Promise((resolve) => {
       const ov = document.getElementById('startWarnOverlay');
       const msg = document.getElementById('warnResMsg');
       const yes = document.getElementById('warnYes');
       const cancel = document.getElementById('warnCancel');
       if (!ov || !yes || !cancel) { resolve(true); return; }
-      if (msg) msg.textContent = `Your display is ${screen.w}×${screen.h}, not 1920×1080. The macro will still run, but clicks and detection may be less accurate.`;
+      if (msg) msg.textContent = text;
       let remaining = 5;
       yes.disabled = true;
       yes.style.animation = '';          // let the faded entrance animation replay
@@ -1444,7 +1497,7 @@ window.wcCompact = () => {
         if (settled) return;
         settled = true;
         if (timer) clearInterval(timer);
-        _cancelResolutionWarning = null;
+        _cancelStartWarning = null;
         yes.onclick = null; cancel.onclick = null;
         // Matched fade-out (entrance played back), then resolve once it's gone.
         yes.style.animation = '';        // clear the inline 'none' so the exit animation runs
@@ -1453,7 +1506,7 @@ window.wcCompact = () => {
         _restoreModalFocus(ov);
         setTimeout(() => { ov.classList.remove('closing'); resolve(ok); }, 500);
       };
-      _cancelResolutionWarning = () => done(false);
+      _cancelStartWarning = () => done(false);
       cancel.onclick = () => done(false);
       yes.onclick = () => { if (!yes.disabled) done(true); };
       timer = setInterval(() => {
@@ -1489,10 +1542,29 @@ window.wcCompact = () => {
       // Cancel = not accepted, so it reappears on the next Start.
       while (XynMacroScreenState.needsResolutionWarning(_screenRes, _acceptedDisplaySignature)) {
         const warnedScreen = _screenRes;
-        const ok = await _confirmResStart(warnedScreen);
+        const ok = await _confirmStartWarning(
+          `Your display is ${warnedScreen.w}×${warnedScreen.h}, not 1920×1080. `
+          + 'The macro will still run, but clicks and detection may be less accurate.'
+        );
         if (!ok || actionSeq !== _macroActionSeq) return;
         if (_screenRes?.signature === warnedScreen.signature) {
           _acceptedDisplaySignature = warnedScreen.signature;
+        }
+      }
+
+      // Display scaling is tracked separately from resolution: a 1920×1080 display
+      // at 125% passes the check above and still puts every click in the wrong place.
+      while (XynMacroScreenState.needsDpiWarning(_screenRes, _acceptedDpiSignature)) {
+        const warnedScreen = _screenRes;
+        const percent = Math.round(warnedScreen.scale * 100);
+        const ok = await _confirmStartWarning(
+          `Windows display scaling is ${percent}%, not 100%. XynMacro reads screen `
+          + 'pixels directly, so clicks will land off-target. Set Scale to 100% in '
+          + 'Windows Display settings, then reopen Roblox.'
+        );
+        if (!ok || actionSeq !== _macroActionSeq) return;
+        if (_screenRes?.signature === warnedScreen.signature) {
+          _acceptedDpiSignature = warnedScreen.signature;
         }
       }
 
@@ -1513,8 +1585,23 @@ window.wcCompact = () => {
       }
 
       _showStartCountdown(delay);
-      const r = await sendCommand('start');
+      let r = await sendCommand('start');
       if (actionSeq !== _macroActionSeq) return;
+      // Windowed Mode on a display too small for a 1920×1080 window. The backend
+      // can only find this out after taking Roblox out of fullscreen, so it comes
+      // back as a refusal rather than something checkable up front. Same warning
+      // shape as the resolution one: read it, then Continue runs undersized.
+      if (r && r.ok === false && r.code === 'windowed_too_small') {
+        _hideStartCountdown();
+        const ok = await _confirmStartWarning(
+          `${r.msg} Continue anyway and Roblox will be sized as large as this display `
+          + 'allows — every scan region gets scaled, and detection may fail outright.'
+        );
+        if (!ok || actionSeq !== _macroActionSeq) return;
+        _showStartCountdown(delay);
+        r = await sendCommand('start', { allow_windowed_fallback: true });
+        if (actionSeq !== _macroActionSeq) return;
+      }
       if (!r || r.ok === false) {
         _hideStartCountdown();
         showToast(r?.msg || 'Macro did not start', 'err');
@@ -2066,6 +2153,8 @@ window.wcCompact = () => {
   let _screenRes = null;
   let _lastErrCount = null;   // tracks state.error_count so we toast once per new error
   let _acceptedDisplaySignature = null;
+  let _acceptedDpiSignature = null;
+  let _crashNoticeShown = false;
   let _elapsedTimer = null;
   let _startedAt = 0;
   let _logSince = 0;
@@ -2153,6 +2242,22 @@ window.wcCompact = () => {
     const running = !!state.running;
     _gameWindowFound = !!state.game_window?.found;
     _gameWindowMinimized = !!state.game_window?.minimized;
+
+    // The previous run ended without shutting down cleanly. Say so once, and make
+    // that session's log available in the report — it is in a different file from
+    // the current one, so nothing else would ever include it.
+    if (!_crashNoticeShown) {
+      _crashNoticeShown = true;
+      const crashRow = document.getElementById('bugSecCrashRow');
+      const crashBox = document.getElementById('bugSecCrash');
+      if (crashRow) crashRow.hidden = !state.previous_crash;
+      // A hidden checkbox still reports .checked, which would ask the backend for a
+      // section that isn't on offer. Keep the two in step.
+      if (crashBox) crashBox.checked = !!state.previous_crash;
+      if (state.previous_crash) {
+        showToast('Last session ended unexpectedly — its log is in Report a bug', 'warn');
+      }
+    }
     const backendActivity = state.stop_requested ? 'Stopping'
       : state.controller_paused_for_senzu ? 'Auto-Senzu'
       : state.controller_paused ? 'Paused'
@@ -2354,24 +2459,36 @@ window.wcCompact = () => {
       if (!nextScreen) {
         _screenRes = null;
         _acceptedDisplaySignature = null;
+        _acceptedDpiSignature = null;
         resIcon.className = 'res-icon res-warn';
         resIcon.innerHTML = '&#10007;';
         resText.textContent = 'Unavailable';
         if (resPill) resPill.title = 'Open Roblox to detect its display';
       } else {
         const { w, h, hz } = nextScreen;
-        const ok = (w === 1920 && h === 1080);
+        const scaled = Math.abs(nextScreen.scale - 1) > 0.01;
+        // Scaling counts as "not ok" here: 1920×1080 at 125% is as broken for a
+        // pixel-reading macro as the wrong resolution, and the pill is the only
+        // place the user would ever notice.
+        const ok = (w === 1920 && h === 1080) && !scaled;
         if (_screenRes?.signature !== nextScreen.signature) {
           _acceptedDisplaySignature = null;
+          _acceptedDpiSignature = null;
         }
         resIcon.className = 'res-icon ' + (ok ? 'res-ok' : 'res-warn');
         resIcon.innerHTML = ok ? '&#10003;' : '&#10007;';
-        resText.textContent = ok ? '1080p' : `${w}×${h}`;
+        resText.textContent = ok ? '1080p'
+          : scaled ? `${Math.round(nextScreen.scale * 100)}% scale`
+          : `${w}×${h}`;
         _screenRes = nextScreen;
         if (resPill) {
           let tip = `Resolution ${w}×${h}`;
           if (hz) tip += ` @ ${hz}Hz`;
-          if (!ok) tip += ' — macro designed for 1920×1080';
+          if (scaled) {
+            tip += ` — Windows scaling ${Math.round(nextScreen.scale * 100)}%, set it to 100%`;
+          } else if (!ok) {
+            tip += ' — macro designed for 1920×1080';
+          }
           resPill.title = tip;
         }
       }
@@ -2893,7 +3010,7 @@ window.wcCompact = () => {
     if (e.key === 'Escape') {
       if (paletteOpen) { e.preventDefault(); closePalette(); return; }
       if (shortcutsOpen) { e.preventDefault(); closeShortcuts(); return; }
-      if (_cancelResolutionWarning) { e.preventDefault(); _cancelResolutionWarning(); return; }
+      if (_cancelStartWarning) { e.preventDefault(); _cancelStartWarning(); return; }
       // Innermost first: the confirmation sits on top of the report card.
       if (document.getElementById('bugConfirmOverlay')?.classList.contains('open')) {
         e.preventDefault(); window.closeBugConfirm(); return;
@@ -2939,6 +3056,23 @@ window.wcCompact = () => {
 
   // What's-new content, newest first. Each entry: {version, notes:[{h, items[]}]}.
   const CHANGELOG = [
+    { version: '1.5.0', notes: [
+      { h: 'Catching problems before you do', items: [
+        'The app now checks its own buttons on startup. If your browser engine ever blocks them again the way it did in 1.3.1, you get a red banner saying so instead of a window where nothing happens.',
+        'If XynMacro closes unexpectedly, the next launch says so and keeps that session\'s log ready in Report a bug — the log the crash is actually in, which no report could reach before.',
+      ]},
+      { h: 'Display scaling', items: [
+        'Start now warns when Windows display scaling is not 100%. XynMacro reads screen pixels directly, so at 125% or 150% every click lands short of the button — and the resolution readout looked perfectly fine the whole time.',
+        'The resolution pill shows the scaling instead of a tick when it is not 100%.',
+      ]},
+      { h: 'Windowed Mode', items: [
+        'On a display too small for a 1920x1080 window, Windowed Mode no longer just refuses. It warns that detection will be scaled and lets you continue if you want to, the same way the non-1080p warning works.',
+      ]},
+      { h: 'Debug HUD fix', items: [
+        'Fixed the docked HUD breaking the very detection it is there to check. The macro reads screen pixels, so the boxes drawn over Roblox were being scanned as if they were part of the game.',
+        'Starting a run now pops the HUD out and parks it clear of the game window, and it cannot be re-docked until you stop. If it ends up over Roblox anyway, it says so in red.',
+      ]},
+    ]},
     { version: '1.4.0', notes: [
       { h: 'Report a bug', items: [
         'New Report a bug screen in Settings and in the Logs diagnostics, so a problem can actually be diagnosed instead of guessed at.',
@@ -3316,6 +3450,7 @@ window.wcCompact = () => {
     ['game', 'bugSecGame'],
     ['settings', 'bugSecSettings'],
     ['logs', 'bugSecLogs'],
+    ['crash', 'bugSecCrash'],
   ];
 
   function _bugRequest() {

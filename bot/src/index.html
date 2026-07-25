@@ -930,6 +930,8 @@
         <label class="bug-check"><input type="checkbox" id="bugSecGame" checked><span>Roblox window <em>size, position and whether it is 16:9</em></span></label>
         <label class="bug-check"><input type="checkbox" id="bugSecSettings" checked><span>Macro settings <em>the ones that change detection or timing</em></span></label>
         <label class="bug-check"><input type="checkbox" id="bugSecLogs" checked><span>Recent log <em>last 25 lines and the last error</em></span></label>
+        <!-- Only unhidden when the previous session ended without shutting down cleanly. -->
+        <label class="bug-check" id="bugSecCrashRow" hidden><input type="checkbox" id="bugSecCrash" checked><span>Last crash <em>the log of the session that ended unexpectedly</em></span></label>
       </div>
       <p class="bug-privacy">Your Windows username is replaced with <code>%USER%</code> everywhere it appears. No account names, IP address or file paths are collected.</p>
 

@@ -3,6 +3,23 @@
 All notable changes to XynMacro. This file is generated from the in-app
 "What's new" notes by `scripts/changelog.mjs` — edit those, not this file.
 
+## 1.5.0
+
+### Catching problems before you do
+- The app now checks its own buttons on startup. If your browser engine ever blocks them again the way it did in 1.3.1, you get a red banner saying so instead of a window where nothing happens.
+- If XynMacro closes unexpectedly, the next launch says so and keeps that session's log ready in Report a bug — the log the crash is actually in, which no report could reach before.
+
+### Display scaling
+- Start now warns when Windows display scaling is not 100%. XynMacro reads screen pixels directly, so at 125% or 150% every click lands short of the button — and the resolution readout looked perfectly fine the whole time.
+- The resolution pill shows the scaling instead of a tick when it is not 100%.
+
+### Windowed Mode
+- On a display too small for a 1920x1080 window, Windowed Mode no longer just refuses. It warns that detection will be scaled and lets you continue if you want to, the same way the non-1080p warning works.
+
+### Debug HUD fix
+- Fixed the docked HUD breaking the very detection it is there to check. The macro reads screen pixels, so the boxes drawn over Roblox were being scanned as if they were part of the game.
+- Starting a run now pops the HUD out and parks it clear of the game window, and it cannot be re-docked until you stop. If it ends up over Roblox anyway, it says so in red.
+
 ## 1.4.0
 
 ### Report a bug

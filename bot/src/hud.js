@@ -6,7 +6,14 @@
  * boxes are meaningless, so they are hidden.
  *
  * All numbers come from the backend's /state — the same source the main window reads,
- * so the HUD can never show a second, disagreeing version of the truth. */
+ * so the HUD can never show a second, disagreeing version of the truth.
+ *
+ * IMPORTANT — the HUD cannot be docked while the macro runs. Capture is a screen
+ * grab, not a window grab, so whatever is drawn over Roblox is captured as if it
+ * were the game: the region outlines land on the very boxes they describe, and the
+ * Ki check scans the entire client, which leaves no safe corner for the panel
+ * either. Docked is therefore an alignment tool for a stopped macro; starting a run
+ * pops the HUD out and parks it clear of the game. */
 (function () {
   const invoke = window.__TAURI__.core.invoke;
   const REFERENCE_WIDTH = 1920;
@@ -23,6 +30,8 @@
   let scaleFactor = 1;
   let polling = false;
   let consecutiveFailures = 0;
+  let wasRunning = false;
+  let poppedOutByRun = false;   // so stopping restores the dock only if a run took it
 
   function set(id, text, cls) {
     const node = el(id);
@@ -212,6 +221,68 @@
     }
   }
 
+  /* ---- keeping out of the scanner's way -------------------------------------- */
+
+  function _intersects(a, b) {
+    return a.x < b.x + b.width && b.x < a.x + a.width
+      && a.y < b.y + b.height && b.y < a.y + a.height;
+  }
+
+  /* A spot on the game's monitor that the scanner never captures, or null when the
+     game fills it. Preference is right, then left, then below — anywhere the panel
+     can sit whole without touching the client rect. */
+  function _clearSpot(gw, screen, width, height) {
+    if (!screen.width || !screen.height) return null;
+    const gap = 8;
+    const candidates = [
+      { x: gw.x + gw.width + gap, y: gw.y },
+      { x: gw.x - width - gap, y: gw.y },
+      { x: gw.x, y: gw.y + gw.height + gap },
+      { x: gw.x, y: gw.y - height - gap },
+    ];
+    for (const spot of candidates) {
+      const fits = spot.x >= screen.left && spot.x + width <= screen.right
+        && spot.y >= screen.top && spot.y + height <= screen.bottom;
+      if (fits && !_intersects({ ...spot, width, height }, gw)) return spot;
+    }
+    return null;
+  }
+
+  async function keepClearOfTheScan(state) {
+    const running = !!state.running;
+    const gw = state.game_window || {};
+    const screen = state.screen || {};
+    const banner = el('hudOverlapWarning');
+
+    if (running && !wasRunning && docked) {
+      // Undock before the first scan tick rather than after: one captured frame with
+      // the boxes in it is enough to misread a template.
+      poppedOutByRun = true;
+      const spot = gw.found && gw.width ? _clearSpot(gw, screen, 360, 460) : null;
+      await setDocked(false, spot);
+    } else if (!running && wasRunning && poppedOutByRun) {
+      poppedOutByRun = false;
+      await setDocked(true);
+    }
+    wasRunning = running;
+
+    if (!banner) return;
+    // Popped out, the user can drag it back over the game at any time, so this is
+    // checked every poll rather than only on the move that caused it.
+    let overlapping = false;
+    if (running && gw.found && gw.width) {
+      try {
+        const rect = await invoke('hud', { action: 'rect' });
+        overlapping = _intersects(rect, {
+          x: gw.x, y: gw.y, width: gw.width, height: gw.height,
+        });
+      } catch (e) {
+        overlapping = false;   // unknown position is not evidence of a problem
+      }
+    }
+    banner.style.display = overlapping ? '' : 'none';
+  }
+
   /* ---- poll ------------------------------------------------------------------ */
 
   async function poll() {
@@ -226,6 +297,7 @@
       renderWindow(state);
       renderRun(state);
       renderRegions(state.scan_regions || []);
+      await keepClearOfTheScan(state);
       await place(state);
     } catch (e) {
       consecutiveFailures += 1;
@@ -243,14 +315,18 @@
     document.body.classList.toggle('no-boxes', !showBoxes);
   });
 
-  el('btnDock').addEventListener('click', () => setDocked(true));
+  el('btnDock').addEventListener('click', () => {
+    // Docking mid-run would put the boxes straight back into the capture.
+    if (wasRunning) return;
+    setDocked(true);
+  });
 
   el('hudHeader').addEventListener('mousedown', (event) => {
     if (docked || event.target.closest('button')) return;
     invoke('hud', { action: 'drag' }).catch(() => {});
   });
 
-  async function setDocked(next) {
+  async function setDocked(next, spot) {
     docked = next;
     document.body.classList.toggle('docked', docked);
     document.body.classList.toggle('popped', !docked);
@@ -258,9 +334,11 @@
     placedGeometry = null;
     await invoke('hud', { action: 'docked', value: docked });
     if (!docked) {
+      // Placed in one move: popping out and then correcting the position would
+      // show the panel jumping across the screen every time a run starts.
       await invoke('hud', {
         action: 'place',
-        value: { x: 80, y: 80, width: 360, height: 460 },
+        value: { x: spot?.x ?? 80, y: spot?.y ?? 80, width: 360, height: 460 },
       }).catch(() => {});
       await reveal();
     }
