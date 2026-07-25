@@ -947,6 +947,34 @@
   </div>
 </div>
 
+<!-- Posting to GitHub is public and permanent, so it is deliberately hard to do by
+     accident: a read-the-warning cooldown, then three separate clicks a second
+     apart. Copy stays the one-click path for anyone who does not want that. -->
+<div class="countdown-overlay changelog-overlay" id="bugConfirmOverlay">
+  <div class="changelog-card bug-confirm-card" role="dialog" aria-modal="true" aria-label="Confirm posting publicly" tabindex="-1">
+    <div class="cl-head">
+      <div class="cl-eyebrow bug-eyebrow-warn">Public post</div>
+      <div class="cl-title">This will be visible to anyone</div>
+    </div>
+    <div class="cl-body">
+      <p class="bug-warn-lead">A GitHub issue is <strong>public and permanent</strong>. Anyone can read it, search engines index it, and deleting it later does not undo that.</p>
+      <div class="bug-label">Before you post</div>
+      <ul class="bug-reqs">
+        <li>You need a <strong>GitHub account</strong> and must be signed in.</li>
+        <li>Your GitHub username will be attached to the post. It is not anonymous.</li>
+        <li>Re-read the preview. Anything you typed goes public too.</li>
+        <li>Nothing is posted until you press Submit on GitHub.</li>
+      </ul>
+      <p class="bug-warn-alt">Prefer to stay anonymous? Cancel and use <strong>Copy instead</strong> — it puts the same report on your clipboard to share however you like.</p>
+    </div>
+    <div class="cl-foot bug-foot">
+      <span class="bug-warn" id="bugConfirmHint"></span>
+      <button class="btn-sm" id="bugConfirmCancel">Cancel</button>
+      <button class="btn-primary" id="bugConfirmGo" disabled>Read the warning…</button>
+    </div>
+  </div>
+</div>
+
 <!-- Update-ready toast: shows once the new version is downloaded; the install
      itself happens on app close or via the restart button, never mid-session. -->
 <div class="update-toast" id="updateToast" role="status">

@@ -55,7 +55,7 @@ test('visible form fields and titlebar icon buttons have accessible names', () =
 
 test('dialogs are labelled, modal, keyboard dismissible, and focus-managed', () => {
   const dialogs = [...html.matchAll(/<div\b[^>]*role="dialog"[^>]*>/g)].map((match) => match[0]);
-  assert.equal(dialogs.length, 8);
+  assert.equal(dialogs.length, 9);
   for (const dialog of dialogs) {
     assert.match(dialog, /aria-modal="true"/);
     assert.match(dialog, /aria-label="[^"]+"/);
@@ -70,6 +70,7 @@ test('dialogs are labelled, modal, keyboard dismissible, and focus-managed', () 
     'closeChangelog()',
     'closeAnnouncement()',
     'closeBugReport()',
+    'closeBugConfirm()',
   ]) {
     assert.ok(main.includes(closeAction), `Escape wiring should include ${closeAction}`);
   }
@@ -232,4 +233,42 @@ test('the vestigial drag region that the ACL forbids is gone', () => {
   // data-tauri-drag-region calls plugin:window|start_dragging, which core:default
   // does not grant; main.js drags via the wc command instead.
   assert.doesNotMatch(html, /data-tauri-drag-region/);
+});
+
+/* Posting to GitHub is public and permanent. It must be unreachable by accident:
+   a read-the-warning cooldown first, then three clicks spaced a second apart, and
+   the primary button is never the initially focused control. */
+test('posting publicly is gated against accidental clicks', () => {
+  assert.match(main, /const BUG_CONFIRM_COOLDOWN_SEC = 5/);
+  assert.match(main, /const BUG_CONFIRM_CLICKS = 3/);
+  assert.match(main, /const BUG_CONFIRM_CLICK_GAP_MS = 1000/);
+  // The countdown only enables the button; it must never post on its own.
+  assert.doesNotMatch(main, /setTimeout\(\(\) => \{[^}]*bug_report_open/);
+  // Focus lands on Cancel, not on the destructive action.
+  assert.match(main, /_focusModal\(overlay, cancel\)/);
+  // Opening is reached only through the confirmation.
+  assert.match(main, /getElementById\('bugOpen'\)\?\.addEventListener\('click', openBugConfirm\)/);
+  // Not the `disabled` attribute: a disabled button passes clicks through to the
+  // dialog behind it, which dismissed the warning and altered the report underneath.
+  assert.match(main, /if \(submitting \|\| Date\.now\(\) < lockedUntil\) return;/);
+  assert.match(main, /go\.classList\.add\('is-locked'\)/);
+  assert.doesNotMatch(main, /go\.disabled = true/);
+});
+
+test('the confirm buttons never move between states', () => {
+  // The label swings from "click 3 more times" to "Wait…". Without a fixed width the
+  // footer reflows and Cancel lands under a cursor mid-click.
+  assert.match(styles, /#bugConfirmGo \{ min-width: \d+px/);
+});
+
+test('the report carries frontend errors, which never reach the sidecar log', () => {
+  assert.match(main, /const UI_ERROR_RING = \[\]/);
+  assert.match(main, /UI_ERROR_RING\.push/);
+  assert.match(main, /ui_errors: UI_ERROR_RING\.slice\(-10\)/);
+});
+
+test('the app never tells users to send reports privately to the author', () => {
+  for (const source of [html, main]) {
+    assert.doesNotMatch(source, /DM|direct message/i);
+  }
 });

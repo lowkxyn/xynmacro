@@ -119,8 +119,17 @@ window.addEventListener('backend-error', (e) => {
 /* A throw inside an inline onclick handler is swallowed by the WebView, so a broken
    control looks identical to one that simply did nothing. Surface it instead. The
    toast helper lives further down, so fall back to the error bar until it exists. */
+/* Frontend errors never reach the sidecar log, so a bug report assembled only from
+   the backend can miss the actual failure entirely — exactly what happened when a
+   CSP change killed every button and the backend log looked perfectly healthy.
+   Keep a small ring of them for the report. */
+const UI_ERROR_RING = [];
+const UI_ERROR_RING_MAX = 20;
+
 function _reportUiError(what, error) {
   const detail = (error && (error.stack || error.message)) || String(error);
+  UI_ERROR_RING.push(`${new Date().toISOString().slice(11, 19)} ${what}: ${detail}`.slice(0, 400));
+  if (UI_ERROR_RING.length > UI_ERROR_RING_MAX) UI_ERROR_RING.shift();
   console.error(what, error);
   const message = `${what}: ${(error && error.message) || error}`;
   if (typeof window.showToast === 'function') window.showToast(message, 'err');
@@ -733,6 +742,7 @@ window.wcCompact = () => {
     'changelogOverlay',
     'announcementOverlay',
     'bugReportOverlay',
+    'bugConfirmOverlay',
   ];
 
   function _focusModal(overlay, preferredTarget = null) {
@@ -2884,6 +2894,10 @@ window.wcCompact = () => {
       if (paletteOpen) { e.preventDefault(); closePalette(); return; }
       if (shortcutsOpen) { e.preventDefault(); closeShortcuts(); return; }
       if (_cancelResolutionWarning) { e.preventDefault(); _cancelResolutionWarning(); return; }
+      // Innermost first: the confirmation sits on top of the report card.
+      if (document.getElementById('bugConfirmOverlay')?.classList.contains('open')) {
+        e.preventDefault(); window.closeBugConfirm(); return;
+      }
       if (document.getElementById('bugReportOverlay')?.classList.contains('open')) {
         e.preventDefault(); window.closeBugReport(); return;
       }
@@ -2927,9 +2941,11 @@ window.wcCompact = () => {
   const CHANGELOG = [
     { version: '1.4.0', notes: [
       { h: 'Report a bug', items: [
-        'New Report a bug screen in Settings and in the Logs diagnostics. It opens a pre-filled GitHub issue in your browser so a problem can actually be diagnosed instead of guessed at.',
-        'You choose what to include with tick boxes — PC specs, display and scaling, the Roblox window, macro settings, recent log — and you can read the exact text before anything is posted.',
-        'Nothing is sent automatically and nothing goes anywhere until you press Submit on GitHub. Your Windows username is replaced with a placeholder everywhere it appears.',
+        'New Report a bug screen in Settings and in the Logs diagnostics, so a problem can actually be diagnosed instead of guessed at.',
+        'You choose what to include with tick boxes — PC specs, display and scaling, the Roblox window, macro settings, recent log — and you can read the exact text before anything leaves your PC.',
+        'Copy instead puts the report on your clipboard to share however you like. It stays on your PC and identifies nothing about you.',
+        'Posting to GitHub is optional and opens a pre-filled issue in your browser. Because that is public and permanent it asks you to confirm first, after a pause to read the warning, and it takes three deliberate clicks.',
+        'Nothing is ever sent automatically. Your Windows username is replaced with a placeholder everywhere it appears, including in what you type.',
       ]},
     ]},
     { version: '1.3.1', notes: [
@@ -3309,6 +3325,7 @@ window.wcCompact = () => {
         .map(([name]) => name),
       webview: navigator.userAgent,
       description: document.getElementById('bugWhat')?.value || '',
+      ui_errors: UI_ERROR_RING.slice(-10),
     };
   }
 
@@ -3384,12 +3401,104 @@ window.wcCompact = () => {
       }
     });
 
-    document.getElementById('bugOpen')?.addEventListener('click', async () => {
+    document.getElementById('bugOpen')?.addEventListener('click', openBugConfirm);
+  })();
+
+  /* Posting publicly is gated the same way the resolution warning gates Start: a
+     countdown that only enables the button rather than acting on its own. On top of
+     that it takes three separate clicks a second apart, so it cannot be reached by
+     double-clicking or by mashing through the dialog. */
+  const BUG_CONFIRM_COOLDOWN_SEC = 5;
+  const BUG_CONFIRM_CLICKS = 3;
+  const BUG_CONFIRM_CLICK_GAP_MS = 1000;
+  let _bugConfirmTeardown = null;
+
+  function closeBugConfirm() {
+    const o = document.getElementById('bugConfirmOverlay');
+    if (!o) return;
+    if (_bugConfirmTeardown) { _bugConfirmTeardown(); _bugConfirmTeardown = null; }
+    o.classList.remove('open');
+    o.classList.add('closing');
+    _restoreModalFocus(o);
+    setTimeout(() => o.classList.remove('closing'), 760);
+  }
+  window.closeBugConfirm = closeBugConfirm;
+
+  function openBugConfirm() {
+    const overlay = document.getElementById('bugConfirmOverlay');
+    const go = document.getElementById('bugConfirmGo');
+    const cancel = document.getElementById('bugConfirmCancel');
+    const hint = document.getElementById('bugConfirmHint');
+    if (!overlay || !go || !cancel) return;
+
+    let remaining = BUG_CONFIRM_COOLDOWN_SEC;
+    let clicks = 0;
+    let lockedUntil = Date.now() + BUG_CONFIRM_COOLDOWN_SEC * 1000;
+    let countdown = null;
+    let gapTimer = null;
+    let submitting = false;
+
+    /* Deliberately NOT the `disabled` attribute. A disabled button receives no
+       mouse events, so clicks fall straight through to whatever sits behind it —
+       during testing, mashing this dismissed the dialog and silently unticked a
+       section on the card underneath. The button stays enabled and refuses in JS,
+       so every click lands here and nowhere else. */
+    const lock = (label) => {
+      go.classList.add('is-locked');
+      go.setAttribute('aria-disabled', 'true');
+      go.textContent = label;
+    };
+    const armed = () => {
+      go.classList.remove('is-locked');
+      go.setAttribute('aria-disabled', 'false');
+      const left = BUG_CONFIRM_CLICKS - clicks;
+      go.textContent = `Post publicly — click ${left} more time${left === 1 ? '' : 's'}`;
+    };
+
+    go.disabled = false;
+    lock(`Read the warning… (${remaining})`);
+    if (hint) hint.textContent = '';
+    overlay.classList.remove('closing');
+    overlay.classList.add('open');
+    _focusModal(overlay, cancel);   // focus Cancel, never the destructive button
+
+    _bugConfirmTeardown = () => {
+      if (countdown) clearInterval(countdown);
+      if (gapTimer) clearTimeout(gapTimer);
+      go.onclick = null;
+      cancel.onclick = null;
+    };
+
+    countdown = setInterval(() => {
+      remaining -= 1;
+      if (remaining > 0) {
+        lock(`Read the warning… (${remaining})`);
+        return;
+      }
+      clearInterval(countdown);
+      countdown = null;
+      armed();
+    }, 1000);
+
+    cancel.onclick = () => closeBugConfirm();
+
+    go.onclick = async () => {
+      if (submitting || Date.now() < lockedUntil) return;   // mashing changes nothing
+      clicks += 1;
+      lockedUntil = Date.now() + BUG_CONFIRM_CLICK_GAP_MS;
+      if (clicks < BUG_CONFIRM_CLICKS) {
+        lock('Wait…');
+        gapTimer = setTimeout(() => { gapTimer = null; armed(); }, BUG_CONFIRM_CLICK_GAP_MS);
+        return;
+      }
+      submitting = true;
+      lock('Opening…');
       const r = await sendCommand('bug_report_open', _bugRequest());
       showToast(r.msg || 'Opened GitHub', r.ok !== false ? 'ok' : 'err');
+      closeBugConfirm();
       if (r.ok !== false) closeBugReport();
-    });
-  })();
+    };
+  }
 
   function closeChangelog() {
     const o = document.getElementById('changelogOverlay');

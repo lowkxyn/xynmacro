@@ -6938,7 +6938,7 @@ def _system_profile():
     return profile
 
 
-def _bug_report_sections(selected, webview=None):
+def _bug_report_sections(selected, webview=None, ui_errors=None):
     """Build {section: [(label, value), ...]} for the chosen sections only."""
     selected = [s for s in (selected or []) if s in BUG_REPORT_SECTIONS]
     out = {}
@@ -7004,16 +7004,26 @@ def _bug_report_sections(selected, webview=None):
 
     if "logs" in selected:
         recent = list(_ui_log_ring)[-25:]
-        out["Recent log"] = [
+        rows = [
             ("Last error", MACRO_LAST_ERROR or "none"),
             ("Errors this session", MACRO_ERROR_COUNT),
-            ("Tail", "\n".join(str(line) for line in recent) if recent else "empty"),
         ]
+        # Frontend errors live only in the WebView, so the UI hands them over. Without
+        # them a report can read as perfectly healthy while the real failure was on
+        # that side — which is exactly how the CSP breakage looked.
+        if ui_errors:
+            rows.append(
+                ("Interface errors", "\n".join(str(line) for line in ui_errors[-10:]))
+            )
+        rows.append(
+            ("Tail", "\n".join(str(line) for line in recent) if recent else "empty")
+        )
+        out["Recent log"] = rows
 
     return out
 
 
-def build_bug_report(selected=None, webview=None, description=None):
+def build_bug_report(selected=None, webview=None, description=None, ui_errors=None):
     """Return the Markdown a user is about to post, already scrubbed."""
     # APP_VERSION is handed over by the launcher; running the sidecar directly
     # leaves it unset, and "XynMacro None" in a public issue looks like a bug.
@@ -7024,7 +7034,8 @@ def build_bug_report(selected=None, webview=None, description=None):
     text = (description or "").strip()
     lines += ["### What happened", text or "_(not described)_", ""]
 
-    for title, rows in _bug_report_sections(selected, webview=webview).items():
+    for title, rows in _bug_report_sections(
+            selected, webview=webview, ui_errors=ui_errors).items():
         lines.append(f"### {title}")
         for label, value in rows:
             if value is None or value == "":
@@ -7038,8 +7049,9 @@ def build_bug_report(selected=None, webview=None, description=None):
     return _scrub_user_paths("\n".join(lines).strip())
 
 
-def bug_report_payload(selected=None, webview=None, description=None):
-    body = build_bug_report(selected, webview=webview, description=description)
+def bug_report_payload(selected=None, webview=None, description=None, ui_errors=None):
+    body = build_bug_report(selected, webview=webview, description=description,
+                            ui_errors=ui_errors)
     query = urlencode({"title": f"[{APP_VERSION}] ", "body": body})
     url = f"{ISSUE_URL}?{query}"
     return {
@@ -8360,6 +8372,7 @@ def run_ui_server(sidecar_pid=None, auth_token=None):
                     data.get("sections"),
                     webview=data.get("webview"),
                     description=data.get("description"),
+                    ui_errors=data.get("ui_errors"),
                 ))
             if action == "bug_report_open":
                 # The URL is rebuilt here rather than accepted from the WebView, so
@@ -8369,6 +8382,7 @@ def run_ui_server(sidecar_pid=None, auth_token=None):
                     data.get("sections"),
                     webview=data.get("webview"),
                     description=data.get("description"),
+                    ui_errors=data.get("ui_errors"),
                 )
                 if not payload["url"]:
                     return jsonify({

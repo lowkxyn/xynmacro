@@ -108,3 +108,24 @@ class TestDisplaySection:
         with patch.object(core, "_get_screen_info", return_value={"width": 2560, "height": 1600}), \
              patch.object(core, "_current_game_monitor_info", return_value={}):
             assert "2560x1600" in core.build_bug_report(["display"])
+
+
+class TestInterfaceErrors:
+    def test_includes_errors_the_backend_never_sees(self):
+        # A CSP change once killed every button while the sidecar log stayed clean.
+        body = core.build_bug_report(["logs"], ui_errors=["12:00:01 UI error: boom"])
+        assert "Interface errors" in body
+        assert "boom" in body
+
+    def test_omits_the_row_when_there_were_none(self):
+        assert "Interface errors" not in core.build_bug_report(["logs"])
+
+    def test_caps_how_many_are_carried(self):
+        body = core.build_bug_report(["logs"], ui_errors=[f"err{i}" for i in range(40)])
+        assert "err39" in body
+        assert "err0\n" not in body
+
+    def test_scrubs_them_like_everything_else(self):
+        with patch.dict("os.environ", {"USERPROFILE": "", "USERNAME": "deray"}):
+            body = core.build_bug_report(["logs"], ui_errors=["failed for deray"])
+        assert "deray" not in body
