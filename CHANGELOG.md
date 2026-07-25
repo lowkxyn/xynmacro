@@ -3,6 +3,11 @@
 All notable changes to XynMacro. This file is generated from the in-app
 "What's new" notes by `scripts/changelog.mjs` — edit those, not this file.
 
+## 1.5.1
+
+### Fixes
+- Fixed the new crash notice never appearing for the most common kind of crash. If the app itself died, the shutdown was being recorded as if you had closed it normally, so the next launch said nothing and the crash log was not offered.
+
 ## 1.5.0
 
 ### Catching problems before you do

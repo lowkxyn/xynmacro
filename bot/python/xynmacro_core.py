@@ -8074,10 +8074,11 @@ def _start_parent_watchdog(parent_pid):
                 continue
             if not alive:
                 print(f"[sidecar] Tauri launcher (PID {pid}) is gone. Exiting to avoid orphaning.")
-                # This is the normal way the app closes, so it counts as a clean
-                # shutdown. os._exit below skips atexit, so it has to happen here
-                # or every ordinary close would look like a crash next launch.
-                _release_session_marker()
+                # Deliberately NOT marking the session clean here. The launcher
+                # vanishing is exactly what an app crash looks like from this side,
+                # and marking it clean would swallow the case the crash notice
+                # exists for. An orderly close is announced by the launcher itself
+                # (session_shutdown_clean) while it is still alive to say so.
                 try:
                     os.remove(os.path.join(DATA_DIR, f"port_{pid}.json"))
                 except OSError:

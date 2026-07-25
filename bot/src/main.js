@@ -3056,6 +3056,11 @@ window.wcCompact = () => {
 
   // What's-new content, newest first. Each entry: {version, notes:[{h, items[]}]}.
   const CHANGELOG = [
+    { version: '1.5.1', notes: [
+      { h: 'Fixes', items: [
+        'Fixed the new crash notice never appearing for the most common kind of crash. If the app itself died, the shutdown was being recorded as if you had closed it normally, so the next launch said nothing and the crash log was not offered.',
+      ]},
+    ]},
     { version: '1.5.0', notes: [
       { h: 'Catching problems before you do', items: [
         'The app now checks its own buttons on startup. If your browser engine ever blocks them again the way it did in 1.3.1, you get a red banner saying so instead of a window where nothing happens.',

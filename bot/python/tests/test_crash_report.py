@@ -123,3 +123,13 @@ class TestDeliberateShutdown:
         # It must run before the kill, not after.
         assert rust.index("mark_sidecar_shutdown_clean(&app);") < \
             rust.index("terminate_tracked_child(&app, Duration::from_millis(650));")
+
+    def test_the_watchdog_does_not_launder_a_crash_into_a_clean_exit(self):
+        # The watchdog fires when the launcher PID disappears — which is precisely
+        # what an app crash looks like from the sidecar. Marking clean there made a
+        # force-killed app report a clean exit, so the crash notice never fired.
+        import pathlib
+        source = pathlib.Path(core.__file__).read_text(encoding="utf-8")
+        watchdog = source[source.index("def _start_parent_watchdog("):]
+        watchdog = watchdog[:watchdog.index("\ndef ", 1)]
+        assert "_release_session_marker()" not in watchdog
