@@ -2254,9 +2254,9 @@ window.wcCompact = () => {
       // A hidden checkbox still reports .checked, which would ask the backend for a
       // section that isn't on offer. Keep the two in step.
       if (crashBox) crashBox.checked = !!state.previous_crash;
-      if (state.previous_crash) {
-        showToast('Last session ended unexpectedly — its log is in Report a bug', 'warn');
-      }
+      // Persistent card, not a toast: this fires during startup, and a notice that
+      // fades after a few seconds is reliably missed while the splash is lifting.
+      if (state.previous_crash) document.getElementById('crashToast')?.classList.add('show');
     }
     const backendActivity = state.stop_requested ? 'Stopping'
       : state.controller_paused_for_senzu ? 'Auto-Senzu'
@@ -3318,6 +3318,15 @@ window.wcCompact = () => {
 
   document.getElementById('utLater')?.addEventListener('click', () => {
     void _deferPendingUpdate();
+  });
+  // Both paths close the card: once it has been read it has done its job, and the
+  // crash log stays available in Report a bug either way.
+  document.getElementById('crashDismiss')?.addEventListener('click', () => {
+    document.getElementById('crashToast')?.classList.remove('show');
+  });
+  document.getElementById('crashReport')?.addEventListener('click', () => {
+    document.getElementById('crashToast')?.classList.remove('show');
+    window.openBugReport?.();
   });
   document.getElementById('utIgnore')?.addEventListener('click', () => {
     void _deferPendingUpdate({ ignoreVersion: true });

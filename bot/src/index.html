@@ -989,6 +989,18 @@
   </div>
 </div>
 
+<!-- Crash notice: a toast auto-hides in a few seconds, which is long enough to miss
+     entirely while the splash is still lifting. This is the same persistent card as
+     the update prompt — it waits until it is acted on. -->
+<div class="update-toast" id="crashToast" role="status">
+  <div class="ut-title">Last session</div>
+  <div class="ut-body">XynMacro closed unexpectedly last time. That session&rsquo;s log is kept and can be attached to a bug report.</div>
+  <div class="ut-actions">
+    <button class="btn-primary" id="crashReport">Report it</button>
+    <button class="btn-sm" id="crashDismiss">Dismiss</button>
+  </div>
+</div>
+
 <!-- Update install screen: shown briefly when the user starts the install, so
      the app isn't visibly frozen while it hands off to the installer. -->
 <div class="countdown-overlay update-installing" id="updateInstalling">

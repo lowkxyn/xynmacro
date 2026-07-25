@@ -310,3 +310,17 @@ test('the HUD refuses to sit over the game while the macro runs', () => {
   assert.match(hudHtml, /id="hudOverlapWarning"/);
   assert.match(hudHtml, /\.overlap-warning\{/);
 });
+
+/* The crash notice fires during startup, competing with the splash. A .notif-toast
+   auto-hides after a few seconds, which meant it was reliably missed — so it uses
+   the persistent .update-toast card, which waits to be acted on. */
+test('the crash notice waits to be seen instead of fading', () => {
+  assert.match(html, /id="crashToast"[^>]*class="update-toast"|class="update-toast" id="crashToast"/);
+  assert.match(main, /document\.getElementById\('crashToast'\)\?\.classList\.add\('show'\)/);
+  assert.doesNotMatch(main, /showToast\('Last session ended unexpectedly/);
+  // Dismiss and Report both have to close it, or it becomes permanent furniture.
+  for (const id of ['crashDismiss', 'crashReport']) {
+    assert.ok(main.includes(`document.getElementById('${id}')?.addEventListener('click'`), id);
+  }
+  assert.match(main, /window\.openBugReport\?\.\(\)/);
+});
