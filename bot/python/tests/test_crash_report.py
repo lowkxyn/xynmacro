@@ -94,3 +94,32 @@ class TestCrashSection:
     def test_no_crash_section_without_a_crash(self):
         core.PREVIOUS_SESSION_CRASH = None
         assert core._bug_report_sections(["crash"]) == {}
+
+
+class TestDeliberateShutdown:
+    """The launcher kills the sidecar with taskkill /F, which beats the parent
+    watchdog's 250ms poll. If the launcher could not mark the session clean itself,
+    every ordinary close would be reported as a crash on the next launch."""
+
+    def test_the_shutdown_command_marks_the_session_clean(self, tmp_path):
+        with patch.object(core, "JSON_DIR", str(tmp_path)):
+            core._claim_session_marker(None)
+            with open(_marker(tmp_path), encoding="utf-8") as fh:
+                assert json.load(fh)["clean"] is False
+            core._release_session_marker()
+            with open(_marker(tmp_path), encoding="utf-8") as fh:
+                assert json.load(fh)["clean"] is True
+
+    def test_the_launcher_has_a_way_to_call_it(self):
+        # The Rust side posts this action just before terminating the sidecar; the
+        # handler and the caller have to keep agreeing on the name.
+        import pathlib
+        core_source = pathlib.Path(core.__file__).read_text(encoding="utf-8")
+        rust = (pathlib.Path(core.__file__).parents[1] / "src-tauri" / "src" / "lib.rs") \
+            .read_text(encoding="utf-8")
+        assert 'action == "session_shutdown_clean"' in core_source
+        assert '"session_shutdown_clean"' in rust
+        assert "mark_sidecar_shutdown_clean(&app);" in rust
+        # It must run before the kill, not after.
+        assert rust.index("mark_sidecar_shutdown_clean(&app);") < \
+            rust.index("terminate_tracked_child(&app, Duration::from_millis(650));")

@@ -617,6 +617,35 @@ fn run_taskkill_bounded(args: &[&str], timeout: Duration) {
     let _ = taskkill.try_wait();
 }
 
+/// Tell the sidecar this shutdown was deliberate, before it is killed.
+///
+/// The sidecar records each session as unclean and only flips it on the way out, so the
+/// next launch can tell a crash from an ordinary close. Its own parent watchdog cannot
+/// do that here: this app kills it with `taskkill /F`, which lands long before the
+/// watchdog's next 250ms poll. Without this call every single close would look like a
+/// crash. Best-effort and short — a shutdown must not hang waiting on it.
+fn mark_sidecar_shutdown_clean(app: &AppHandle) {
+    let port = get_backend_port(app.clone());
+    if port == 0 {
+        return;
+    }
+    let Ok(auth_token) = backend_auth_token(app) else {
+        return;
+    };
+    let Ok(client) = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_millis(400))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+    else {
+        return;
+    };
+    let _ = client
+        .post(loopback_url(port, "/command"))
+        .header(BACKEND_AUTH_HEADER, auth_token)
+        .json(&serde_json::json!({ "action": "session_shutdown_clean" }))
+        .send();
+}
+
 fn terminate_tracked_child(app: &AppHandle, timeout: Duration) {
     let child = app
         .try_state::<PythonProcess>()
@@ -712,6 +741,7 @@ fn request_shutdown(app: AppHandle, hide_window: bool) -> bool {
     let launcher_pid = state.launcher_pid;
     std::thread::spawn(move || {
         let installing_update = has_pending_update(&app);
+        mark_sidecar_shutdown_clean(&app);
         terminate_tracked_child(&app, Duration::from_millis(650));
         cleanup_port_file(&app, launcher_pid);
         if installing_update {

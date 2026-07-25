@@ -8485,6 +8485,11 @@ def run_ui_server(sidecar_pid=None, auth_token=None):
                 )
                 ok, msg, code = _ui_start_macro(allow_windowed_fallback=allow_fallback)
                 return jsonify({"ok": ok, "msg": msg, "code": code})
+            if action == "session_shutdown_clean":
+                # The launcher is about to kill this process on purpose. Its own
+                # parent watchdog would not get to run first.
+                _release_session_marker()
+                return jsonify({"ok": True, "msg": "session marked clean"})
             if action == "stop":
                 ok, msg = _ui_stop_macro()
                 return jsonify({"ok": ok, "msg": msg})
