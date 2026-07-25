@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>XynMacro debug HUD</title>
+<style>
+  :root{
+    --bg-card:rgba(18,18,23,.92);
+    --border:rgba(255,255,255,.09);
+    --text:#e2e3e7;
+    --text2:#9a9da4;
+    --text3:#5e6168;
+    --green:#7eb39a;
+    --red:#c08a8a;
+    --amber:#c3a86d;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{width:100%;height:100%;background:transparent;overflow:hidden}
+  body{
+    font:12px/1.45 "Segoe UI",system-ui,sans-serif;
+    color:var(--text);
+    -webkit-user-select:none;user-select:none;
+  }
+
+  /* Region boxes. The viewBox is the canonical 1920x1080 client and the svg is
+     stretched to the real client, so a non-16:9 window skews the boxes here exactly
+     as it skews them for the scanner — which is the whole point of looking. */
+  #boxes{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+  #boxes rect{fill:none;stroke-width:2;vector-effect:non-scaling-stroke}
+  #labels{position:absolute;inset:0;pointer-events:none}
+  #labels span{
+    position:absolute;transform:translateY(-100%);
+    font:700 10px/1 "Segoe UI",sans-serif;letter-spacing:.02em;
+    text-shadow:0 1px 3px #000,0 0 2px #000;white-space:nowrap;
+  }
+  body.no-boxes #boxes,body.no-boxes #labels{display:none}
+
+  /* Bottom-left: the only corner with no scan region in it. Top-left holds the
+     Training menu and HP boxes, and the panel would sit right on top of them. */
+  #panel{
+    position:absolute;bottom:12px;left:12px;width:336px;
+    background:var(--bg-card);border:1px solid var(--border);border-radius:10px;
+    /* No backdrop-filter: over a transparent WebView2 window it composites as a
+       grey slab instead of blurring the game behind it. */
+    box-shadow:0 10px 30px rgba(0,0,0,.5);overflow:hidden;
+  }
+  body.popped #panel{top:0;bottom:auto;left:0;width:100%;height:100%;border-radius:0}
+
+  header{
+    display:flex;align-items:center;gap:8px;
+    padding:8px 10px;border-bottom:1px solid var(--border);
+    background:rgba(255,255,255,.025);
+  }
+  body.popped header{cursor:grab}
+  header h1{font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--text2)}
+  header .spacer{flex:1}
+  header button{
+    background:rgba(255,255,255,.05);border:1px solid var(--border);color:var(--text2);
+    border-radius:5px;padding:3px 8px;font:600 10px/1.4 inherit;cursor:pointer;
+  }
+  header button:hover{background:rgba(255,255,255,.1);color:var(--text)}
+  /* Docked is click-through, so its own buttons are unreachable by definition. */
+  body:not(.popped) header button{display:none}
+
+  section{padding:8px 10px;border-bottom:1px solid rgba(255,255,255,.045)}
+  section:last-child{border-bottom:0}
+  h2{
+    font-size:9px;font-weight:700;letter-spacing:.11em;text-transform:uppercase;
+    color:var(--text3);margin-bottom:5px;
+  }
+  .row{display:flex;align-items:baseline;gap:8px;padding:1px 0}
+  .row .k{color:var(--text2);min-width:96px;flex-shrink:0}
+  .row .v{color:var(--text);font-variant-numeric:tabular-nums;word-break:break-word}
+  .v.good{color:var(--green)}
+  .v.bad{color:var(--red)}
+  .v.warn{color:var(--amber)}
+  .note{color:var(--amber);font-size:11px;margin-top:5px;line-height:1.4}
+
+  .region{display:flex;align-items:center;gap:7px;padding:1px 0}
+  .region i{width:9px;height:9px;border-radius:2px;flex-shrink:0}
+  .region .n{flex:1;color:var(--text2)}
+  .region .c{color:var(--text3);font-variant-numeric:tabular-nums;font-size:11px}
+</style>
+</head>
+<body class="docked">
+  <svg id="boxes" viewBox="0 0 1920 1080" preserveAspectRatio="none" aria-hidden="true"></svg>
+  <div id="labels"></div>
+
+  <div id="panel">
+    <header id="hudHeader">
+      <h1>Debug HUD</h1>
+      <div class="spacer"></div>
+      <button type="button" id="btnBoxes">Boxes</button>
+      <button type="button" id="btnDock">Dock</button>
+    </header>
+
+    <section>
+      <h2>Window &amp; scaling</h2>
+      <div class="row"><span class="k">Roblox</span><span class="v" id="wFound">&mdash;</span></div>
+      <div class="row"><span class="k">Client size</span><span class="v" id="wSize">&mdash;</span></div>
+      <div class="row"><span class="k">Client origin</span><span class="v" id="wOrigin">&mdash;</span></div>
+      <div class="row"><span class="k">Scale X / Y</span><span class="v" id="wScale">&mdash;</span></div>
+      <div class="row"><span class="k">Aspect</span><span class="v" id="wAspect">&mdash;</span></div>
+      <div class="row"><span class="k">Display</span><span class="v" id="wScreen">&mdash;</span></div>
+      <div class="row"><span class="k">DPI scale</span><span class="v" id="wDpi">&mdash;</span></div>
+      <div class="note" id="wNote" style="display:none"></div>
+    </section>
+
+    <section>
+      <h2>Run state</h2>
+      <div class="row"><span class="k">Macro</span><span class="v" id="rState">&mdash;</span></div>
+      <div class="row"><span class="k">Training</span><span class="v" id="rStat">&mdash;</span></div>
+      <div class="row"><span class="k">Menu visible</span><span class="v" id="rMenu">&mdash;</span></div>
+      <div class="row"><span class="k">Senzu</span><span class="v" id="rSenzu">&mdash;</span></div>
+      <div class="row"><span class="k">Errors</span><span class="v" id="rErrors">&mdash;</span></div>
+      <div class="row" id="rLastErrRow" style="display:none"><span class="k">Last error</span><span class="v bad" id="rLastErr"></span></div>
+    </section>
+
+    <section>
+      <h2>Scan regions <span id="regionCoordSpace" style="color:var(--text3);font-weight:400;letter-spacing:0;text-transform:none"></span></h2>
+      <div id="regionList"></div>
+    </section>
+
+    <section>
+      <h2>Backend</h2>
+      <div class="row"><span class="k">Poll</span><span class="v" id="bPoll">&mdash;</span></div>
+      <div class="row"><span class="k">Version</span><span class="v" id="bVersion">&mdash;</span></div>
+    </section>
+  </div>
+
+  <script src="hud.js"></script>
+</body>
+</html>

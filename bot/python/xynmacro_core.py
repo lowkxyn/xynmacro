@@ -6565,6 +6565,7 @@ def _ui_state_snapshot():
             "width": GAME_WIDTH,
             "height": GAME_HEIGHT,
         },
+        "scan_regions": _scan_region_payload(),
         "button_calibration": {
             "waiting": BUTTON_CALIBRATION_WAITING,
             "overrides": {k: list(v) for k, v in USER_BUTTON_OVERRIDES.items()},
@@ -6960,6 +6961,49 @@ def _diagnostic_report():
     }
 
 
+def _overlay_colour(bgr):
+    """OpenCV BGR tuple -> the '#rrggbb' the HUD draws with."""
+    blue, green, red = bgr
+    return f"#{red:02x}{green:02x}{blue:02x}"
+
+
+def _scan_region_payload():
+    """The scan regions in canonical 1920x1080 client coordinates, for the debug HUD.
+
+    Canonical rather than screen pixels on purpose: the HUD sits over the client and
+    applies the same width/1920, height/1080 scaling the scanner does, so whatever
+    skew a non-16:9 client causes is visible instead of corrected away in transit.
+    """
+    return [
+        {
+            "name": name,
+            "left": box["left"],
+            "top": box["top"],
+            "width": box["width"],
+            "height": box["height"],
+            "colour": _overlay_colour(colour),
+        }
+        for name, box, colour in _diagnostic_regions()
+    ]
+
+
+def _diagnostic_regions():
+    """The scan regions to draw, as ``(label, box, bgr_colour)``.
+
+    Single source for both the diagnostics preview image and the on-screen overlay so
+    the two can never disagree about where a region is. Read live because calibration
+    reassigns these globals.
+    """
+    return [
+        ("Training menu", TRAINING_MENU_BOX, (255, 190, 40)),
+        ("Health", HEALTH_BOX, (50, 220, 80)),
+        ("WASD", AGILITY_BOX, (50, 180, 255)),
+        ("HP", SENZU_HP_FILL_BOX, (50, 50, 255)),
+        ("Gravity", GRAVITY_LABEL_BOX, (230, 80, 230)),
+        ("Progression", PROG_SEARCH_BOX, (255, 255, 120)),
+    ]
+
+
 def _diagnostic_overlay_frame(sct, geometry):
     """Return a labelled, scaled view of the exact client-relative scan areas."""
     raw = np.array(sct.grab(geometry))[:, :, :3]
@@ -6978,11 +7022,8 @@ def _diagnostic_overlay_frame(sct, geometry):
             0.55, color, 2, cv2.LINE_AA,
         )
 
-    draw_box("Training menu", TRAINING_MENU_BOX, (255, 190, 40))
-    draw_box("Health", HEALTH_BOX, (50, 220, 80))
-    draw_box("WASD", AGILITY_BOX, (50, 180, 255))
-    draw_box("HP", SENZU_HP_FILL_BOX, (50, 50, 255))
-    draw_box("Gravity", GRAVITY_LABEL_BOX, (230, 80, 230))
+    for name, box, color in _diagnostic_regions():
+        draw_box(name, box, color)
     cv2.putText(
         frame, "Ki: scans full Roblox client", (20, frame.shape[0] - 22),
         cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 230, 255), 2, cv2.LINE_AA,

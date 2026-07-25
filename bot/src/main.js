@@ -1006,6 +1006,52 @@ window.wcCompact = () => {
     showToast(r.msg || 'Window resize requested', r.ok ? 'ok' : 'err');
   };
 
+  /* Debug HUD. The window itself is owned by Rust (it has to be transparent,
+     always-on-top and click-through), so this only asks for open/close and paints
+     the buttons from what Rust reports. */
+  let _hudDocked = true;
+
+  async function _hud(action, value) {
+    try {
+      const r = await invoke('hud', { action, value });
+      _renderHudButtons(r?.open === true);
+      return r;
+    } catch (e) {
+      showToast(String(e), 'err');
+      return null;
+    }
+  }
+
+  window.toggleDebugHud = async () => {
+    const state = await _hud('state');
+    if (state?.open) {
+      await _hud('close');
+      return;
+    }
+    _hudDocked = true;
+    await _hud('open', { docked: true });
+  };
+
+  // Pop out reopens rather than reconfiguring: the page picks its mode up from the
+  // query string at load, and a reopen is instant.
+  window.popOutDebugHud = async () => {
+    const state = await _hud('state');
+    if (state?.open) await _hud('close');
+    _hudDocked = false;
+    await _hud('open', { docked: false });
+  };
+
+  function _renderHudButtons(open) {
+    const btn = document.getElementById('btnDebugHud');
+    if (btn) {
+      btn.classList.toggle('active', open);
+      btn.setAttribute('aria-pressed', open ? 'true' : 'false');
+      btn.textContent = open ? 'Hide HUD' : 'Debug HUD';
+    }
+    const pop = document.getElementById('btnDebugHudPop');
+    if (pop) pop.classList.toggle('active', open && !_hudDocked);
+  }
+
   const _btnResRevert = document.getElementById('btnResRevert');
   if (_btnResRevert) _btnResRevert.addEventListener('click', async () => {
     const r = await sendCommand('display_revert');
@@ -2871,6 +2917,19 @@ window.wcCompact = () => {
 
   // What's-new content, newest first. Each entry: {version, notes:[{h, items[]}]}.
   const CHANGELOG = [
+    { version: '1.3.0', notes: [
+      { h: 'Windowed Mode', items: [
+        'New Windowed Mode sizes Roblox to an exact 1920x1080 window, centred and clear of the taskbar, so the scan regions line up without changing your desktop resolution (toggle in Settings, off by default).',
+        'Size Window Now does it immediately, so you can check the scan boxes without starting a run.',
+        'When both Windowed Mode and Fullscreen On Start are on, Windowed Mode wins — it no longer gets undone by fullscreen.',
+        'A display too small to fit a 1920x1080 window blocks Start with a message instead of scanning a skewed screen.',
+      ]},
+      { h: 'Debug HUD', items: [
+        'New Debug HUD sits over Roblox showing live window size, scaling, run state and every scan region drawn where the macro actually looks. It\'s click-through, so it never eats a click meant for the game.',
+        'It flags the real problem directly: if the window isn\'t 16:9 the scaling turns red and tells you the regions are skewed.',
+        'Pop out moves the HUD to its own draggable window for a second monitor.',
+      ]},
+    ]},
     { version: '1.2.1', notes: [
       { h: 'Fixes', items: [
         'Fixed the buttons going dead after the app had been open for a long time — backend requests no longer run on the window\'s own thread, so a single slow one can\'t block every click behind it.',

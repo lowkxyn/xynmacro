@@ -3,6 +3,19 @@
 All notable changes to XynMacro. This file is generated from the in-app
 "What's new" notes by `scripts/changelog.mjs` — edit those, not this file.
 
+## 1.3.0
+
+### Windowed Mode
+- New Windowed Mode sizes Roblox to an exact 1920x1080 window, centred and clear of the taskbar, so the scan regions line up without changing your desktop resolution (toggle in Settings, off by default).
+- Size Window Now does it immediately, so you can check the scan boxes without starting a run.
+- When both Windowed Mode and Fullscreen On Start are on, Windowed Mode wins — it no longer gets undone by fullscreen.
+- A display too small to fit a 1920x1080 window blocks Start with a message instead of scanning a skewed screen.
+
+### Debug HUD
+- New Debug HUD sits over Roblox showing live window size, scaling, run state and every scan region drawn where the macro actually looks. It's click-through, so it never eats a click meant for the game.
+- It flags the real problem directly: if the window isn't 16:9 the scaling turns red and tells you the regions are skewed.
+- Pop out moves the HUD to its own draggable window for a second monitor.
+
 ## 1.2.1
 
 ### Fixes

@@ -660,13 +660,15 @@
         <div class="row-hint">Adds exact client size, monitor, DPI, focus, menu scores, and setting checks to each run log. It does not change macro timing.</div>
         <div class="diagnostic-actions">
           <button class="btn-sm" onclick="togglePreview('diagnostics')" id="previewBtnDiagnostics">Vision preview</button>
+          <button class="btn-sm" onclick="toggleDebugHud()" id="btnDebugHud" aria-pressed="false">Debug HUD</button>
+          <button class="btn-sm" onclick="popOutDebugHud()" id="btnDebugHudPop">Pop out</button>
           <button class="btn-sm" onclick="copyDiagnostics()">Copy report</button>
         </div>
         <div class="preview-row diagnostic-preview-row" id="previewRowDiagnostics" style="display:none">
           <img class="region-preview diagnostic-preview" id="previewImgDiagnostics" alt="Live diagnostic preview of macro scan regions">
           <div class="preview-meta" id="previewMetaDiagnostics">Loading&hellip;</div>
         </div>
-        <div class="row-hint">The preview labels exactly what the macro scans. Ki scans the full Roblox client. A visible taskbar doesn't shift client-relative boxes; minimizing or covering Roblox can break capture.</div>
+        <div class="row-hint">Debug HUD sits over Roblox showing live window, scaling and run readouts plus the scan boxes, click-through so it never eats a click. Pop out moves it to its own draggable window for a second monitor. The preview labels exactly what the macro scans. Ki scans the full Roblox client. A visible taskbar doesn't shift client-relative boxes; minimizing or covering Roblox can break capture.</div>
       </div>
       <div class="log-viewer log-feed" id="logViewer"></div>
       <div class="log-note">Clear view only hides lines already shown. Save session log copies the full active session file to the configured save folder.</div>

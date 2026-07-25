@@ -888,6 +888,153 @@ fn round_window_corners(win: &tauri::WebviewWindow) {
 #[cfg(not(target_os = "windows"))]
 fn round_window_corners(_win: &tauri::WebviewWindow) {}
 
+/// The debug HUD lives in its own transparent, always-on-top window.
+///
+/// Two modes, and they want opposite things from the OS: `docked` is pinned over
+/// Roblox's client and must be click-through so it never eats a click meant for the
+/// game, while `window` is a normal draggable panel you can park on another monitor.
+const HUD_LABEL: &str = "hud";
+
+#[cfg(target_os = "windows")]
+fn set_click_through(win: &tauri::WebviewWindow, on: bool) {
+    // Tauri's ignore_cursor_events covers clicks. WS_EX_NOACTIVATE is the other half:
+    // without it the HUD can still take focus from the game when it is shown or raised.
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GetWindowLongPtrW, SetWindowLongPtrW, GWL_EXSTYLE, WS_EX_NOACTIVATE,
+    };
+    let _ = win.set_ignore_cursor_events(on);
+    let Ok(handle) = win.hwnd() else { return };
+    unsafe {
+        let current = GetWindowLongPtrW(handle.0 as _, GWL_EXSTYLE);
+        let updated = if on {
+            current | WS_EX_NOACTIVATE as isize
+        } else {
+            current & !(WS_EX_NOACTIVATE as isize)
+        };
+        SetWindowLongPtrW(handle.0 as _, GWL_EXSTYLE, updated);
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn set_click_through(win: &tauri::WebviewWindow, on: bool) {
+    let _ = win.set_ignore_cursor_events(on);
+}
+
+#[tauri::command]
+async fn hud(
+    app: AppHandle,
+    action: String,
+    value: Option<serde_json::Value>,
+) -> Result<serde_json::Value, String> {
+    let existing = app.get_webview_window(HUD_LABEL);
+    match action.as_str() {
+        "state" => Ok(serde_json::json!({ "open": existing.is_some() })),
+        "close" => {
+            if let Some(win) = existing {
+                win.close().map_err(|e| e.to_string())?;
+            }
+            Ok(serde_json::json!({ "open": false }))
+        }
+        "open" => {
+            let docked = value
+                .as_ref()
+                .and_then(|v| v.get("docked"))
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true);
+            // The page reads its starting mode from the query string; there is no
+            // main->HUD channel yet, and a reopen is cheap.
+            let url = if docked {
+                "hud.html"
+            } else {
+                "hud.html?mode=window"
+            };
+            let win = match existing {
+                Some(win) => win,
+                None => tauri::WebviewWindowBuilder::new(
+                    &app,
+                    HUD_LABEL,
+                    tauri::WebviewUrl::App(url.into()),
+                )
+                .title("XynMacro debug HUD")
+                .inner_size(360.0, 460.0)
+                .decorations(false)
+                .transparent(true)
+                .always_on_top(true)
+                .skip_taskbar(true)
+                .shadow(false)
+                .resizable(false)
+                .focused(false)
+                // Created hidden: docked mode has to reach Roblox's client rect before
+                // it is seen, or it flashes on whichever monitor Tauri defaulted to.
+                // The page calls the "show" action once it has placed itself.
+                .visible(false)
+                .build()
+                .map_err(|e| e.to_string())?,
+            };
+            set_click_through(&win, docked);
+            Ok(serde_json::json!({ "open": true, "docked": docked }))
+        }
+        // The HUD page drives its own geometry: it knows Roblox's client rect from
+        // /state, and in docked mode it covers the whole client so it can draw the
+        // region boxes in the right place.
+        "place" => {
+            let Some(win) = existing else {
+                return Err("HUD is not open".into());
+            };
+            let get = |key: &str| -> Option<i32> {
+                value
+                    .as_ref()
+                    .and_then(|v| v.get(key))
+                    .and_then(|v| v.as_i64())
+                    .map(|n| n as i32)
+            };
+            let (Some(x), Some(y), Some(width), Some(height)) =
+                (get("x"), get("y"), get("width"), get("height"))
+            else {
+                return Err("place needs x, y, width and height".into());
+            };
+            if width <= 0 || height <= 0 {
+                return Err("place needs a positive size".into());
+            }
+            win.set_size(Size::Physical(PhysicalSize {
+                width: width as u32,
+                height: height as u32,
+            }))
+            .map_err(|e| e.to_string())?;
+            win.set_position(Position::Physical(PhysicalPosition { x, y }))
+                .map_err(|e| e.to_string())?;
+            Ok(serde_json::json!({ "open": true }))
+        }
+        "show" => {
+            let Some(win) = existing else {
+                return Err("HUD is not open".into());
+            };
+            win.show().map_err(|e| e.to_string())?;
+            Ok(serde_json::json!({ "open": true }))
+        }
+        "docked" => {
+            let Some(win) = existing else {
+                return Err("HUD is not open".into());
+            };
+            let on = value
+                .as_ref()
+                .and_then(|v| v.as_bool())
+                .ok_or("docked needs a boolean")?;
+            set_click_through(&win, on);
+            win.set_resizable(!on).map_err(|e| e.to_string())?;
+            Ok(serde_json::json!({ "open": true, "docked": on }))
+        }
+        "drag" => {
+            let Some(win) = existing else {
+                return Err("HUD is not open".into());
+            };
+            win.start_dragging().map_err(|e| e.to_string())?;
+            Ok(serde_json::json!({ "open": true }))
+        }
+        other => Err(format!("unknown hud action: {other}")),
+    }
+}
+
 #[tauri::command]
 fn wc(app: AppHandle, action: String, value: Option<serde_json::Value>) -> Result<(), String> {
     let Some(win) = app.get_webview_window("main") else {
@@ -1179,6 +1326,12 @@ pub fn run() {
                 if window.label() == "main" {
                     api.prevent_close();
                     let app_handle = window.app_handle().clone();
+                    // The HUD is always-on-top and has no taskbar entry, so it would
+                    // hang over the desktop for the whole shutdown with no way to
+                    // dismiss it. Take it down first.
+                    if let Some(hud) = app_handle.get_webview_window(HUD_LABEL) {
+                        let _ = hud.close();
+                    }
                     request_shutdown(app_handle, true);
                 }
             }
@@ -1196,6 +1349,7 @@ pub fn run() {
             proxy_get,
             proxy_post,
             wc,
+            hud,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
