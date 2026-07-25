@@ -13,8 +13,10 @@ import win32con
 import os
 import sys
 import json
+import re
 import threading
 import hmac
+from urllib.parse import urlencode
 
 # ================= APP INFO =================
 APP_NAME = "XynMacro"
@@ -6848,6 +6850,206 @@ def _perform_after_run_game_action(action):
                 _user32.SetCursorPos(*original_cursor)
 
 
+# --- Bug report ---------------------------------------------------------------------
+# Everything a bug report needs, assembled here rather than in the WebView so the
+# exact text the user approves is the exact text that gets sent. Unlike
+# _diagnostic_report() this never hard-fails: people file bugs precisely when the
+# game is closed or something is broken.
+
+ISSUE_URL = "https://github.com/lowkxyn/xynmacro/issues/new"
+# GitHub truncates very long query strings; past this we tell the user to paste instead.
+ISSUE_URL_LIMIT = 6000
+
+BUG_REPORT_SECTIONS = ("system", "display", "game", "settings", "logs")
+
+
+def _scrub_user_paths(text):
+    """Replace the Windows profile path and account name with placeholders.
+
+    Reports get posted publicly, and paths are the usual way a real name leaks.
+    """
+    if not text:
+        return text
+    text = str(text)
+    profile = os.environ.get("USERPROFILE") or ""
+    if profile:
+        text = re.sub(re.escape(profile), "%USERPROFILE%", text, flags=re.IGNORECASE)
+    user = os.environ.get("USERNAME") or ""
+    if user and len(user) > 2:
+        text = re.sub(re.escape(user), "%USER%", text, flags=re.IGNORECASE)
+    return text
+
+
+def _registry_value(root, path, name):
+    try:
+        import winreg
+        with winreg.OpenKey(root, path) as key:
+            return str(winreg.QueryValueEx(key, name)[0]).strip()
+    except Exception:
+        return None
+
+
+def _system_profile():
+    """CPU / RAM / GPU / OS, read cheaply. Never raises — missing is fine."""
+    import platform
+    profile = {
+        "os": platform.platform(),
+        "arch": platform.machine(),
+        "python": platform.python_version(),
+        "frozen": bool(getattr(sys, "frozen", False)),
+        "cpu_threads": os.cpu_count(),
+    }
+    if os.name == "nt":
+        import winreg
+        profile["cpu"] = _registry_value(
+            winreg.HKEY_LOCAL_MACHINE,
+            r"HARDWARE\DESCRIPTION\System\CentralProcessor\0",
+            "ProcessorNameString",
+        )
+        # First display adapter. WMI would be more thorough but costs ~1s.
+        profile["gpu"] = _registry_value(
+            winreg.HKEY_LOCAL_MACHINE,
+            r"SYSTEM\CurrentControlSet\Control\Class"
+            r"\{4d36e968-e325-11ce-bfc1-08002be10318}\0000",
+            "DriverDesc",
+        )
+        try:
+            import ctypes
+
+            class _MEMORYSTATUSEX(ctypes.Structure):
+                _fields_ = [
+                    ("dwLength", ctypes.c_ulong),
+                    ("dwMemoryLoad", ctypes.c_ulong),
+                    ("ullTotalPhys", ctypes.c_ulonglong),
+                    ("ullAvailPhys", ctypes.c_ulonglong),
+                    ("ullTotalPageFile", ctypes.c_ulonglong),
+                    ("ullAvailPageFile", ctypes.c_ulonglong),
+                    ("ullTotalVirtual", ctypes.c_ulonglong),
+                    ("ullAvailVirtual", ctypes.c_ulonglong),
+                    ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+                ]
+
+            status = _MEMORYSTATUSEX()
+            status.dwLength = ctypes.sizeof(_MEMORYSTATUSEX)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+                profile["ram_gb"] = round(status.ullTotalPhys / (1024 ** 3), 1)
+        except Exception:
+            pass
+    return profile
+
+
+def _bug_report_sections(selected, webview=None):
+    """Build {section: [(label, value), ...]} for the chosen sections only."""
+    selected = [s for s in (selected or []) if s in BUG_REPORT_SECTIONS]
+    out = {}
+
+    if "system" in selected:
+        profile = _system_profile()
+        out["System"] = [
+            ("OS", profile.get("os")),
+            ("CPU", profile.get("cpu")),
+            ("GPU", profile.get("gpu")),
+            ("RAM", f"{profile['ram_gb']} GB" if profile.get("ram_gb") else None),
+            ("Threads", profile.get("cpu_threads")),
+            # The single most useful field: a WebView2 update once broke every
+            # button in the app, and this is what identifies it.
+            ("WebView2", webview),
+            ("Packaged build", "yes" if profile.get("frozen") else "no (from source)"),
+        ]
+
+    if "display" in selected:
+        screen = _get_screen_info() or {}
+        monitor = _current_game_monitor_info() or {}
+
+        def _size(source, width_key="width", height_key="height"):
+            """Format WxH, or None when it is unknown — a stray '0x0' in a public
+            issue reads as a real measurement rather than a missing one."""
+            width, height = source.get(width_key), source.get(height_key)
+            return f"{width}x{height}" if width and height else None
+
+        out["Display"] = [
+            ("Virtual screen", _size(screen)),
+            ("Game monitor", _size(monitor)),
+            ("Work area", _size(monitor, "work_width", "work_height")),
+        ]
+
+    if "game" in selected:
+        update_game_window()
+        if GAME_HWND is None:
+            out["Roblox"] = [
+                ("Window", "minimized" if GAME_WINDOW_MINIMIZED else "not found"),
+            ]
+        else:
+            aspect = GAME_WIDTH / max(1, GAME_HEIGHT)
+            out["Roblox"] = [
+                ("Client size", f"{GAME_WIDTH}x{GAME_HEIGHT}"),
+                ("Client origin", f"{GAME_OFFSET_X},{GAME_OFFSET_Y}"),
+                ("Aspect", f"{aspect:.3f}" + ("" if abs(aspect - 16 / 9) < 0.02 else " (not 16:9)")),
+                ("Scale X/Y",
+                 f"{GAME_WIDTH / GAME_REFERENCE_WIDTH:.3f} / "
+                 f"{GAME_HEIGHT / GAME_REFERENCE_HEIGHT:.3f}"),
+                ("Fullscreen", game_window_is_fullscreen()),
+            ]
+
+    if "settings" in selected:
+        config = _ui_config_snapshot()
+        # The settings that actually change detection or timing. The full config is
+        # long and mostly noise in a bug report.
+        keys = [
+            "agility_mode", "health_mode", "ki_v8_mode", "training_order",
+            "start_delay_sec", "restore_fullscreen_on_start", "windowed_mode_on_start",
+            "senzu_enabled", "auto_retry_on_failure", "diagnostic_mode",
+        ]
+        out["Settings"] = [(key, config.get(key)) for key in keys]
+
+    if "logs" in selected:
+        recent = list(_ui_log_ring)[-25:]
+        out["Recent log"] = [
+            ("Last error", MACRO_LAST_ERROR or "none"),
+            ("Errors this session", MACRO_ERROR_COUNT),
+            ("Tail", "\n".join(str(line) for line in recent) if recent else "empty"),
+        ]
+
+    return out
+
+
+def build_bug_report(selected=None, webview=None, description=None):
+    """Return the Markdown a user is about to post, already scrubbed."""
+    # APP_VERSION is handed over by the launcher; running the sidecar directly
+    # leaves it unset, and "XynMacro None" in a public issue looks like a bug.
+    lines = [
+        f"**XynMacro** {APP_VERSION or 'unknown version'}",
+        "",
+    ]
+    text = (description or "").strip()
+    lines += ["### What happened", text or "_(not described)_", ""]
+
+    for title, rows in _bug_report_sections(selected, webview=webview).items():
+        lines.append(f"### {title}")
+        for label, value in rows:
+            if value is None or value == "":
+                continue
+            if isinstance(value, str) and "\n" in value:
+                lines += [f"**{label}**", "```", value.strip(), "```"]
+            else:
+                lines.append(f"- **{label}:** {value}")
+        lines.append("")
+
+    return _scrub_user_paths("\n".join(lines).strip())
+
+
+def bug_report_payload(selected=None, webview=None, description=None):
+    body = build_bug_report(selected, webview=webview, description=description)
+    query = urlencode({"title": f"[{APP_VERSION}] ", "body": body})
+    url = f"{ISSUE_URL}?{query}"
+    return {
+        "ok": True,
+        "markdown": body,
+        "url": url if len(url) <= ISSUE_URL_LIMIT else None,
+        "too_long": len(url) > ISSUE_URL_LIMIT,
+    }
+
+
 def _diagnostic_report():
     """Describe the exact capture/input environment for remote support."""
     if GAME_HWND is None:
@@ -8152,6 +8354,33 @@ def run_ui_server(sidecar_pid=None, auth_token=None):
                     "ok": True,
                     "msg": "Macro settings, calibration, and save location restored",
                 })
+            if action == "bug_report":
+                data = value if isinstance(value, dict) else {}
+                return jsonify(bug_report_payload(
+                    data.get("sections"),
+                    webview=data.get("webview"),
+                    description=data.get("description"),
+                ))
+            if action == "bug_report_open":
+                # The URL is rebuilt here rather than accepted from the WebView, so
+                # this can never be used to launch an arbitrary link.
+                data = value if isinstance(value, dict) else {}
+                payload = bug_report_payload(
+                    data.get("sections"),
+                    webview=data.get("webview"),
+                    description=data.get("description"),
+                )
+                if not payload["url"]:
+                    return jsonify({
+                        "ok": False,
+                        "msg": "Report is too long for a link — use Copy and paste it instead",
+                        "too_long": True,
+                    })
+                try:
+                    os.startfile(payload["url"])
+                except Exception as error:
+                    return jsonify({"ok": False, "msg": f"Could not open browser: {error}"})
+                return jsonify({"ok": True, "msg": "Opened GitHub in your browser"})
             if action == "game_window_windowed":
                 if _ui_is_running():
                     return jsonify({

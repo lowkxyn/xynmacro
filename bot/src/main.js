@@ -732,6 +732,7 @@ window.wcCompact = () => {
     'welcomeOverlay',
     'changelogOverlay',
     'announcementOverlay',
+    'bugReportOverlay',
   ];
 
   function _focusModal(overlay, preferredTarget = null) {
@@ -2883,6 +2884,9 @@ window.wcCompact = () => {
       if (paletteOpen) { e.preventDefault(); closePalette(); return; }
       if (shortcutsOpen) { e.preventDefault(); closeShortcuts(); return; }
       if (_cancelResolutionWarning) { e.preventDefault(); _cancelResolutionWarning(); return; }
+      if (document.getElementById('bugReportOverlay')?.classList.contains('open')) {
+        e.preventDefault(); window.closeBugReport(); return;
+      }
       if (document.getElementById('welcomeOverlay')?.classList.contains('open')) {
         e.preventDefault(); dismissWelcome(); return;
       }
@@ -2921,6 +2925,13 @@ window.wcCompact = () => {
 
   // What's-new content, newest first. Each entry: {version, notes:[{h, items[]}]}.
   const CHANGELOG = [
+    { version: '1.4.0', notes: [
+      { h: 'Report a bug', items: [
+        'New Report a bug screen in Settings and in the Logs diagnostics. It opens a pre-filled GitHub issue in your browser so a problem can actually be diagnosed instead of guessed at.',
+        'You choose what to include with tick boxes — PC specs, display and scaling, the Roblox window, macro settings, recent log — and you can read the exact text before anything is posted.',
+        'Nothing is sent automatically and nothing goes anywhere until you press Submit on GitHub. Your Windows username is replaced with a placeholder everywhere it appears.',
+      ]},
+    ]},
     { version: '1.3.1', notes: [
       { h: 'Fixes', items: [
         'Fixed every button, toggle and window control being dead. A Microsoft Edge WebView2 update began enforcing a stricter content security rule that blocked the way most of the UI was wired, so clicks silently did nothing — the sidebar kept working because it is wired differently. This affected all recent versions, not just the newest.',
@@ -3279,6 +3290,97 @@ window.wcCompact = () => {
     o.classList.add('open');
     _focusModal(o, '#clContinue');
   }
+
+  /* Bug report. The backend assembles and scrubs the Markdown and builds the GitHub
+     URL, so the text previewed here is byte-for-byte the text that gets posted, and
+     the WebView never gets to hand an arbitrary URL to the shell. */
+  const BUG_SECTIONS = [
+    ['system', 'bugSecSystem'],
+    ['display', 'bugSecDisplay'],
+    ['game', 'bugSecGame'],
+    ['settings', 'bugSecSettings'],
+    ['logs', 'bugSecLogs'],
+  ];
+
+  function _bugRequest() {
+    return {
+      sections: BUG_SECTIONS
+        .filter(([, id]) => document.getElementById(id)?.checked)
+        .map(([name]) => name),
+      webview: navigator.userAgent,
+      description: document.getElementById('bugWhat')?.value || '',
+    };
+  }
+
+  let _bugPreviewTask = null;
+  async function _refreshBugPreview() {
+    if (_bugPreviewTask) return;           // a slow /command must not stack
+    _bugPreviewTask = (async () => {
+      const r = await sendCommand('bug_report', _bugRequest());
+      const preview = document.getElementById('bugPreview');
+      const warn = document.getElementById('bugWarn');
+      if (preview) preview.textContent = r.markdown || r.msg || 'Could not build the report';
+      if (warn) {
+        warn.textContent = r.too_long
+          ? 'Too long for a link — use Copy instead'
+          : '';
+      }
+      const open = document.getElementById('bugOpen');
+      if (open) open.disabled = !!r.too_long;
+    })();
+    try { await _bugPreviewTask; } finally { _bugPreviewTask = null; }
+  }
+
+  window.openBugReport = () => {
+    const o = document.getElementById('bugReportOverlay');
+    if (!o) return;
+    o.classList.remove('closing');
+    o.classList.add('open');
+    _focusModal(o, '#bugWhat');
+    _refreshBugPreview();
+  };
+
+  function closeBugReport() {
+    const o = document.getElementById('bugReportOverlay');
+    if (!o) return;
+    o.classList.remove('open');
+    o.classList.add('closing');
+    _restoreModalFocus(o);
+    setTimeout(() => o.classList.remove('closing'), 760);
+  }
+  window.closeBugReport = closeBugReport;
+
+  (function wireBugReport() {
+    const overlay = document.getElementById('bugReportOverlay');
+    if (!overlay) return;
+    BUG_SECTIONS.forEach(([, id]) => {
+      document.getElementById(id)?.addEventListener('change', _refreshBugPreview);
+    });
+    let typingTimer = null;
+    document.getElementById('bugWhat')?.addEventListener('input', () => {
+      clearTimeout(typingTimer);
+      typingTimer = setTimeout(_refreshBugPreview, 400);
+    });
+    document.getElementById('bugCancel')?.addEventListener('click', closeBugReport);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) closeBugReport(); });
+
+    document.getElementById('bugCopy')?.addEventListener('click', async () => {
+      const r = await sendCommand('bug_report', _bugRequest());
+      if (!r.markdown) return showToast(r.msg || 'Could not build the report', 'err');
+      try {
+        await navigator.clipboard.writeText(r.markdown);
+        showToast('Report copied — paste it into a GitHub issue', 'ok');
+      } catch (e) {
+        showToast('Could not copy the report', 'err');
+      }
+    });
+
+    document.getElementById('bugOpen')?.addEventListener('click', async () => {
+      const r = await sendCommand('bug_report_open', _bugRequest());
+      showToast(r.msg || 'Opened GitHub', r.ok !== false ? 'ok' : 'err');
+      if (r.ok !== false) closeBugReport();
+    });
+  })();
 
   function closeChangelog() {
     const o = document.getElementById('changelogOverlay');

@@ -3,6 +3,13 @@
 All notable changes to XynMacro. This file is generated from the in-app
 "What's new" notes by `scripts/changelog.mjs` — edit those, not this file.
 
+## 1.4.0
+
+### Report a bug
+- New Report a bug screen in Settings and in the Logs diagnostics. It opens a pre-filled GitHub issue in your browser so a problem can actually be diagnosed instead of guessed at.
+- You choose what to include with tick boxes — PC specs, display and scaling, the Roblox window, macro settings, recent log — and you can read the exact text before anything is posted.
+- Nothing is sent automatically and nothing goes anywhere until you press Submit on GitHub. Your Windows username is replaced with a placeholder everywhere it appears.
+
 ## 1.3.1
 
 ### Fixes

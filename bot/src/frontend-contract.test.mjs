@@ -55,7 +55,7 @@ test('visible form fields and titlebar icon buttons have accessible names', () =
 
 test('dialogs are labelled, modal, keyboard dismissible, and focus-managed', () => {
   const dialogs = [...html.matchAll(/<div\b[^>]*role="dialog"[^>]*>/g)].map((match) => match[0]);
-  assert.equal(dialogs.length, 7);
+  assert.equal(dialogs.length, 8);
   for (const dialog of dialogs) {
     assert.match(dialog, /aria-modal="true"/);
     assert.match(dialog, /aria-label="[^"]+"/);
@@ -69,6 +69,7 @@ test('dialogs are labelled, modal, keyboard dismissible, and focus-managed', () 
     'dismissWelcome()',
     'closeChangelog()',
     'closeAnnouncement()',
+    'closeBugReport()',
   ]) {
     assert.ok(main.includes(closeAction), `Escape wiring should include ${closeAction}`);
   }
