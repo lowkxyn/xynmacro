@@ -19,7 +19,10 @@ class TestApproachCursor:
         with patch.object(core, "robust_move") as move, \
              patch.object(core, "safe_sleep"):
             core.approach_cursor(1500, 900, MONITOR)
-        assert move.call_args_list == [call(960, 540), call(1500, 900)]
+        assert move.call_args_list == [
+            call(960, 540, nudge=True),
+            call(1500, 900, nudge=True),
+        ]
 
     def test_uses_the_monitor_origin_not_the_screen_origin(self):
         # On a second monitor the centre is offset, and a move to 960,540 would
@@ -28,7 +31,7 @@ class TestApproachCursor:
         with patch.object(core, "robust_move") as move, \
              patch.object(core, "safe_sleep"):
             core.approach_cursor(2500, 300, second)
-        assert move.call_args_list[0] == call(2880, 540)
+        assert move.call_args_list[0] == call(2880, 540, nudge=True)
 
     def test_settles_after_each_step(self):
         # Without a pause both moves can land inside one frame, which is the same
@@ -67,13 +70,22 @@ class TestApproachSetting:
 
 
 class TestRobustMoveNudge:
-    def test_sends_a_relative_nudge_so_raw_input_notices(self):
+    def _move(self, **kwargs):
         user32 = MagicMock()
         with patch.object(core, "_user32", user32), \
              patch.object(core, "check_exit"), \
              patch.object(core, "_USER_STOP_LATCHED", False), \
              patch("time.sleep"):
-            core.robust_move(400, 300)
+            core.robust_move(400, 300, **kwargs)
+        return user32
+
+    def test_sends_a_relative_nudge_when_asked(self):
+        user32 = self._move(nudge=True)
         # SetCursorPos, then nudge out, nudge back, then the absolute move.
         user32.SetCursorPos.assert_called_once_with(400, 300)
         assert user32.SendInput.call_count == 3
+
+    def test_leaves_existing_callers_alone_by_default(self):
+        # Gravity parking has always moved without a nudge. Changing that would
+        # reach everyone, including people with the toggle off.
+        assert self._move().SendInput.call_count == 1

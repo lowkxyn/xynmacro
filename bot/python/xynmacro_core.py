@@ -4816,8 +4816,12 @@ def click_at(x, y, method=None):
                 _click_sendinput_abs(x, y)
 
 
-def robust_move(x, y):
-    """Move the cursor without clicking. Uses SendInput-absolute so Roblox notices the move."""
+def robust_move(x, y, nudge=False):
+    """Move the cursor without clicking. Uses SendInput-absolute so Roblox notices the move.
+
+    nudge adds a relative wiggle for callers that need the game to re-read the
+    cursor. It is off by default: the gravity parking paths have always moved
+    without one, and this is not the place to change that for everyone."""
     check_exit()
     with _stop_input_gate:
         if _USER_STOP_LATCHED:
@@ -4825,14 +4829,15 @@ def robust_move(x, y):
         nx, ny = _absolute_virtual_coords(x, y)
         _user32.SetCursorPos(int(x), int(y))
         time.sleep(0.01)
-        # Same relative nudge the click path uses: an ABSOLUTE move alone can be
-        # ignored by a raw-input reader, so without this the game's own pointer
-        # can stay where it was while the visible cursor has already moved.
-        nudge_out = (_INPUT * 1)(_make_mouse_input(_MOUSEEVENTF_MOVE, 1, 0))
-        nudge_back = (_INPUT * 1)(_make_mouse_input(_MOUSEEVENTF_MOVE, -1, 0))
-        _user32.SendInput(1, nudge_out, _ctypes.sizeof(_INPUT))
-        time.sleep(0.005)
-        _user32.SendInput(1, nudge_back, _ctypes.sizeof(_INPUT))
+        if nudge:
+            # Same relative wiggle the click path uses: an ABSOLUTE move alone can
+            # be ignored by a raw-input reader, so without this the game's own
+            # pointer can stay where it was while the cursor has already moved.
+            nudge_out = (_INPUT * 1)(_make_mouse_input(_MOUSEEVENTF_MOVE, 1, 0))
+            nudge_back = (_INPUT * 1)(_make_mouse_input(_MOUSEEVENTF_MOVE, -1, 0))
+            _user32.SendInput(1, nudge_out, _ctypes.sizeof(_INPUT))
+            time.sleep(0.005)
+            _user32.SendInput(1, nudge_back, _ctypes.sizeof(_INPUT))
         move = (_INPUT * 1)(_make_mouse_input(
             _MOUSEEVENTF_MOVE | _MOUSEEVENTF_ABSOLUTE | _MOUSEEVENTF_VIRTUALDESK,
             nx,
@@ -4858,7 +4863,7 @@ def approach_cursor(x, y, monitor):
     centre_x = monitor["left"] + monitor["width"] // 2
     centre_y = monitor["top"] + monitor["height"] // 2
     for point_x, point_y in ((centre_x, centre_y), (x, y)):
-        robust_move(int(point_x), int(point_y))
+        robust_move(int(point_x), int(point_y), nudge=True)
         safe_sleep(TRAIT_CLICK_APPROACH_PAUSE_SEC)
 
 def preprocess_solid(img_bgr):
@@ -7287,6 +7292,7 @@ def _bug_report_sections(selected, webview=None, ui_errors=None):
             "agility_mode", "health_mode", "ki_v8_mode", "training_order",
             "start_delay_sec", "restore_fullscreen_on_start", "windowed_mode_on_start",
             "senzu_enabled", "auto_retry_on_failure", "diagnostic_mode",
+            "ki_adaptive_brightness", "trait_click_approach",
         ]
         out["Settings"] = [(key, config.get(key)) for key in keys]
 

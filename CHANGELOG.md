@@ -3,6 +3,18 @@
 All notable changes to XynMacro. This file is generated from the in-app
 "What's new" notes by `scripts/changelog.mjs` — edit those, not this file.
 
+## 1.7.0
+
+### When a trait lights up but never starts (beta)
+- New Approach On Retry toggle in Tuning, off by default. Turn it on if the cursor lands on a trait, the trait highlights, and nothing happens — reported as needing an auto clicker running alongside the macro just to get past it.
+- The macro jumps the cursor straight onto the button, and DBOG follows the cursor by its movement, so a single jump can leave the game's own pointer behind. The trait highlights where you can see the cursor while the click is delivered where the game still thinks it is, which is why clicking again at the same place changed nothing.
+- With it on, a click that did not take is retried by walking the cursor in through the middle of the window rather than jumping at it again. The first attempt is never changed, so this costs nothing until a click has already failed.
+
+### Bug reports can show what the screen capture looked like
+- New Capture levels tick box in Report a bug. It measures how bright the capture arrives — a real capture of the game puts black near zero, and the report says so plainly when it does not.
+- It also carries the numbers from the last Ki dot the detector turned down, which say whether the dot was found and simply read too bright. Diagnosing the 1.6.0 fault took a saved debug image and a long back and forth; this replaces both with one line.
+- Numbers only. No screenshot is taken or sent, and nothing in it identifies you.
+
 ## 1.6.0
 
 ### Ki detection: Adaptive Brightness (beta)
