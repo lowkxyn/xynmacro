@@ -336,6 +336,8 @@ MAX_AREA = 50000
 
 KI_NO_DOT_LOG_INTERVAL_SEC = 2.0    # how often to log the "no dot found" breakdown (per-filter pass counts)
 
+TRAIT_CLICK_APPROACH_PAUSE_SEC = 0.04  # settle time at each step of the retry approach move
+
 # logic_agility_v3 — sequential per-letter green-gated press
 AGILITY_PER_LETTER_TIMEOUT_SEC = 0.15  # max wait after press for letter to turn green; re-press once on timeout
 AGILITY_FAIL_BACKOFF_SEC = 2.0          # after detecting RED letter, wait this long before re-scanning
@@ -4816,6 +4818,14 @@ def robust_move(x, y):
         nx, ny = _absolute_virtual_coords(x, y)
         _user32.SetCursorPos(int(x), int(y))
         time.sleep(0.01)
+        # Same relative nudge the click path uses: an ABSOLUTE move alone can be
+        # ignored by a raw-input reader, so without this the game's own pointer
+        # can stay where it was while the visible cursor has already moved.
+        nudge_out = (_INPUT * 1)(_make_mouse_input(_MOUSEEVENTF_MOVE, 1, 0))
+        nudge_back = (_INPUT * 1)(_make_mouse_input(_MOUSEEVENTF_MOVE, -1, 0))
+        _user32.SendInput(1, nudge_out, _ctypes.sizeof(_INPUT))
+        time.sleep(0.005)
+        _user32.SendInput(1, nudge_back, _ctypes.sizeof(_INPUT))
         move = (_INPUT * 1)(_make_mouse_input(
             _MOUSEEVENTF_MOVE | _MOUSEEVENTF_ABSOLUTE | _MOUSEEVENTF_VIRTUALDESK,
             nx,
@@ -4824,6 +4834,25 @@ def robust_move(x, y):
         _user32.SendInput(1, move, _ctypes.sizeof(_INPUT))
     time.sleep(0.005)
     check_exit()
+
+
+def approach_cursor(x, y, monitor):
+    """Walk the cursor to (x, y) instead of teleporting onto it.
+
+    Reported from the field: the cursor lands on the trait, the trait highlights,
+    and the click does nothing — every trait, three retries, and an external auto
+    clicker at the same spot works. That is not a coordinate problem. DBOG reads
+    the cursor through raw input, and a single absolute jump gives it no motion to
+    follow, so its pointer can still be wherever the cursor was before.
+
+    Passing through the window centre first produces two real moves with a nudge
+    on each, which is what the game needs to see to agree where the cursor is.
+    """
+    centre_x = monitor["left"] + monitor["width"] // 2
+    centre_y = monitor["top"] + monitor["height"] // 2
+    for point_x, point_y in ((centre_x, centre_y), (x, y)):
+        robust_move(int(point_x), int(point_y))
+        safe_sleep(TRAIT_CLICK_APPROACH_PAUSE_SEC)
 
 def preprocess_solid(img_bgr):
     gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
@@ -6215,6 +6244,12 @@ def run_master_controller():
                     f"{log_prefix} Clicking trait: {category} @ "
                     f"({int(bx)}, {int(by)}) attempt {attempt}/3"
                 )
+                # Backup only. A straight click works on most setups, so the first
+                # attempt stays exactly as it was; the slower approach move is what
+                # the retries do differently instead of repeating what just failed.
+                if attempt > 1:
+                    print(f"{log_prefix} Approaching via centre before retry")
+                    approach_cursor(int(bx), int(by), monitor)
                 click_at(int(bx), int(by))
                 hidden_streak = 0
                 deadline = time.time() + 1.25
