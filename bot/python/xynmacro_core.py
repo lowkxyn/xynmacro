@@ -5331,7 +5331,37 @@ def _ki_v8_check_vertical_one(img_bgr, cx, cy, dot_r):
     col_sums = dark_mask.sum(axis=0)
     min_h = int(patch.shape[0] * KI_V8_DIGIT_DARK_FRAC_MIN)
     n_dark_cols = int((col_sums >= min_h).sum())
-    return KI_V8_DIGIT_WIDTH_MIN <= n_dark_cols <= KI_V8_DIGIT_WIDTH_MAX
+    passed = KI_V8_DIGIT_WIDTH_MIN <= n_dark_cols <= KI_V8_DIGIT_WIDTH_MAX
+    if not passed:
+        _record_ki_digit_rejection(max_channel, min_h, dark_thresh, n_dark_cols, dot_r)
+    return passed
+
+
+# Set every time the digit check rejects a dot; read by the bug report. This is
+# what identifies a capture that arrives brighter than the detector expects —
+# "needed 129, using 90" says it in one line, where a screenshot only shows a
+# picture that looks fine.
+_ki_v8_last_digit_rejection = None
+
+
+def _record_ki_digit_rejection(max_channel, min_h, dark_thresh, n_dark_cols, dot_r):
+    global _ki_v8_last_digit_rejection
+    needed = None
+    if min_h >= 1:
+        # Per column, the value the (min_h)-th darkest pixel sits at: the
+        # threshold at which that column would start counting as the stroke.
+        # The smallest across columns is what the check as a whole needs.
+        ranked = np.sort(max_channel, axis=0)
+        needed = int(ranked[min_h - 1, :].min()) + 1
+    _ki_v8_last_digit_rejection = {
+        "at": time.time(),
+        "dot_r": int(dot_r),
+        "columns": n_dark_cols,
+        "threshold": int(dark_thresh),
+        "needed": needed,
+        "dot_brightness": int(np.median(max_channel)),
+        "adaptive": bool(KI_V8_ADAPTIVE_BRIGHTNESS),
+    }
 
 
 _ki_v8_no_dot_last_log_ts = 0.0
@@ -7039,7 +7069,43 @@ ISSUE_URL = "https://github.com/lowkxyn/xynmacro/issues/new"
 # GitHub truncates very long query strings; past this we tell the user to paste instead.
 ISSUE_URL_LIMIT = 6000
 
-BUG_REPORT_SECTIONS = ("system", "display", "game", "settings", "logs", "crash")
+BUG_REPORT_SECTIONS = ("system", "display", "game", "settings", "capture", "logs", "crash")
+
+
+def _capture_brightness_profile():
+    """Measure the levels in the macro's own screen capture.
+
+    Detection compares pixels against fixed brightness values, so a capture that
+    arrives brighter than the detector expects breaks colour checks while the
+    game looks completely normal on screen — the failure is invisible to the
+    person reporting it. Black floor is the tell: a real SDR capture of the game
+    puts it near zero, and anything lifting the pipeline (HDR, a display mode
+    that alters gamma, in-game brightness) raises it.
+
+    Returns None rather than raising: a bug report must still send.
+    """
+    try:
+        update_game_window()
+        if GAME_HWND is not None and GAME_WIDTH > 0 and GAME_HEIGHT > 0:
+            region = {"left": GAME_OFFSET_X, "top": GAME_OFFSET_Y,
+                      "width": GAME_WIDTH, "height": GAME_HEIGHT}
+            source = "Roblox client"
+        else:
+            region = None
+            source = "primary screen (Roblox not found)"
+        with mss.mss() as sct:
+            frame = np.array(sct.grab(region or sct.monitors[1]))
+        # Same measure the detectors use: max channel, not luminance.
+        max_channel = frame[:, :, :3].max(axis=2)
+        floor, median, ceiling = np.percentile(max_channel, (1, 50, 99))
+        return {
+            "source": source,
+            "black_floor": int(floor),
+            "median": int(median),
+            "white_point": int(ceiling),
+        }
+    except Exception:
+        return None
 
 
 def _scrub_user_paths(text):
@@ -7180,6 +7246,46 @@ def _bug_report_sections(selected, webview=None, ui_errors=None):
             "senzu_enabled", "auto_retry_on_failure", "diagnostic_mode",
         ]
         out["Settings"] = [(key, config.get(key)) for key in keys]
+
+    if "capture" in selected:
+        rows = []
+        profile = _capture_brightness_profile()
+        if profile is None:
+            rows.append(("Levels", "could not capture"))
+        else:
+            rows.append(("Captured from", profile["source"]))
+            rows.append((
+                "Levels",
+                f"black floor {profile['black_floor']}, "
+                f"median {profile['median']}, "
+                f"white point {profile['white_point']} (0-255)",
+            ))
+            # Only meaningful against the game: the app's own window has no
+            # true black to measure, so a high floor there says nothing.
+            if profile["black_floor"] > 25 and profile["source"] == "Roblox client":
+                rows.append((
+                    "Note",
+                    "Black is not arriving as black. Something between the game "
+                    "and the capture is lifting brightness, which is what breaks "
+                    "colour-based detection.",
+                ))
+
+        rejection = _ki_v8_last_digit_rejection
+        if rejection:
+            age = max(0, int(time.time() - rejection["at"]))
+            rows.append(("Last Ki dot rejected", f"{age}s ago, dot radius {rejection['dot_r']}"))
+            rows.append((
+                "Ki digit check",
+                f"{rejection['columns']} matching columns, "
+                f"using threshold {rejection['threshold']}, "
+                f"needed {rejection['needed']}, "
+                f"dot brightness {rejection['dot_brightness']}"
+                + (", adaptive on" if rejection["adaptive"] else ", adaptive off"),
+            ))
+        else:
+            rows.append(("Last Ki dot rejected", "none this session"))
+
+        out["Capture"] = rows
 
     if "logs" in selected:
         recent = list(_ui_log_ring)[-25:]

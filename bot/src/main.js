@@ -3472,6 +3472,7 @@ window.wcCompact = () => {
     ['display', 'bugSecDisplay'],
     ['game', 'bugSecGame'],
     ['settings', 'bugSecSettings'],
+    ['capture', 'bugSecCapture'],
     ['logs', 'bugSecLogs'],
     ['crash', 'bugSecCrash'],
   ];

@@ -67,6 +67,40 @@ class KiAdaptiveBrightnessDetectionTests(unittest.TestCase):
         self.assertTrue(self.check(dim))
 
 
+class KiDigitRejectionDiagnosticTests(unittest.TestCase):
+    """A rejection has to record why. Without it the only evidence is a saved
+    image, and the image looks fine to whoever is asked for it."""
+
+    def setUp(self):
+        self.adaptive = core.KI_V8_ADAPTIVE_BRIGHTNESS
+        self.rejection = core._ki_v8_last_digit_rejection
+        core.KI_V8_ADAPTIVE_BRIGHTNESS = False
+        core._ki_v8_last_digit_rejection = None
+
+    def tearDown(self):
+        core.KI_V8_ADAPTIVE_BRIGHTNESS = self.adaptive
+        core._ki_v8_last_digit_rejection = self.rejection
+
+    def test_a_passing_check_records_nothing(self):
+        core._ki_v8_check_vertical_one(
+            render_ki_dot(dot_value=180, stroke_value=70), 100, 100, DOT_RADIUS
+        )
+        self.assertIsNone(core._ki_v8_last_digit_rejection)
+
+    def test_a_lifted_capture_records_the_threshold_it_needed(self):
+        core._ki_v8_check_vertical_one(
+            render_ki_dot(dot_value=210, stroke_value=100), 100, 100, DOT_RADIUS
+        )
+        rejection = core._ki_v8_last_digit_rejection
+        self.assertIsNotNone(rejection)
+        self.assertEqual(rejection["threshold"], core.KI_V8_DARK_THRESH)
+        # The gap between these two is the diagnosis: the stroke is there, it is
+        # just brighter than the fixed threshold can see.
+        self.assertGreater(rejection["needed"], rejection["threshold"])
+        self.assertEqual(rejection["columns"], 0)
+        self.assertFalse(rejection["adaptive"])
+
+
 class KiAdaptiveBrightnessSettingTests(unittest.TestCase):
     def setUp(self):
         self.adaptive = core.KI_V8_ADAPTIVE_BRIGHTNESS

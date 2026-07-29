@@ -110,6 +110,66 @@ class TestDisplaySection:
             assert "2560x1600" in core.build_bug_report(["display"])
 
 
+class TestCaptureSection:
+    """Detection reads pixels, so a report has to be able to say what the capture
+    actually looked like. Asking a user for a screenshot does not work — the
+    screen looks fine to them, which is the whole problem."""
+
+    def setup_method(self):
+        self.rejection = core._ki_v8_last_digit_rejection
+        core._ki_v8_last_digit_rejection = None
+
+    def teardown_method(self):
+        core._ki_v8_last_digit_rejection = self.rejection
+
+    def test_reports_the_levels_it_measured(self):
+        with patch.object(core, "_capture_brightness_profile", return_value={
+            "source": "Roblox client", "black_floor": 2, "median": 90, "white_point": 250,
+        }):
+            body = core.build_bug_report(["capture"])
+        assert "black floor 2" in body
+        assert "white point 250" in body
+
+    def test_flags_a_lifted_black_floor(self):
+        with patch.object(core, "_capture_brightness_profile", return_value={
+            "source": "Roblox client", "black_floor": 61, "median": 140, "white_point": 255,
+        }):
+            body = core.build_bug_report(["capture"])
+        assert "Black is not arriving as black" in body
+
+    def test_does_not_flag_a_lifted_floor_when_roblox_was_not_captured(self):
+        # The app's own window has no true black, so the floor says nothing there.
+        with patch.object(core, "_capture_brightness_profile", return_value={
+            "source": "primary screen (Roblox not found)",
+            "black_floor": 61, "median": 140, "white_point": 255,
+        }):
+            body = core.build_bug_report(["capture"])
+        assert "Black is not arriving as black" not in body
+
+    def test_survives_a_capture_that_fails(self):
+        with patch.object(core, "_capture_brightness_profile", return_value=None):
+            assert "could not capture" in core.build_bug_report(["capture"])
+
+    def test_carries_the_numbers_that_identify_a_rejected_ki_dot(self):
+        core._ki_v8_last_digit_rejection = {
+            "at": core.time.time(), "dot_r": 23, "columns": 0, "threshold": 90,
+            "needed": 129, "dot_brightness": 205, "adaptive": False,
+        }
+        with patch.object(core, "_capture_brightness_profile", return_value=None):
+            body = core.build_bug_report(["capture"])
+        # "using 90, needed 129" is the entire diagnosis in one line.
+        assert "using threshold 90" in body
+        assert "needed 129" in body
+        assert "adaptive off" in body
+
+    def test_says_so_when_no_dot_was_ever_rejected(self):
+        with patch.object(core, "_capture_brightness_profile", return_value=None):
+            assert "none this session" in core.build_bug_report(["capture"])
+
+    def test_is_omitted_unless_requested(self):
+        assert "### Capture" not in core.build_bug_report(["display"])
+
+
 class TestInterfaceErrors:
     def test_includes_errors_the_backend_never_sees(self):
         # A CSP change once killed every button while the sidecar log stayed clean.
