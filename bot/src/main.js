@@ -2117,6 +2117,7 @@ window.wcCompact = () => {
     after_run_on_failure: 'toggleAfterRunFailure',
     auto_retry_on_failure: 'toggleAutoRetry',
     auto_retry_walk_out: 'toggleAutoRetryWalkOut',
+    ki_adaptive_brightness: 'toggleKiAdaptiveBrightness',
   };
 
   const entryMap = {
@@ -3056,6 +3057,14 @@ window.wcCompact = () => {
 
   // What's-new content, newest first. Each entry: {version, notes:[{h, items[]}]}.
   const CHANGELOG = [
+    { version: '1.6.0', notes: [
+      { h: 'Ki detection: Adaptive Brightness (beta)', items: [
+        'New toggle in Tuning under Ki Detection & Timing, off by default. Turn it on if Ki Control and Ki Damage never click while every other stat works fine.',
+        'The dot detector finds the black "1" inside the orange dot by comparing it against a fixed brightness value, and that value had no headroom — measured against known-good dots, a 2% lift anywhere in your display pipeline stops it detecting entirely. BIOS "game mode" and vibrance profiles, HDR, a monitor colour profile and Night Light all do that, and every other stat keeps working, so it looks like Ki alone is broken.',
+        'With the toggle on, the "1" is measured against the dot\'s own brightness instead of a fixed number, which holds through those shifts. Tested against known-good dots at brightness lifts up to 1.5x, where the fixed value reads nothing at all.',
+        'Marked beta because the false-positive side has not been tested against a wide set of non-Ki screens yet. It is off unless you turn it on, and nothing changes if you leave it alone.',
+      ]},
+    ]},
     { version: '1.5.1', notes: [
       { h: 'Fixes', items: [
         'Fixed the new crash notice never appearing for the most common kind of crash. If the app itself died, the shutdown was being recorded as if you had closed it normally, so the next launch said nothing and the crash log was not offered.',

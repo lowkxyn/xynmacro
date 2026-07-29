@@ -3,6 +3,14 @@
 All notable changes to XynMacro. This file is generated from the in-app
 "What's new" notes by `scripts/changelog.mjs` — edit those, not this file.
 
+## 1.6.0
+
+### Ki detection: Adaptive Brightness (beta)
+- New toggle in Tuning under Ki Detection & Timing, off by default. Turn it on if Ki Control and Ki Damage never click while every other stat works fine.
+- The dot detector finds the black "1" inside the orange dot by comparing it against a fixed brightness value, and that value had no headroom — measured against known-good dots, a 2% lift anywhere in your display pipeline stops it detecting entirely. BIOS "game mode" and vibrance profiles, HDR, a monitor colour profile and Night Light all do that, and every other stat keeps working, so it looks like Ki alone is broken.
+- With the toggle on, the "1" is measured against the dot's own brightness instead of a fixed number, which holds through those shifts. Tested against known-good dots at brightness lifts up to 1.5x, where the fixed value reads nothing at all.
+- Marked beta because the false-positive side has not been tested against a wide set of non-Ki screens yet. It is off unless you turn it on, and nothing changes if you leave it alone.
+
 ## 1.5.1
 
 ### Fixes

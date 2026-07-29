@@ -535,6 +535,11 @@
           <div class="row-ctrl"><input type="number" class="inp" id="kiV8V2BrightCountThreshold" step="1" min="1" max="32" aria-label="Ki ring pixel minimum"></div>
         </div>
         <div class="row-hint">v2 only: minimum bright pixels (out of 32 sampled around each scanned radius) to call that radius "the ring". Default 6. Higher = stricter (avoids false detections from speckle); lower = more sensitive (catches partial / occluded rings).</div>
+        <div class="row-item">
+          <span class="row-label">Adaptive Brightness <span class="row-sub">beta</span></span>
+          <div class="row-ctrl"><button type="button" class="toggle" id="toggleKiAdaptiveBrightness" role="switch" aria-checked="false" aria-label="Ki adaptive brightness switch" onclick="toggleSetting('ki_adaptive_brightness',this)"></button></div>
+        </div>
+        <div class="row-hint"><b>Turn this on if Ki Control and Ki Damage never click while every other stat works.</b> The dot detector looks for the black "1" inside the orange dot using a fixed brightness value, and anything that lifts your display's brightness pushes the "1" out of range — BIOS "game mode" or vibrance profiles, HDR, a monitor colour profile, Night Light. Measured, a 2% lift is enough to stop it detecting entirely. This measures the "1" against the dot's own brightness instead, so it survives those shifts. Beta: it has been tested against known-good dots at brightness lifts up to 1.5×, but not yet against a wide set of non-Ki screens, so it may in theory be more willing to accept a false dot. Leave it off if Ki already works for you.</div>
       </div>
 
       <div style="display:flex;gap:10px;margin-top:20px;align-items:center">

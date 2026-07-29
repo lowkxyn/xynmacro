@@ -352,6 +352,18 @@ KI_V8_DIGIT_DARK_FRAC_MIN = 0.40      # ≥this fraction of a column must be dar
 KI_V8_DIGIT_WIDTH_MIN = 1             # "1" stroke is 1-12 columns wide (more generous for close-up dots)
 KI_V8_DIGIT_WIDTH_MAX = 12
 KI_V8_DARK_THRESH = 90                # pixel gray < this counts as "dark" (raised from 80 for anti-aliased "1" edges)
+# Adaptive brightness (opt-in). KI_V8_DARK_THRESH is an absolute value, and on a
+# stock display the "1" stroke only just clears it — measured across known-good
+# frames, the first column qualifies at exactly 89-90. A 2% brightness lift
+# anywhere in the display pipeline (BIOS "game mode"/vibrance profiles, HDR, a
+# monitor ICC profile, Night Light) pushes the stroke above 90 and the digit
+# check rejects every dot, while the border check is unaffected — the exact
+# `border=1 one=0 reject=digit` signature reported from the field.
+# The stroke-to-dot brightness RATIO stays put at ~0.50 through those shifts, so
+# when enabled the threshold is derived from the dot's own brightness instead.
+# KI_V8_DARK_THRESH remains the floor so a genuinely dark scene can't drive it down.
+KI_V8_ADAPTIVE_BRIGHTNESS = False     # opt-in: derive the digit threshold from the dot instead of a fixed value
+KI_V8_ADAPTIVE_DARK_FRAC = 0.55       # threshold = crop_median_brightness × this (0.50 is the measured stroke ratio)
 KI_V8_STABLE_POS_TOL_PX = 25          # detected dot center must be within this of the last frame's
 KI_V8_STABLE_FRAMES_REQUIRED = 2      # require this many consecutive frames at same pos before clicking
 KI_V8_POST_CLICK_COOLDOWN_SEC = 0.12  # enough to avoid the clicked dot without missing the next ring
@@ -808,6 +820,7 @@ DEFAULT_USER_SETTINGS = {
     "ki_v8_v2_brightness_threshold": int(KI_V8_V2_BRIGHTNESS_THRESHOLD),
     "ki_v8_v2_bright_count_threshold": int(KI_V8_V2_BRIGHT_COUNT_THRESHOLD),
     "ki_latency_comp_ms": int(KI_LATENCY_COMP_MS),
+    "ki_adaptive_brightness": bool(KI_V8_ADAPTIVE_BRIGHTNESS),
     "senzu_enabled": bool(SENZU_ENABLED),
     "senzu_slot": int(SENZU_SLOT),
     "senzu_delay_sec": float(SENZU_DELAY_SEC),
@@ -897,7 +910,7 @@ def reset_user_settings_to_defaults():
     AGILITY_AFTER_GREEN_SETTLE_SEC = float(DEFAULT_USER_SETTINGS.get("agility_after_green_settle_sec", 0.1))
     global KI_V8_CLICK_DELAY_SEC, KI_V8_MODE, KI_V8_V2_TARGET_R_FACTOR
     global KI_V8_V2_BRIGHTNESS_THRESHOLD, KI_V8_V2_BRIGHT_COUNT_THRESHOLD
-    global KI_LATENCY_COMP_MS
+    global KI_LATENCY_COMP_MS, KI_V8_ADAPTIVE_BRIGHTNESS
     global SENZU_ENABLED, SENZU_SLOT, SENZU_DELAY_SEC, SENZU_RECOVERY_TIMEOUT_SEC
     global SENZU_PREFERENCE_MODE
     global SENZU_ZERO_GRAVITY_ON_EMPTY
@@ -909,6 +922,7 @@ def reset_user_settings_to_defaults():
     KI_V8_V2_BRIGHTNESS_THRESHOLD = int(DEFAULT_USER_SETTINGS.get("ki_v8_v2_brightness_threshold", 220))
     KI_V8_V2_BRIGHT_COUNT_THRESHOLD = int(DEFAULT_USER_SETTINGS.get("ki_v8_v2_bright_count_threshold", 6))
     KI_LATENCY_COMP_MS = min(250, max(0, int(DEFAULT_USER_SETTINGS.get("ki_latency_comp_ms", 0))))
+    KI_V8_ADAPTIVE_BRIGHTNESS = bool(DEFAULT_USER_SETTINGS.get("ki_adaptive_brightness", False))
     SENZU_ENABLED = bool(DEFAULT_USER_SETTINGS.get("senzu_enabled", True))
     SENZU_SLOT = min(4, max(1, int(DEFAULT_USER_SETTINGS.get("senzu_slot", 1))))
     SENZU_DELAY_SEC = max(0.0, float(DEFAULT_USER_SETTINGS.get("senzu_delay_sec", 0.0)))
@@ -4400,6 +4414,9 @@ def load_master_config():
         if "ki_latency_comp_ms" in data:
             global KI_LATENCY_COMP_MS
             KI_LATENCY_COMP_MS = min(250, max(0, int(data["ki_latency_comp_ms"])))
+        if "ki_adaptive_brightness" in data:
+            global KI_V8_ADAPTIVE_BRIGHTNESS
+            KI_V8_ADAPTIVE_BRIGHTNESS = _ui_bool(data["ki_adaptive_brightness"])
         if "senzu_enabled" in data:
             global SENZU_ENABLED
             SENZU_ENABLED = bool(data["senzu_enabled"])
@@ -4538,6 +4555,7 @@ def _master_config_snapshot():
         "ki_v8_v2_brightness_threshold": int(KI_V8_V2_BRIGHTNESS_THRESHOLD),
         "ki_v8_v2_bright_count_threshold": int(KI_V8_V2_BRIGHT_COUNT_THRESHOLD),
         "ki_latency_comp_ms": int(KI_LATENCY_COMP_MS),
+        "ki_adaptive_brightness": bool(KI_V8_ADAPTIVE_BRIGHTNESS),
         "senzu_enabled": bool(SENZU_ENABLED),
         "senzu_slot": int(SENZU_SLOT),
         "senzu_delay_sec": float(SENZU_DELAY_SEC),
@@ -5286,6 +5304,10 @@ def _ki_v8_check_vertical_one(img_bgr, cx, cy, dot_r):
     Scan a central column band (±dot_r/3 wide, ~1.3× dot_r tall) for columns
     where ≥45% of pixels are dark — those are the digit's vertical stroke.
     Require 1-8 such columns total (a thin connected stroke, not a wide dark block).
+
+    With KI_V8_ADAPTIVE_BRIGHTNESS on, "dark" is measured against the crop's own
+    median brightness rather than a fixed value, so a display pipeline that lifts
+    brightness doesn't push the stroke out of range.
     """
     crop_h = max(8, int(dot_r * 1.3))
     crop_w = max(6, int(dot_r * 0.6))
@@ -5299,7 +5321,13 @@ def _ki_v8_check_vertical_one(img_bgr, cx, cy, dot_r):
         return False
     # max-channel "dark" (same reason as _ki_v8_check_dark_border): keeps the GC
     # red background from registering as the black "1" stroke.
-    dark_mask = (patch.max(axis=2) < KI_V8_DARK_THRESH).astype(np.uint8)
+    max_channel = patch.max(axis=2)
+    dark_thresh = KI_V8_DARK_THRESH
+    if KI_V8_ADAPTIVE_BRIGHTNESS:
+        dark_thresh = max(
+            dark_thresh, int(np.median(max_channel) * KI_V8_ADAPTIVE_DARK_FRAC)
+        )
+    dark_mask = (max_channel < dark_thresh).astype(np.uint8)
     col_sums = dark_mask.sum(axis=0)
     min_h = int(patch.shape[0] * KI_V8_DIGIT_DARK_FRAC_MIN)
     n_dark_cols = int((col_sums >= min_h).sum())
@@ -6654,6 +6682,7 @@ def _ui_config_snapshot():
         "ki_v8_v2_brightness_threshold": KI_V8_V2_BRIGHTNESS_THRESHOLD,
         "ki_v8_v2_bright_count_threshold": KI_V8_V2_BRIGHT_COUNT_THRESHOLD,
         "ki_latency_comp_ms": KI_LATENCY_COMP_MS,
+        "ki_adaptive_brightness": KI_V8_ADAPTIVE_BRIGHTNESS,
         "senzu_enabled": SENZU_ENABLED,
         "senzu_slot": SENZU_SLOT,
         "senzu_delay_sec": SENZU_DELAY_SEC,
@@ -7965,6 +7994,9 @@ def _ui_apply_setting_unlocked(key, value):
     elif key == "ki_latency_comp_ms":
         global KI_LATENCY_COMP_MS
         KI_LATENCY_COMP_MS = min(250, max(0, _finite_int(value)))
+    elif key == "ki_adaptive_brightness":
+        global KI_V8_ADAPTIVE_BRIGHTNESS
+        KI_V8_ADAPTIVE_BRIGHTNESS = _ui_bool(value)
     elif key == "senzu_enabled":
         global SENZU_ENABLED
         SENZU_ENABLED = _ui_bool(value)
