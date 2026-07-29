@@ -336,6 +336,7 @@ MAX_AREA = 50000
 
 KI_NO_DOT_LOG_INTERVAL_SEC = 2.0    # how often to log the "no dot found" breakdown (per-filter pass counts)
 
+TRAIT_CLICK_APPROACH_ENABLED = False   # opt-in: on a retry, walk the cursor in via the window centre
 TRAIT_CLICK_APPROACH_PAUSE_SEC = 0.04  # settle time at each step of the retry approach move
 
 # logic_agility_v3 — sequential per-letter green-gated press
@@ -823,6 +824,7 @@ DEFAULT_USER_SETTINGS = {
     "ki_v8_v2_bright_count_threshold": int(KI_V8_V2_BRIGHT_COUNT_THRESHOLD),
     "ki_latency_comp_ms": int(KI_LATENCY_COMP_MS),
     "ki_adaptive_brightness": bool(KI_V8_ADAPTIVE_BRIGHTNESS),
+    "trait_click_approach": bool(TRAIT_CLICK_APPROACH_ENABLED),
     "senzu_enabled": bool(SENZU_ENABLED),
     "senzu_slot": int(SENZU_SLOT),
     "senzu_delay_sec": float(SENZU_DELAY_SEC),
@@ -912,7 +914,7 @@ def reset_user_settings_to_defaults():
     AGILITY_AFTER_GREEN_SETTLE_SEC = float(DEFAULT_USER_SETTINGS.get("agility_after_green_settle_sec", 0.1))
     global KI_V8_CLICK_DELAY_SEC, KI_V8_MODE, KI_V8_V2_TARGET_R_FACTOR
     global KI_V8_V2_BRIGHTNESS_THRESHOLD, KI_V8_V2_BRIGHT_COUNT_THRESHOLD
-    global KI_LATENCY_COMP_MS, KI_V8_ADAPTIVE_BRIGHTNESS
+    global KI_LATENCY_COMP_MS, KI_V8_ADAPTIVE_BRIGHTNESS, TRAIT_CLICK_APPROACH_ENABLED
     global SENZU_ENABLED, SENZU_SLOT, SENZU_DELAY_SEC, SENZU_RECOVERY_TIMEOUT_SEC
     global SENZU_PREFERENCE_MODE
     global SENZU_ZERO_GRAVITY_ON_EMPTY
@@ -925,6 +927,7 @@ def reset_user_settings_to_defaults():
     KI_V8_V2_BRIGHT_COUNT_THRESHOLD = int(DEFAULT_USER_SETTINGS.get("ki_v8_v2_bright_count_threshold", 6))
     KI_LATENCY_COMP_MS = min(250, max(0, int(DEFAULT_USER_SETTINGS.get("ki_latency_comp_ms", 0))))
     KI_V8_ADAPTIVE_BRIGHTNESS = bool(DEFAULT_USER_SETTINGS.get("ki_adaptive_brightness", False))
+    TRAIT_CLICK_APPROACH_ENABLED = bool(DEFAULT_USER_SETTINGS.get("trait_click_approach", False))
     SENZU_ENABLED = bool(DEFAULT_USER_SETTINGS.get("senzu_enabled", True))
     SENZU_SLOT = min(4, max(1, int(DEFAULT_USER_SETTINGS.get("senzu_slot", 1))))
     SENZU_DELAY_SEC = max(0.0, float(DEFAULT_USER_SETTINGS.get("senzu_delay_sec", 0.0)))
@@ -4419,6 +4422,9 @@ def load_master_config():
         if "ki_adaptive_brightness" in data:
             global KI_V8_ADAPTIVE_BRIGHTNESS
             KI_V8_ADAPTIVE_BRIGHTNESS = _ui_bool(data["ki_adaptive_brightness"])
+        if "trait_click_approach" in data:
+            global TRAIT_CLICK_APPROACH_ENABLED
+            TRAIT_CLICK_APPROACH_ENABLED = _ui_bool(data["trait_click_approach"])
         if "senzu_enabled" in data:
             global SENZU_ENABLED
             SENZU_ENABLED = bool(data["senzu_enabled"])
@@ -4558,6 +4564,7 @@ def _master_config_snapshot():
         "ki_v8_v2_bright_count_threshold": int(KI_V8_V2_BRIGHT_COUNT_THRESHOLD),
         "ki_latency_comp_ms": int(KI_LATENCY_COMP_MS),
         "ki_adaptive_brightness": bool(KI_V8_ADAPTIVE_BRIGHTNESS),
+        "trait_click_approach": bool(TRAIT_CLICK_APPROACH_ENABLED),
         "senzu_enabled": bool(SENZU_ENABLED),
         "senzu_slot": int(SENZU_SLOT),
         "senzu_delay_sec": float(SENZU_DELAY_SEC),
@@ -6247,7 +6254,7 @@ def run_master_controller():
                 # Backup only. A straight click works on most setups, so the first
                 # attempt stays exactly as it was; the slower approach move is what
                 # the retries do differently instead of repeating what just failed.
-                if attempt > 1:
+                if attempt > 1 and TRAIT_CLICK_APPROACH_ENABLED:
                     print(f"{log_prefix} Approaching via centre before retry")
                     approach_cursor(int(bx), int(by), monitor)
                 click_at(int(bx), int(by))
@@ -6748,6 +6755,7 @@ def _ui_config_snapshot():
         "ki_v8_v2_bright_count_threshold": KI_V8_V2_BRIGHT_COUNT_THRESHOLD,
         "ki_latency_comp_ms": KI_LATENCY_COMP_MS,
         "ki_adaptive_brightness": KI_V8_ADAPTIVE_BRIGHTNESS,
+        "trait_click_approach": TRAIT_CLICK_APPROACH_ENABLED,
         "senzu_enabled": SENZU_ENABLED,
         "senzu_slot": SENZU_SLOT,
         "senzu_delay_sec": SENZU_DELAY_SEC,
@@ -8138,6 +8146,9 @@ def _ui_apply_setting_unlocked(key, value):
     elif key == "ki_adaptive_brightness":
         global KI_V8_ADAPTIVE_BRIGHTNESS
         KI_V8_ADAPTIVE_BRIGHTNESS = _ui_bool(value)
+    elif key == "trait_click_approach":
+        global TRAIT_CLICK_APPROACH_ENABLED
+        TRAIT_CLICK_APPROACH_ENABLED = _ui_bool(value)
     elif key == "senzu_enabled":
         global SENZU_ENABLED
         SENZU_ENABLED = _ui_bool(value)

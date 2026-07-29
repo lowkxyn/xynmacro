@@ -39,6 +39,33 @@ class TestApproachCursor:
         assert sleep.call_args_list[0] == call(core.TRAIT_CLICK_APPROACH_PAUSE_SEC)
 
 
+class TestApproachSetting:
+    def setup_method(self):
+        self.enabled = core.TRAIT_CLICK_APPROACH_ENABLED
+
+    def teardown_method(self):
+        core.TRAIT_CLICK_APPROACH_ENABLED = self.enabled
+
+    def test_default_is_off(self):
+        assert core.DEFAULT_USER_SETTINGS["trait_click_approach"] is False
+
+    def test_toggle_is_a_user_setting(self):
+        with patch.object(core, "save_master_config"):
+            core._ui_apply_setting("trait_click_approach", True)
+            assert core.TRAIT_CLICK_APPROACH_ENABLED is True
+            core._ui_apply_setting("trait_click_approach", False)
+            assert core.TRAIT_CLICK_APPROACH_ENABLED is False
+
+    def test_snapshot_exposes_the_toggle(self):
+        core.TRAIT_CLICK_APPROACH_ENABLED = True
+        assert core._ui_config_snapshot()["trait_click_approach"] is True
+
+    def test_reset_restores_the_default(self):
+        core.TRAIT_CLICK_APPROACH_ENABLED = True
+        core.reset_user_settings_to_defaults()
+        assert core.TRAIT_CLICK_APPROACH_ENABLED is False
+
+
 class TestRobustMoveNudge:
     def test_sends_a_relative_nudge_so_raw_input_notices(self):
         user32 = MagicMock()

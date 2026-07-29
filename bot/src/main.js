@@ -2118,6 +2118,7 @@ window.wcCompact = () => {
     auto_retry_on_failure: 'toggleAutoRetry',
     auto_retry_walk_out: 'toggleAutoRetryWalkOut',
     ki_adaptive_brightness: 'toggleKiAdaptiveBrightness',
+    trait_click_approach: 'toggleTraitClickApproach',
   };
 
   const entryMap = {

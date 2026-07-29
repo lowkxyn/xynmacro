@@ -556,6 +556,14 @@
         <p>Click positions and detection samples for the training UI</p>
       </div>
 
+      <div class="panel">
+        <div class="row-item">
+          <span class="row-label">Approach On Retry <span class="row-sub">beta</span></span>
+          <div class="row-ctrl"><button type="button" class="toggle" id="toggleTraitClickApproach" role="switch" aria-checked="false" aria-label="Approach trait on retry switch" onclick="toggleSetting('trait_click_approach',this)"></button></div>
+        </div>
+        <div class="row-hint"><b>Turn this on if the cursor lands on a trait, the trait lights up, and nothing starts.</b> The macro jumps the cursor straight onto the button, and DBOG follows the cursor by its movement, so a single jump can leave the game's own pointer behind — the trait highlights where you can see the cursor while the click is delivered where the game still thinks it is. With this on, a failed click is retried by walking the cursor in through the middle of the window instead of jumping again. The first attempt is never changed, so this costs nothing unless a click has already failed. Beta: it has not been confirmed on a machine that shows the fault.</div>
+      </div>
+
       <div class="section-title">Trait Click Points</div>
       <div class="panel">
         <div class="calib-intro">
