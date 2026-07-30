@@ -3058,6 +3058,13 @@ window.wcCompact = () => {
 
   // What's-new content, newest first. Each entry: {version, notes:[{h, items[]}]}.
   const CHANGELOG = [
+    { version: '1.7.1', notes: [
+      { h: 'Trait clicks recover automatically', items: [
+        'If a direct trait click leaves the Training Mode menu open, the retry now always walks the cursor in through the middle of the game window and clicks without moving it again. Existing settings do not need to be changed.',
+        'Once that approach is confirmed by the menu disappearing stably, XynMacro saves Approach First for later stats and future runs on that PC.',
+        'The button-only retry refuses to click if the Windows cursor moved away from the trait after the approach, so another input source cannot turn the recovery into a click somewhere else.',
+      ]},
+    ]},
     { version: '1.7.0', notes: [
       { h: 'When a trait lights up but never starts (beta)', items: [
         'New Approach On Retry toggle in Tuning, off by default. Turn it on if the cursor lands on a trait, the trait highlights, and nothing happens — reported as needing an auto clicker running alongside the macro just to get past it.',

@@ -3,6 +3,13 @@
 All notable changes to XynMacro. This file is generated from the in-app
 "What's new" notes by `scripts/changelog.mjs` — edit those, not this file.
 
+## 1.7.1
+
+### Trait clicks recover automatically
+- If a direct trait click leaves the Training Mode menu open, the retry now always walks the cursor in through the middle of the game window and clicks without moving it again. Existing settings do not need to be changed.
+- Once that approach is confirmed by the menu disappearing stably, XynMacro saves Approach First for later stats and future runs on that PC.
+- The button-only retry refuses to click if the Windows cursor moved away from the trait after the approach, so another input source cannot turn the recovery into a click somewhere else.
+
 ## 1.7.0
 
 ### When a trait lights up but never starts (beta)

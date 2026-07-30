@@ -65,8 +65,66 @@ class TestApproachSetting:
 
     def test_reset_restores_the_default(self):
         core.TRAIT_CLICK_APPROACH_ENABLED = True
-        core.reset_user_settings_to_defaults()
+        with patch.object(core, "save_master_config"):
+            core.reset_user_settings_to_defaults()
         assert core.TRAIT_CLICK_APPROACH_ENABLED is False
+
+
+class TestTraitClickStrategy:
+    def setup_method(self):
+        self.enabled = core.TRAIT_CLICK_APPROACH_ENABLED
+
+    def teardown_method(self):
+        core.TRAIT_CLICK_APPROACH_ENABLED = self.enabled
+
+    def test_first_attempt_is_direct_unless_approach_first_is_saved(self):
+        core.TRAIT_CLICK_APPROACH_ENABLED = False
+        assert core._trait_click_uses_approach(1) is False
+        core.TRAIT_CLICK_APPROACH_ENABLED = True
+        assert core._trait_click_uses_approach(1) is True
+
+    def test_every_retry_approaches_even_for_an_old_disabled_setting(self):
+        core.TRAIT_CLICK_APPROACH_ENABLED = False
+        assert core._trait_click_uses_approach(2) is True
+        assert core._trait_click_uses_approach(3) is True
+
+    def test_only_confirmed_approach_clicks_persist_approach_first(self):
+        core.TRAIT_CLICK_APPROACH_ENABLED = False
+        with patch.object(core, "save_master_config") as save:
+            # A direct click can be confirmed, but does not teach the setting.
+            core._confirm_trait_click("Health", "[TEST]", used_approach=False)
+            save.assert_not_called()
+            assert core.TRAIT_CLICK_APPROACH_ENABLED is False
+
+            # This helper is reached only after the stable menu-disappearance check.
+            core._confirm_trait_click("Health", "[TEST]", used_approach=True)
+            save.assert_called_once_with()
+            assert core.TRAIT_CLICK_APPROACH_ENABLED is True
+
+
+class TestClickCurrentPosition:
+    def test_sends_only_button_packets_without_moving_the_cursor(self):
+        user32 = MagicMock()
+        with patch.object(core.win32api, "GetCursorPos", return_value=(400, 300)), \
+             patch.object(core, "_user32", user32), \
+             patch.object(core, "_make_mouse_input", wraps=core._make_mouse_input) as mouse_input:
+            assert core.click_current_position(400, 300) is True
+
+        assert mouse_input.call_args_list == [
+            call(core._MOUSEEVENTF_LEFTDOWN),
+            call(core._MOUSEEVENTF_LEFTUP),
+        ]
+        user32.SetCursorPos.assert_not_called()
+        assert user32.SendInput.call_count == 1
+        assert user32.SendInput.call_args.args[0] == 2
+
+    def test_refuses_to_click_if_the_cursor_moved_after_the_approach(self):
+        user32 = MagicMock()
+        with patch.object(core.win32api, "GetCursorPos", return_value=(410, 300)), \
+             patch.object(core, "_user32", user32):
+            assert core.click_current_position(400, 300) is False
+
+        user32.SendInput.assert_not_called()
 
 
 class TestRobustMoveNudge:

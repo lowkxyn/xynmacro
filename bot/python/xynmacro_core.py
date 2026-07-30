@@ -336,7 +336,7 @@ MAX_AREA = 50000
 
 KI_NO_DOT_LOG_INTERVAL_SEC = 2.0    # how often to log the "no dot found" breakdown (per-filter pass counts)
 
-TRAIT_CLICK_APPROACH_ENABLED = False   # opt-in: on a retry, walk the cursor in via the window centre
+TRAIT_CLICK_APPROACH_ENABLED = False   # opt-in: approach before the first trait click; retries always approach
 TRAIT_CLICK_APPROACH_PAUSE_SEC = 0.04  # settle time at each step of the retry approach move
 
 # logic_agility_v3 — sequential per-letter green-gated press
@@ -4816,6 +4816,29 @@ def click_at(x, y, method=None):
                 _click_sendinput_abs(x, y)
 
 
+def click_current_position(expected_x=None, expected_y=None, tolerance=3):
+    """Click in place, refusing if the cursor moved away from an expected target."""
+    with _input_lock:
+        if _controller_decisions_suspended():
+            raise SenzuControllerPause()
+        with _stop_input_gate:
+            if _USER_STOP_LATCHED:
+                raise QuitException()
+            if expected_x is not None and expected_y is not None:
+                cursor_x, cursor_y = win32api.GetCursorPos()
+                if (
+                    abs(int(cursor_x) - int(expected_x)) > int(tolerance)
+                    or abs(int(cursor_y) - int(expected_y)) > int(tolerance)
+                ):
+                    return False
+            click = (_INPUT * 2)(
+                _make_mouse_input(_MOUSEEVENTF_LEFTDOWN),
+                _make_mouse_input(_MOUSEEVENTF_LEFTUP),
+            )
+            _user32.SendInput(2, click, _ctypes.sizeof(_INPUT))
+            return True
+
+
 def robust_move(x, y, nudge=False):
     """Move the cursor without clicking. Uses SendInput-absolute so Roblox notices the move.
 
@@ -4865,6 +4888,32 @@ def approach_cursor(x, y, monitor):
     for point_x, point_y in ((centre_x, centre_y), (x, y)):
         robust_move(int(point_x), int(point_y), nudge=True)
         safe_sleep(TRAIT_CLICK_APPROACH_PAUSE_SEC)
+
+
+def _trait_click_uses_approach(attempt):
+    """Retries always approach; the saved setting only changes the first click."""
+    return int(attempt) > 1 or TRAIT_CLICK_APPROACH_ENABLED
+
+
+def _remember_trait_click_approach():
+    """Make a confirmed approach-based selection the default for later runs."""
+    global TRAIT_CLICK_APPROACH_ENABLED
+    if TRAIT_CLICK_APPROACH_ENABLED:
+        return
+    with _config_lock:
+        if TRAIT_CLICK_APPROACH_ENABLED:
+            return
+        TRAIT_CLICK_APPROACH_ENABLED = True
+        save_master_config()
+    print("[TRAIT CLICK] Saved Approach first after confirmed retry")
+
+
+def _confirm_trait_click(category, log_prefix, used_approach):
+    """Record only a stable menu disappearance, never a hover/highlight."""
+    print(f"{log_prefix} {category} selection confirmed")
+    if used_approach:
+        _remember_trait_click_approach()
+
 
 def preprocess_solid(img_bgr):
     gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
@@ -6256,13 +6305,15 @@ def run_master_controller():
                     f"{log_prefix} Clicking trait: {category} @ "
                     f"({int(bx)}, {int(by)}) attempt {attempt}/3"
                 )
-                # Backup only. A straight click works on most setups, so the first
-                # attempt stays exactly as it was; the slower approach move is what
-                # the retries do differently instead of repeating what just failed.
-                if attempt > 1 and TRAIT_CLICK_APPROACH_ENABLED:
-                    print(f"{log_prefix} Approaching via centre before retry")
+                used_approach = _trait_click_uses_approach(attempt)
+                if used_approach:
+                    print(f"{log_prefix} Approaching via centre before trait click")
                     approach_cursor(int(bx), int(by), monitor)
-                click_at(int(bx), int(by))
+                    if not click_current_position(int(bx), int(by)):
+                        print(f"{log_prefix} Cursor moved before the trait click; retrying")
+                        continue
+                else:
+                    click_at(int(bx), int(by))
                 hidden_streak = 0
                 deadline = time.time() + 1.25
                 while time.time() < deadline:
@@ -6271,7 +6322,7 @@ def run_master_controller():
                     )
                     hidden_streak = 0 if visible else hidden_streak + 1
                     if hidden_streak >= TRAINING_MENU_STABLE_FRAMES:
-                        print(f"{log_prefix} {category} selection confirmed")
+                        _confirm_trait_click(category, log_prefix, used_approach)
                         return True
                     safe_sleep(0.05)
                 print(f"{log_prefix} Menu stayed open; retrying trait click")
