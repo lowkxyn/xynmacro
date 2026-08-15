@@ -270,6 +270,8 @@ DBOG_WINDOW_TITLES = ["roblox"]
 SUPPORTED_ROBLOX_EXECUTABLES = {
     "robloxplayerbeta.exe",
     "windows10universal.exe",
+    "robloxplayer.exe",
+    "roblox.exe",
 }
 GAME_HWND = None
 # True when Roblox is running but minimized — a minimized window reports a 0x0
@@ -980,7 +982,19 @@ def _window_process_executable(hwnd):
 def _is_supported_roblox_window(hwnd):
     """Reject title-only matches such as browsers showing a Roblox page."""
     executable = _window_process_executable(hwnd)
-    return executable in SUPPORTED_ROBLOX_EXECUTABLES
+    if executable is not None:
+        return executable in SUPPORTED_ROBLOX_EXECUTABLES
+    if os.name == "nt" and hwnd:
+        try:
+            import ctypes
+            buf = ctypes.create_unicode_buffer(256)
+            if ctypes.windll.user32.GetClassNameW(int(hwnd), buf, 256):
+                cls = buf.value.lower()
+                if cls in {"windowsclient", "robloxplayerbetawindowclass"}:
+                    return True
+        except Exception:
+            pass
+    return False
 
 def find_minimized_roblox_hwnd():
     """Return the hwnd of a minimized Roblox game window, or None.
@@ -1095,9 +1109,12 @@ def _move_game_window(x, y, width, height):
         return False
     try:
         import ctypes
+        user32 = ctypes.windll.user32
+        if user32.IsZoomed(int(GAME_HWND)) or user32.IsIconic(int(GAME_HWND)):
+            user32.ShowWindow(int(GAME_HWND), 9)  # SW_RESTORE
         SWP_NOZORDER = 0x0004
         SWP_NOACTIVATE = 0x0010
-        return bool(ctypes.windll.user32.SetWindowPos(
+        return bool(user32.SetWindowPos(
             int(GAME_HWND), 0, int(x), int(y), int(width), int(height),
             SWP_NOZORDER | SWP_NOACTIVATE,
         ))
@@ -1330,9 +1347,9 @@ def find_dbog_window():
                     return True
                 w = client.right - client.left
                 h = client.bottom - client.top
-                # Skip tiny windows (launcher/loading dialogs are typically <800x600,
-                # the actual game is ≥800x600 in any reasonable mode).
-                if w < 800 or h < 600:
+                # Skip tiny windows (launcher/loading dialogs are typically <400x300,
+                # the actual game is ≥400x300 in any reasonable mode).
+                if w < 400 or h < 300:
                     return True
                 pt = _POINT(0, 0)
                 if not user32.ClientToScreen(hwnd, ctypes.byref(pt)):
@@ -1938,6 +1955,13 @@ def _wait_for_inventory_quantity_red(sct, row_y, max_samples=8):
     return False
 
 
+def _safe_get_cursor_pos():
+    try:
+        return win32api.GetCursorPos()
+    except Exception:
+        return (0, 0)
+
+
 def _find_senzu_row(sct, assets, bean_type="full"):
     """Search the Items list for one exact Senzu type."""
     list_box = (0, 395, 650, 335)
@@ -1947,7 +1971,9 @@ def _find_senzu_row(sct, assets, bean_type="full"):
     # Legacy mouse_event wheel packets were ignored by Roblox on this setup.
     # Use the same SendInput path as reliable clicks, first forcing the custom
     # list to its top so remembered Inventory scroll state cannot matter.
-    cursor_x, cursor_y = _reference_point(310, 560)
+    # Position in the empty right margin of the list so the cursor does not hover
+    # over item text or icons during scrolling.
+    cursor_x, cursor_y = _reference_point(550, 560)
     robust_move(cursor_x, cursor_y)
 
     def _send_wheel(notches):
@@ -2000,7 +2026,7 @@ def _find_senzu_row(sct, assets, bean_type="full"):
             type_matches = [
                 (float(scores[y, x]), int(x), int(y))
                 for y, x in zip(matches_y, matches_x)
-                if (int(x) <= 24) == (bean_type == "full")
+                if (int(x) <= 30) == (bean_type == "full")
             ]
             if type_matches:
                 score, _match_x, match_y = max(type_matches)
@@ -2077,7 +2103,7 @@ def _validate_cached_senzu_row(sct, assets):
     type_matches = [
         (float(scores[y, x]), int(x), int(y))
         for y, x in zip(matches_y, matches_x)
-        if (int(x) <= 24) == (bean_type == "full")
+        if (int(x) <= 30) == (bean_type == "full")
     ]
     if not type_matches:
         print(
@@ -2309,7 +2335,7 @@ def _refill_senzu_slot(
             print(
                 f"[SENZU] Inventory click not accepted; retrying "
                 f"({click_attempt}/3, score={inventory_score:.3f}, "
-                f"target=({x},{y}), cursor={win32api.GetCursorPos()})"
+                f"target=({x},{y}), cursor={_safe_get_cursor_pos()})"
             )
             time.sleep(0.25)
         if inventory_location is None:
@@ -7141,7 +7167,7 @@ def _perform_after_run_game_action(action):
     if handler is None:
         return action == "none"
     original_cursor = (
-        win32api.GetCursorPos()
+        _safe_get_cursor_pos()
         if action in {"main_menu", "zero_gravity"}
         else None
     )

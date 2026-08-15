@@ -3,6 +3,17 @@
 All notable changes to XynMacro. This file is generated from the in-app
 "What's new" notes by `scripts/changelog.mjs` — edit those, not this file.
 
+## 1.7.2
+
+### Windowed Mode & Roblox Detection
+- Fixed windowed mode detection for sub-800x600 and scaled client windows (such as 800x599) so XynMacro reliably detects windowed Roblox on any resolution.
+- Added process class fallbacks (WINDOWSCLIENT, RobloxPlayerBetaWindowClass) and executable aliases (robloxplayer.exe, roblox.exe) for resilient detection even when process lookup permissions are restricted.
+- Windowed mode now automatically restores maximized or minimized windows before resizing to exact 1080p target bounds.
+
+### Auto-Senzu Scanning & Inventory Improvements
+- Inventory scroll cursor moved to the right margin of the list so it never hovers over item names or icons during bean scanning.
+- Widened positional match tolerance so full Senzu Beans are reliably recognized without false rejections.
+
 ## 1.7.1
 
 ### Trait clicks recover automatically

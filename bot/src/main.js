@@ -3058,6 +3058,17 @@ window.wcCompact = () => {
 
   // What's-new content, newest first. Each entry: {version, notes:[{h, items[]}]}.
   const CHANGELOG = [
+    { version: '1.7.2', notes: [
+      { h: 'Windowed Mode & Roblox Detection', items: [
+        'Fixed windowed mode detection for sub-800x600 and scaled client windows (such as 800x599) so XynMacro reliably detects windowed Roblox on any resolution.',
+        'Added process class fallbacks (WINDOWSCLIENT, RobloxPlayerBetaWindowClass) and executable aliases (robloxplayer.exe, roblox.exe) for resilient detection even when process lookup permissions are restricted.',
+        'Windowed mode now automatically restores maximized or minimized windows before resizing to exact 1080p target bounds.',
+      ]},
+      { h: 'Auto-Senzu Scanning & Inventory Improvements', items: [
+        'Inventory scroll cursor moved to the right margin of the list so it never hovers over item names or icons during bean scanning.',
+        'Widened positional match tolerance so full Senzu Beans are reliably recognized without false rejections.',
+      ]},
+    ]},
     { version: '1.7.1', notes: [
       { h: 'Trait clicks recover automatically', items: [
         'If a direct trait click leaves the Training Mode menu open, the retry now always walks the cursor in through the middle of the game window and clicks without moving it again. Existing settings do not need to be changed.',

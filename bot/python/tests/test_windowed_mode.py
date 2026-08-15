@@ -219,3 +219,38 @@ class TestUndersizedFallback:
             ok, message = core.ensure_game_windowed(wait=0.3, allow_fallback=True)
         assert ok is False
         assert "800x600" in message
+
+
+class TestFindDbogWindow:
+    def test_find_dbog_window_accepts_standard_sub_800x600_window(self):
+        """Standard windowed Roblox at 800x600 outer size gives ~800x599 or 784x561 client."""
+        import ctypes
+
+        class _MockUser32:
+            def IsWindowVisible(self, hwnd):
+                return True
+            def GetWindowTextLengthW(self, hwnd):
+                return 6
+            def GetWindowTextW(self, hwnd, buf, maxlen):
+                buf.value = "Roblox"
+                return 6
+            def GetClientRect(self, hwnd, rect_ref):
+                rect_ref._obj.left = 0
+                rect_ref._obj.top = 0
+                rect_ref._obj.right = 800
+                rect_ref._obj.bottom = 599
+                return 1
+            def ClientToScreen(self, hwnd, pt_ref):
+                pt_ref._obj.x = 100
+                pt_ref._obj.y = 100
+                return 1
+            def EnumWindows(self, cb, lparam):
+                cb(1234, 0)
+                return 1
+
+        with patch("ctypes.windll.user32", _MockUser32()), \
+                patch.object(core, "_is_supported_roblox_window", return_value=True):
+            hwnd, rect = core.find_dbog_window()
+        assert hwnd == 1234
+        assert rect == (100, 100, 800, 599)
+
