@@ -85,6 +85,26 @@ class SenzuControlFlowTests(unittest.TestCase):
             core._senzu_slot_has_bean(Mock(), 1, template)
         inventory_grab.assert_called_once_with(ANY, (1510, 946, 260, 42))
 
+    def test_consume_clicks_visible_row_after_digit_attempts_are_ignored(self):
+        waits = [(False, 0.76), (False, 0.77), (True, 0.78)]
+        with (
+            patch.object(core, "_senzu_abort_requested", return_value=False),
+            patch.object(core, "_focus_game_for_senzu", return_value=True),
+            patch.object(core, "_tap_key_unchecked") as tap_key,
+            patch.object(core, "_wait_for_hotbar_slot_clear", side_effect=waits),
+            patch.object(core, "_reference_point", return_value=(1640, 936)),
+            patch.object(core, "click_at") as click_at,
+            patch.object(core.time, "sleep"),
+        ):
+            accepted, score = core._consume_open_senzu_slot(
+                Mock(), 1, object(), "full", max_key_attempts=2
+            )
+
+        self.assertTrue(accepted)
+        self.assertEqual(score, 0.78)
+        self.assertEqual(tap_key.call_count, 2)
+        click_at.assert_called_once_with(1640, 936)
+
     def test_stop_prevents_inventory_cleanup_inputs(self):
         with (
             patch.object(core, "_senzu_abort_requested", return_value=True),

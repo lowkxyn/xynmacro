@@ -140,19 +140,16 @@ class ProgressionDetectionTests(unittest.TestCase):
             (None, False),
         )
 
-    def test_training_ui_loss_is_non_retryable_and_requests_stop(self):
-        with (
-            patch.object(core, "_record_run_outcome") as record_outcome,
-            patch.object(core, "UI_STOP_REQUESTED", False),
-        ):
-            core._stop_for_training_ui_loss()
+    def test_training_ui_loss_drops_stale_lock_without_stopping(self):
+        with patch.object(core, "UI_STOP_REQUESTED", False):
+            core.PROGRESSION_TRACKED_STATE = "Health"
+            core.PROGRESSION_COMPLETE = False
 
-            self.assertTrue(core.UI_STOP_REQUESTED)
-            record_outcome.assert_called_once()
-            args, kwargs = record_outcome.call_args
-            self.assertEqual(args[0], "error")
-            self.assertIn("session expired", args[1])
-            self.assertIs(kwargs["retryable"], False)
+            core._recover_from_training_ui_loss("Health")
+
+            self.assertFalse(core.UI_STOP_REQUESTED)
+            self.assertIsNone(core.PROGRESSION_TRACKED_STATE)
+            self.assertIsNone(core.PROGRESSION_COMPLETE)
 
 
 if __name__ == "__main__":

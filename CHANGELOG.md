@@ -3,6 +3,15 @@
 All notable changes to XynMacro. This file is generated from the in-app
 "What's new" notes by `scripts/changelog.mjs` — edit those, not this file.
 
+## 1.7.3
+
+### Training reliability
+- Fixed active Health and Agility runs stopping in the 40s when the progression label temporarily disappeared. XynMacro now drops the stale detection lock and waits for the label to return; confirmed GC death handling remains active.
+- Health v2 contour and marker thresholds now follow the actual Roblox client size instead of retaining fixed 1080p pixel minimums on a scaled client.
+
+### Auto-Senzu recovery
+- When GC ignores every number-key attempt while the assigned Senzu row is visibly confirmed, XynMacro now clicks that row once and verifies that it cleared before continuing.
+
 ## 1.7.2
 
 ### Windowed Mode & Roblox Detection

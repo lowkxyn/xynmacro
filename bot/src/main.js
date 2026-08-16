@@ -3058,6 +3058,15 @@ window.wcCompact = () => {
 
   // What's-new content, newest first. Each entry: {version, notes:[{h, items[]}]}.
   const CHANGELOG = [
+    { version: '1.7.3', notes: [
+      { h: 'Training reliability', items: [
+        'Fixed active Health and Agility runs stopping in the 40s when the progression label temporarily disappeared. XynMacro now drops the stale detection lock and waits for the label to return; confirmed GC death handling remains active.',
+        'Health v2 contour and marker thresholds now follow the actual Roblox client size instead of retaining fixed 1080p pixel minimums on a scaled client.',
+      ]},
+      { h: 'Auto-Senzu recovery', items: [
+        'When GC ignores every number-key attempt while the assigned Senzu row is visibly confirmed, XynMacro now clicks that row once and verifies that it cleared before continuing.',
+      ]},
+    ]},
     { version: '1.7.2', notes: [
       { h: 'Windowed Mode & Roblox Detection', items: [
         'Fixed windowed mode detection for sub-800x600 and scaled client windows (such as 800x599) so XynMacro reliably detects windowed Roblox on any resolution.',

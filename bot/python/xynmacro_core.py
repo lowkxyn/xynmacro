@@ -1857,7 +1857,7 @@ def _wait_for_hotbar_slot_clear(
 
 def _consume_open_senzu_slot(
         sct, slot, slot_template, bean_type, max_key_attempts=3):
-    """Press the open H-menu slot until GC confirms that row cleared.
+    """Activate the open H-menu slot until GC confirms that row cleared.
 
     GC occasionally ignores a digit even though H is visibly open. Keep that
     same menu open and retry only after the slot remained loaded for the full
@@ -1888,6 +1888,22 @@ def _consume_open_senzu_slot(
                 f"H remains confirmed ({key_attempt}/{max_key_attempts})"
             )
             time.sleep(0.12)
+
+    # Some GC sessions leave the H list fully interactive but ignore every
+    # injected number-row press. The confirmed bean is already visible in the
+    # corresponding row, so mirror the manual recovery and click that row once.
+    if not _senzu_abort_requested() and _focus_game_for_senzu():
+        row_y = 920 + (int(slot) - 1) * 31 + 16
+        row_x, row_y = _reference_point(1640, row_y)
+        print(f"[SENZU] Digit presses were ignored; clicking visible slot {slot}")
+        click_at(row_x, row_y)
+        accepted, score = _wait_for_hotbar_slot_clear(
+            sct, slot, slot_template, bean_type
+        )
+        best_score = max(best_score, score)
+        if accepted:
+            print(f"[SENZU] Slot {slot} accepted by visible-row click")
+            return True, best_score
     return False, best_score
 
 
@@ -3777,15 +3793,21 @@ def _progression_ui_loss_state(
     )
 
 
-def _stop_for_training_ui_loss():
-    global UI_STOP_REQUESTED
-    reason = (
-        "GC training interface disappeared; the character may have left "
-        "the chamber or the session expired"
+def _recover_from_training_ui_loss(current_state):
+    """Drop a stale progression lock instead of killing an active run.
+
+    HTC can hide or redraw the label for longer than the old eight-second
+    watchdog even while the minigame is still accepting input. Death has its
+    own confirmed detector, so a missing label is not authoritative evidence
+    that the session ended. A later readable frame will lock tracking again.
+    """
+    global PROGRESSION_TRACKED_STATE, PROGRESSION_COMPLETE
+    PROGRESSION_TRACKED_STATE = None
+    PROGRESSION_COMPLETE = None
+    print(
+        f"[MONITOR] Progression label missing for {current_state}; "
+        "continuing and waiting for it to reappear"
     )
-    _record_run_outcome("error", reason, retryable=False)
-    UI_STOP_REQUESTED = True
-    print(f"[MONITOR] {reason}; stopping macro safely")
 
 
 def _background_game_monitor(stop_event):
@@ -3871,8 +3893,8 @@ def _background_game_monitor(stop_event):
                             )
                         )
                         if progression_ui_lost:
-                            _stop_for_training_ui_loss()
-                            break
+                            _recover_from_training_ui_loss(current_state)
+                            progression_missing_since = None
 
                 # Post-switch settle window (like the progression check above): right
                 # after a category starts the HP-fill box can misread as red while the
@@ -5036,12 +5058,16 @@ def _logic_health_v2(sct, monitor):
     }
     img_bgr = np.array(sct.grab(roi))[:, :, :3]
     hsv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV)
+    scale_x = monitor["width"] / GAME_REFERENCE_WIDTH
+    scale_y = monitor["height"] / GAME_REFERENCE_HEIGHT
+    scale_area = scale_x * scale_y
     green = cv2.inRange(hsv, np.array([40, 120, 120]), np.array([80, 255, 255]))
     contours, _ = cv2.findContours(green, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     candidates = []
     for contour in contours:
         x, y, w, h = cv2.boundingRect(contour)
-        if w * h >= 300 and h >= 20:
+        if w * h >= max(80, int(round(300 * scale_area))) \
+                and h >= max(8, int(round(20 * scale_y))):
             candidates.append((w * h, x, y, w, h))
     if candidates:
         _, gx, gy, gw, gh = max(candidates)
@@ -5067,7 +5093,8 @@ def _logic_health_v2(sct, monitor):
     runs = [
         run for run in runs
         if run[0] > 2 and run[-1] < roi["width"] - 3
-        and 12 <= len(run) <= int(roi["width"] * 0.20)
+        and max(6, int(round(12 * scale_x))) <= len(run)
+        <= int(roi["width"] * 0.20)
     ]
     if not runs:
         return
