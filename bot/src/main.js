@@ -197,6 +197,7 @@ const ACTIVE_PREFERENCE_KEYS = [
   'dbog-theme',
   'dbog-bg',
   'dbog-bg-speed',
+  'xynmacro-reduce-run-effects',
   'xynmacro-ui-style',
   'dbog-sidebar-width',
   'xynmacro-auto-update',
@@ -426,6 +427,7 @@ window.wcCompact = () => {
     }
     return {
       start(m) {
+        if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
         canvas = document.getElementById('bgCanvas');
         if (!canvas) return;
         mode = m || 'flow';
@@ -538,7 +540,7 @@ window.wcCompact = () => {
       const p = key === 'custom' ? _loadPresets()[0] : _presetById(key.slice(2));
       if (p && p.color) {
         document.documentElement.removeAttribute('data-theme');
-        const vars = Object.assign(_genTheme(p.color), p.overrides || {});
+        const vars = Object.assign(_genTheme(p.color), XynMacroTheme.safeOverrides(p.overrides));
         for (const [k, v] of Object.entries(vars)) document.documentElement.style.setProperty(k, v);
         key = 'p:' + p.id;
       } else {
@@ -613,7 +615,7 @@ window.wcCompact = () => {
       grid.appendChild(_themeCard(key, t.name, t.accent, t.from, t.to, current, false));
     }
     for (const p of _loadPresets()) {
-      const v = Object.assign(_genTheme(p.color), p.overrides || {});
+      const v = Object.assign(_genTheme(p.color), XynMacroTheme.safeOverrides(p.overrides));
       grid.appendChild(_themeCard('p:' + p.id, p.name, v['--accent'], v['--grad-from'], v['--grad-to'], current, true));
     }
   }
@@ -631,12 +633,12 @@ window.wcCompact = () => {
     function preview() {
       _clearCustomVars();
       document.documentElement.removeAttribute('data-theme');
-      const vars = Object.assign(_genTheme(colorEl.value), overrides);
+      const vars = Object.assign(_genTheme(colorEl.value), XynMacroTheme.safeOverrides(overrides));
       for (const [k, v] of Object.entries(vars)) document.documentElement.style.setProperty(k, v);
     }
     // Sync the advanced pickers to the current effective palette (generated + overrides).
     function seedAdv() {
-      const vars = Object.assign(_genTheme(colorEl.value), overrides);
+      const vars = Object.assign(_genTheme(colorEl.value), XynMacroTheme.safeOverrides(overrides));
       for (const [varName, id] of Object.entries(_ADV_VARS)) {
         const el = document.getElementById(id);
         if (el && vars[varName] && vars[varName][0] === '#') el.value = vars[varName];
@@ -679,8 +681,8 @@ window.wcCompact = () => {
       const f = fileEl.files && fileEl.files[0];
       if (!f) return;
       try {
-        const ct = JSON.parse(await f.text());
-        if (!ct || !ct.color) throw new Error('bad file');
+        if (f.size > 65536) throw new Error('Theme file exceeds 64 KB');
+        const ct = XynMacroTheme.normalizeTheme(JSON.parse(await f.text()));
         colorEl.value = ct.color;
         overrides = (ct.overrides && typeof ct.overrides === 'object') ? ct.overrides : {};
         if (nameEl && ct.name) nameEl.value = ct.name;
@@ -714,10 +716,24 @@ window.wcCompact = () => {
     const speedEl = document.getElementById('bgSpeed');
     const CANVAS_MODES = ['flow', 'particles', 'starfield', 'constellation'];
     const apply = (v) => {
+      const reduce = localStorage.getItem('xynmacro-reduce-run-effects') !== 'false';
+      const lightweight = reduce && document.documentElement.classList.contains('macro-active');
+      document.documentElement.classList.toggle('macro-lightweight', lightweight);
+      if (document.hidden || lightweight) v = 'none';
       if (!v || v === 'none') document.documentElement.removeAttribute('data-bg');
       else document.documentElement.setAttribute('data-bg', v);
       if (CANVAS_MODES.includes(v)) _flow.start(v); else _flow.stop();
     };
+    const reduceToggle = document.getElementById('reduceRunEffects');
+    if (reduceToggle) {
+      reduceToggle.checked = localStorage.getItem('xynmacro-reduce-run-effects') !== 'false';
+      reduceToggle.addEventListener('change', () => {
+        localStorage.setItem('xynmacro-reduce-run-effects', String(reduceToggle.checked));
+        apply(sel.value);
+      });
+    }
+    document.addEventListener('visibilitychange', () => apply(sel.value));
+    window.addEventListener('xyn-run-state', () => apply(sel.value));
     // Speed slider scales CSS animations (via --bg-speed) and the canvas effects together.
     const savedSpeed = parseFloat(localStorage.getItem('dbog-bg-speed') || '1.6') || 1.6;
     document.documentElement.style.setProperty('--bg-speed', savedSpeed);
@@ -1215,9 +1231,7 @@ window.wcCompact = () => {
     const queue = _sanitizeOrder(statOrder);
     statOrder = queue;
 
-    const ROW_H = 40;
-    const GAP = 6;
-    const STEP = ROW_H + GAP;
+    // Actual row heights are measured below; wrapped labels must not skew drag targets.
 
     function _startDrag(row, idx, startY) {
       if (_liveDrag) return;
@@ -1262,9 +1276,9 @@ window.wcCompact = () => {
         if (i === d.fromIdx) continue;
         let shift = 0;
         if (d.fromIdx < d.curIdx) {
-          if (i > d.fromIdx && i <= d.curIdx) shift = -STEP;
+          if (i > d.fromIdx && i <= d.curIdx) shift = -(rowRect.height + 6);
         } else if (d.fromIdx > d.curIdx) {
-          if (i >= d.curIdx && i < d.fromIdx) shift = STEP;
+          if (i >= d.curIdx && i < d.fromIdx) shift = rowRect.height + 6;
         }
         d.rows[i].style.transition = 'transform .22s cubic-bezier(.2,.8,.2,1)';
         d.rows[i].style.transform = shift ? `translateY(${shift}px)` : '';
@@ -1313,6 +1327,7 @@ window.wcCompact = () => {
       const label = document.createElement('span');
       label.className = 'stat-item-label';
       label.textContent = `${idx + 1}. ${name}`;
+      label.title = name;
       left.append(handle, label);
 
       const ctrls = document.createElement('div');
@@ -1333,8 +1348,16 @@ window.wcCompact = () => {
         const onUp = () => {
           window.removeEventListener('pointermove', onMove);
           window.removeEventListener('pointerup', onUp);
+          window.removeEventListener('pointercancel', onCancel);
+          window.removeEventListener('blur', onCancel);
           _endDrag();
         };
+        const onCancel = () => {
+          if (_liveDrag) _liveDrag.curIdx = _liveDrag.fromIdx;
+          onUp();
+        };
+        window.addEventListener('pointercancel', onCancel);
+        window.addEventListener('blur', onCancel);
         window.addEventListener('pointermove', onMove);
         window.addEventListener('pointerup', onUp);
       });
@@ -1378,6 +1401,7 @@ window.wcCompact = () => {
       const label = document.createElement('span');
       label.className = 'stat-item-label';
       label.textContent = name;
+      label.title = name;
       const ctrls = document.createElement('div');
       ctrls.className = 'stat-item-controls';
 
@@ -2051,6 +2075,8 @@ window.wcCompact = () => {
   };
 
   function _syncAgilityModeSeg(mode) {
+    for (const id of ['wasdStabilize', 'wasdPostBurst']) document.getElementById(id).disabled = mode !== 'v1';
+    for (const id of ['wasdGreenObserve', 'wasdAfterGreenSettle', 'wasdInterStringWait']) document.getElementById(id).disabled = mode !== 'v2';
     const seg = document.getElementById('agilityModeSeg');
     if (!seg) return;
     seg.querySelectorAll('.seg-btn').forEach(b => {
@@ -2094,6 +2120,8 @@ window.wcCompact = () => {
   };
 
   function _syncKiV8ModeSeg(mode) {
+    document.getElementById('kiV8ClickDelay').disabled = mode !== 'v1_time';
+    for (const id of ['kiV8V2TargetRFactor', 'kiLatencyComp', 'kiV8V2BrightnessThreshold', 'kiV8V2BrightCountThreshold']) document.getElementById(id).disabled = mode !== 'v2_ring';
     const seg = document.getElementById('kiV8ModeSeg');
     if (!seg) return;
     seg.querySelectorAll('.seg-btn').forEach(b => {
@@ -2105,6 +2133,8 @@ window.wcCompact = () => {
 
   /* Polling */
   const toggleMap = {
+    restart_health_after_hit: 'toggleRestartHealth',
+    restart_ki_after_hit: 'toggleRestartKi',
     senzu_enabled: 'toggleSenzu',
     senzu_zero_gravity_on_empty: 'toggleSenzuZeroGravity',
     no_yellow_fallback_enabled: 'toggleNoYellowFallback',
@@ -2127,6 +2157,11 @@ window.wcCompact = () => {
     auto_retry_max_attempts:         'autoRetryMaxAttempts',
     auto_retry_recovery_mode:        'autoRetryRecoveryMode',
     auto_retry_walk_seconds:         'autoRetryWalkSeconds',
+    respawn_settle_sec: 'respawnSettle',
+    mouse_click_button: 'mouseClickButton',
+    startup_window_mode: 'startupWindowMode',
+    restart_after_hit_delay_sec: 'restartHitDelay',
+    scan_rate_limit_hz: 'scanRateLimit',
     gc_gravity_target_g:             'gcGravityTarget',
     no_yellow_timeout_sec:           'noYellowTimeout',
     after_switch_wait_sec:           'afterSwitchWait',
@@ -2242,6 +2277,17 @@ window.wcCompact = () => {
 
     const cfg = state.config || {};
     const running = !!state.running;
+    if (document.documentElement.classList.contains('macro-active') !== running) {
+      document.documentElement.classList.toggle('macro-active', running);
+      window.dispatchEvent(new Event('xyn-run-state'));
+    }
+    const performance = document.getElementById('scanPerformance');
+    const metric = state.loop_metrics;
+    if (performance) performance.textContent = running && metric?.loops_per_second > 0
+      ? `${metric.loops_per_second.toFixed(1)} minigame loops/s · ${metric.last_cycle_ms.toFixed(1)} ms per cycle (includes waits, not game FPS)`
+      : 'Start a run to measure the minigame loop rate.';
+    const clickLabel = document.getElementById('effectiveClickButton');
+    if (clickLabel) clickLabel.textContent = `Effective button: ${state.effective_click_button || 'left'}`;
     _gameWindowFound = !!state.game_window?.found;
     _gameWindowMinimized = !!state.game_window?.minimized;
 
@@ -2348,7 +2394,10 @@ window.wcCompact = () => {
     // Compact HUD: show current stat (and separator) only when actually running.
     const hudStat = document.getElementById('hudStat');
     const hudSep = document.getElementById('hudSep');
-    if (hudStat) hudStat.textContent = (running && state.current_state) ? state.current_state : '';
+    if (hudStat) {
+      hudStat.textContent = (running && state.current_state) ? state.current_state : '';
+      hudStat.title = hudStat.textContent;
+    }
     if (hudSep) hudSep.style.display = (running && state.current_state) ? '' : 'none';
     const hudDot = document.getElementById('hudStatusDot');
     const hudState = document.getElementById('hudState');
@@ -2791,14 +2840,28 @@ window.wcCompact = () => {
     { id: 'refresh',     label: 'Refresh frontend data',       group: 'Actions',     hint: 'Ctrl+R', run: () => window.refreshFrontend() },
     { id: 'reset',       label: 'Reset macro settings',        group: 'Actions',                  run: () => window.resetMacroSettings() },
     { id: 'nav-dash',    label: 'Open Dashboard',              group: 'Navigation', run: () => openView('dashboard') },
-    { id: 'nav-ctrl',    label: 'Open Controls',               group: 'Navigation', run: () => openView('controls') },
-    { id: 'nav-tune',    label: 'Open Tuning',                 group: 'Navigation', run: () => openView('tuning') },
+    { id: 'nav-ctrl',    label: 'Open Training',               group: 'Navigation', run: () => openView('controls') },
+    { id: 'nav-tune',    label: 'Open Minigames',                 group: 'Navigation', run: () => openView('tuning') },
     { id: 'nav-calib',   label: 'Open Calibration',            group: 'Navigation', run: () => openView('ki') },
-    { id: 'nav-logs',    label: 'Open Logs',                   group: 'Navigation', run: () => openView('logs') },
+    { id: 'nav-input', label: 'Open Input & Display', group: 'Navigation', run: () => openView('input') },
+    { id: 'nav-logs',    label: 'Open Diagnostics',                   group: 'Navigation', run: () => openView('logs') },
     { id: 'nav-set',     label: 'Open Settings',               group: 'Navigation', run: () => openView('settings') },
   ];
   for (const [key, t] of Object.entries(THEMES)) {
     COMMANDS.push({ id: 'theme-' + key, label: 'Theme: ' + t.name, group: 'Themes', run: () => applyTheme(key) });
+  }
+
+  // Index the controls themselves so search can answer "where is this setting?".
+  const aliases = { mouseClickButton: 'left right click swap remap', respawnSettle: 'respawn loading ping delay walk', scanRateLimit: 'scan rate speed performance fps lag', startupWindowMode: 'resize resolution fullscreen windowed', toggleRestartKi: 'circle restart tab', toggleRestartHealth: 'health f restart tab' };
+  for (const control of document.querySelectorAll('.view .row-ctrl [id]')) {
+    const view = control.closest('.view');
+    const label = control.closest('.row-item')?.querySelector('.row-label')?.textContent.trim();
+    if (!view || !label) continue;
+    COMMANDS.push({ id: 'setting-' + control.id, label, keywords: aliases[control.id] || '', group: 'Settings', run: () => {
+      openView(view.id);
+      control.scrollIntoView({ block: 'center' });
+      control.focus();
+    } });
   }
 
   const paletteBackdrop = document.getElementById('paletteBackdrop');
@@ -2822,7 +2885,7 @@ window.wcCompact = () => {
   function renderPalette() {
     const q = paletteInput.value.trim();
     paletteFiltered = COMMANDS
-      .map(c => ({ c, s: _matchScore(q, c.label) }))
+      .map(c => ({ c, s: _matchScore(q, c.label + ' ' + (c.keywords || '')) }))
       .filter(x => x.s > 0)
       .sort((a, b) => b.s - a.s)
       .map(x => x.c);
@@ -3058,6 +3121,23 @@ window.wcCompact = () => {
 
   // What's-new content, newest first. Each entry: {version, notes:[{h, items[]}]}.
   const CHANGELOG = [
+    { version: '1.8.0-beta.1', notes: [
+      { h: 'Input and recovery', items: [
+        'Choose Left, Right or Follow Windows for all automated game clicks.',
+        'Wait after respawn before walking. W releases on Stop, focus loss and errors.',
+        'Partial mouse input is detected and the button is released before reporting an error.',
+      ] },
+      { h: 'Training experiments', items: [
+        'Optional restart-after-hit for Health and Ki, off by default. Live progress and timing still need gameplay verification.',
+        'Main-loop scan limit and measured loop rate in Diagnostics. Inner minigame tracking is unchanged.',
+      ] },
+      { h: 'Layout and compatibility', items: [
+        'Training order is first; input/display settings have their own page; minigame modes and timings are grouped.',
+        'Responsive trait rows, styled resize button, settings search and clearer timing labels.',
+        'Optional reduced effects while running and stricter imported-theme validation.',
+        'Beta installs separately from stable. Do not run both apps at the same time: they share game inputs and hotkeys.',
+      ] },
+    ] },
     { version: '1.7.3', notes: [
       { h: 'Training reliability', items: [
         'Fixed active Health and Agility runs stopping in the 40s when the progression label temporarily disappeared. XynMacro now drops the stale detection lock and waits for the label to return; confirmed GC death handling remains active.',

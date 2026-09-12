@@ -579,9 +579,11 @@ TELEMETRY = {
     "senzu_refills":    0,
     "switches":         0,
     "recovery_attempts": 0,
+    "hit_restarts": 0,
 }
 
 def _telemetry_reset():
+    LOOP_METRICS.update(loops_per_second=0.0, last_cycle_ms=0.0)
     for k in list(TELEMETRY.keys()):
         TELEMETRY[k] = 0
 
@@ -836,6 +838,89 @@ DEFAULT_USER_SETTINGS = {
 }
 
 
+COMPATIBILITY_DEFAULTS = {
+    "mouse_click_button": "left",
+    "respawn_settle_sec": 1.0,
+    "scan_rate_limit_hz": 0,
+    "restart_health_after_hit": False,
+    "restart_ki_after_hit": False,
+    "restart_after_hit_delay_sec": 0.2,
+}
+COMPATIBILITY_SETTINGS = dict(COMPATIBILITY_DEFAULTS)
+DEFAULT_USER_SETTINGS.update(COMPATIBILITY_DEFAULTS)
+LOOP_METRICS = {"loops_per_second": 0.0, "last_cycle_ms": 0.0}
+
+
+def _set_compatibility_setting(key, value):
+    if key == "mouse_click_button":
+        if value not in ("left", "right", "windows"):
+            raise ValueError("Click button must be left, right or windows")
+    elif key in ("restart_health_after_hit", "restart_ki_after_hit"):
+        value = _ui_bool(value)
+    elif key == "respawn_settle_sec":
+        value = _bounded_float(value, 0.0, 30.0)
+    elif key == "restart_after_hit_delay_sec":
+        value = _bounded_float(value, 0.05, 2.0)
+    elif key == "scan_rate_limit_hz":
+        value = _bounded_int(value, 0, 240)
+        if 0 < value < 10:
+            raise ValueError("Scan limit must be 0 (unlimited) or 10–240 Hz")
+    else:
+        raise ValueError(f"Unknown compatibility setting: {key}")
+    COMPATIBILITY_SETTINGS[key] = value
+
+
+def _game_has_focus():
+    return bool(GAME_HWND and not GAME_WINDOW_MINIMIZED
+                and _user32.GetForegroundWindow() == GAME_HWND)
+
+
+def _reset_minigame_detection():
+    _ki_v8_state.update(last_dot=None, consecutive_seen=0, last_click_at=0.0)
+    _HEALTH_V2_STATE.update(geometry=None, target=None, armed=True, last_hit=0.0)
+
+
+def _restart_minigame_after_hit(category, menu_visible, reselect):
+    """Restart only through a confirmed menu; completion and Stop always win."""
+    def interrupt_check():
+        check_exit()
+        if PAUSE_TOGGLE_REQUESTED:
+            raise SkipMinigameException()
+        if not _game_has_focus():
+            raise RuntimeError("Restart cancelled: Roblox lost focus")
+
+    with _input_lock:
+        interrupt_check()
+        deadline = time.monotonic() + COMPATIBILITY_SETTINGS["restart_after_hit_delay_sec"]
+        while time.monotonic() < deadline:
+            interrupt_check()
+            safe_sleep(min(0.025, max(0.0, deadline - time.monotonic())))
+        interrupt_check()
+        if not menu_visible():
+            hardware_tap("tab")
+        deadline = time.monotonic() + 3.0
+        while not menu_visible():
+            interrupt_check()
+            if time.monotonic() >= deadline:
+                raise RuntimeError("Restart cancelled: training menu did not open")
+            safe_sleep(0.05)
+        interrupt_check()
+        if not reselect(category, "[RESTART]", interrupt_check=interrupt_check):
+            raise RuntimeError("Restart cancelled: trait could not be reselected")
+        _reset_minigame_detection()
+        TELEMETRY["hit_restarts"] += 1
+
+
+def _finish_minigame_cycle(started):
+    limit = COMPATIBILITY_SETTINGS["scan_rate_limit_hz"]
+    elapsed = time.perf_counter() - started
+    safe_sleep(max(0.001, (1.0 / limit - elapsed) if limit else 0.001))
+    elapsed = max(0.000001, time.perf_counter() - started)
+    previous = LOOP_METRICS["last_cycle_ms"]
+    smoothed = elapsed * 1000 if not previous else previous * 0.8 + elapsed * 200
+    LOOP_METRICS.update(last_cycle_ms=smoothed, loops_per_second=1000 / smoothed)
+
+
 def _sanitize_training_order(value):
     """
     Keep only known stat names, preserve order, drop duplicates.
@@ -869,6 +954,7 @@ def reset_user_settings_to_defaults():
     global TRAINING_ORDER_CUSTOM, AGILITY_MODE
     global AGILITY_GREEN_OBSERVE_SEC, AGILITY_INTER_STRING_WAIT_SEC, AGILITY_AFTER_GREEN_SETTLE_SEC
 
+    COMPATIBILITY_SETTINGS.update(COMPATIBILITY_DEFAULTS)
     START_DELAY = float(DEFAULT_USER_SETTINGS["start_delay_sec"])
     GC_GRAVITY_TARGET_G = int(DEFAULT_USER_SETTINGS["gc_gravity_target_g"])
     PREVENT_SLEEP_WHILE_RUNNING = bool(
@@ -4353,6 +4439,9 @@ def load_master_config():
 
         if not isinstance(data, dict):
             return
+        for key in COMPATIBILITY_DEFAULTS:
+            if key in data:
+                _set_compatibility_setting(key, data[key])
         # Preferred (clear) keys
         if "start_delay_sec" in data:
             START_DELAY = _bounded_float(data["start_delay_sec"], 0.0, 30.0)
@@ -4574,6 +4663,7 @@ def load_master_config():
 
 def _master_config_snapshot():
     return {
+        **COMPATIBILITY_SETTINGS,
         "start_delay_sec": float(START_DELAY),
         "gc_gravity_target_g": int(GC_GRAVITY_TARGET_G),
         "prevent_sleep_while_running": bool(PREVENT_SLEEP_WHILE_RUNNING),
@@ -4696,9 +4786,11 @@ def _tap_key_unchecked(key):
     with _stop_input_gate:
         if _USER_STOP_LATCHED:
             return False
-        pydirectinput.keyDown(key)
-        time.sleep(0.030)
-        pydirectinput.keyUp(key)
+        try:
+            pydirectinput.keyDown(key)
+            time.sleep(0.030)
+        finally:
+            pydirectinput.keyUp(key)
     time.sleep(KEY_PRESS_DELAY)
     return True
 
@@ -4785,6 +4877,29 @@ def _absolute_virtual_coords(x, y, bounds=None):
     )
 
 
+def _effective_click_button():
+    button = COMPATIBILITY_SETTINGS["mouse_click_button"]
+    if button == "windows":
+        return "right" if _user32.GetSystemMetrics(23) else "left"
+    return button
+
+
+def _mouse_button_flags():
+    # Resolve once for each down/up pair, even if settings change mid-click.
+    return (0x0008, 0x0010) if _effective_click_button() == "right" else (0x0002, 0x0004)
+
+
+def _send_click_buttons():
+    down, up = _mouse_button_flags()
+    packets = (_INPUT * 2)(_make_mouse_input(down), _make_mouse_input(up))
+    sent = _user32.SendInput(2, packets, _ctypes.sizeof(_INPUT))
+    if sent != 2:
+        # Partial injection may have delivered only DOWN. Release the same button.
+        release = (_INPUT * 1)(_make_mouse_input(up))
+        _user32.SendInput(1, release, _ctypes.sizeof(_INPUT))
+        raise RuntimeError("Windows did not accept the complete mouse click")
+
+
 def _click_sendinput_abs_unchecked(x, y):
     """Absolute-coordinate SendInput click, mapped across the complete Windows virtual desktop."""
     nx, ny = _absolute_virtual_coords(x, y)
@@ -4815,11 +4930,7 @@ def _click_sendinput_abs_unchecked(x, y):
     # The absolute MOVE establishes the cursor position. Keep the button packets
     # button-only: Roblox can ignore coordinate-bearing LEFTDOWN/LEFTUP packets
     # when the target is on a monitor with negative virtual-desktop coordinates.
-    click = (_INPUT * 2)(
-        _make_mouse_input(_MOUSEEVENTF_LEFTDOWN),
-        _make_mouse_input(_MOUSEEVENTF_LEFTUP),
-    )
-    _user32.SendInput(2, click, _ctypes.sizeof(_INPUT))
+    _send_click_buttons()
 
 
 def _click_sendinput_abs(x, y):
@@ -4834,9 +4945,12 @@ def _click_setcursor_mouseevent(x, y):
     """Legacy: SetCursorPos + mouse_event with relative (0,0). What this build used before — Roblox often drops these silently."""
     win32api.SetCursorPos((int(x), int(y)))
     time.sleep(0.01)
-    win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0)
-    time.sleep(0.005)
-    win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0)
+    down, up = _mouse_button_flags()
+    try:
+        win32api.mouse_event(down, 0, 0)
+        time.sleep(0.005)
+    finally:
+        win32api.mouse_event(up, 0, 0)
 
 
 def _click_setcursor_only(x, y):
@@ -4879,11 +4993,7 @@ def click_current_position(expected_x=None, expected_y=None, tolerance=3):
                     or abs(int(cursor_y) - int(expected_y)) > int(tolerance)
                 ):
                     return False
-            click = (_INPUT * 2)(
-                _make_mouse_input(_MOUSEEVENTF_LEFTDOWN),
-                _make_mouse_input(_MOUSEEVENTF_LEFTUP),
-            )
-            _user32.SendInput(2, click, _ctypes.sizeof(_INPUT))
+            _send_click_buttons()
             return True
 
 
@@ -5032,7 +5142,8 @@ def _logic_health_v1(sct, monitor):
         print(f">>> [HEALTH v1] Hit! red={red_count} threshold={threshold} box={box}")
         hardware_tap('f')
         TELEMETRY["health_hits"] += 1
-        safe_sleep(HEALTH_HIT_COOLDOWN_SEC)
+        if not COMPATIBILITY_SETTINGS["restart_health_after_hit"]:
+            safe_sleep(HEALTH_HIT_COOLDOWN_SEC)
 
 
 def _logic_health_v2(sct, monitor):
@@ -6347,10 +6458,12 @@ def run_master_controller():
                     safe_sleep(0.05)
             return True
 
-        def _click_trait_and_confirm(category, log_prefix):
+        def _click_trait_and_confirm(category, log_prefix, interrupt_check=None):
             """Click a trait and require the menu to disappear stably."""
             nonlocal monitor, monitor_source
             for attempt in range(1, 4):
+                if interrupt_check:
+                    interrupt_check()
                 monitor, monitor_source = _build_monitor_from_game()
                 bx, by = _button_screen_point(category, monitor)
                 focus_game_window()
@@ -6362,6 +6475,8 @@ def run_master_controller():
                 if used_approach:
                     print(f"{log_prefix} Approaching via centre before trait click")
                     approach_cursor(int(bx), int(by), monitor)
+                    if interrupt_check:
+                        interrupt_check()
                     if not click_current_position(int(bx), int(by)):
                         print(f"{log_prefix} Cursor moved before the trait click; retrying")
                         continue
@@ -6370,6 +6485,8 @@ def run_master_controller():
                 hidden_streak = 0
                 deadline = time.time() + 1.25
                 while time.time() < deadline:
+                    if interrupt_check:
+                        interrupt_check()
                     visible, _score = detect_training_menu(
                         sct, monitor, training_menu_template
                     )
@@ -6720,6 +6837,8 @@ def run_master_controller():
                     print(f"[MENU RECOVERY] Resumed incomplete stat: {state}")
                     continue
 
+                cycle_started = time.perf_counter()
+                hit_count_before = TELEMETRY["health_hits"] + TELEMETRY["ki_clicks"]
                 # --- MINIGAME LOGIC --- (wrapped so L key during a green-observe wait
                 # unwinds back to the loop top, where MANUAL_NEXT_REQUESTED gets consumed
                 # on the next iteration).
@@ -6738,7 +6857,18 @@ def run_master_controller():
                 except SkipMinigameException:
                     pass
 
-                safe_sleep(0.001)
+                restart_enabled = (
+                    state == "Health" and COMPATIBILITY_SETTINGS["restart_health_after_hit"]
+                    or state in ("Ki Control", "Ki Damage") and COMPATIBILITY_SETTINGS["restart_ki_after_hit"]
+                )
+                if restart_enabled and TELEMETRY["health_hits"] + TELEMETRY["ki_clicks"] > hit_count_before:
+                    _restart_minigame_after_hit(state, _menu_stably_visible, _click_trait_and_confirm)
+                    TRAINING_MENU_VISIBLE = False
+                    menu_match_streak = 0
+                    yellow_last_seen_ts = time.time()
+                    awaiting_first_yellow = True
+                    PROGRESSION_STATE_STARTED_AT = time.time()
+                _finish_minigame_cycle(cycle_started)
 
             except QuitException:
                 # Propagate configured Stop immediately (no return-to-menu prompts).
@@ -6826,6 +6956,8 @@ def _get_screen_info():
 def _ui_config_snapshot():
     """Return only supported user-facing settings and their normalized values."""
     return {
+        **COMPATIBILITY_SETTINGS,
+        "startup_window_mode": "windowed" if WINDOWED_MODE_ON_START else "fullscreen" if RESTORE_FULLSCREEN_ON_START else "unchanged",
         "start_delay_sec": START_DELAY,
         "gc_gravity_target_g": GC_GRAVITY_TARGET_G,
         "prevent_sleep_while_running": PREVENT_SLEEP_WHILE_RUNNING,
@@ -6892,6 +7024,8 @@ def _ui_state_snapshot():
         "training_menu_visible": bool(running and TRAINING_MENU_VISIBLE),
         "controller_paused_for_senzu": SENZU_CONTROLLER_ACTIVE.is_set(),
         "controller_paused": CONTROLLER_PAUSED,
+        "loop_metrics": dict(LOOP_METRICS) if running else {},
+        "effective_click_button": _effective_click_button(),
         "stop_requested": bool(running and UI_STOP_REQUESTED),
         "last_run": last_run,
         "progression": None,
@@ -7945,6 +8079,10 @@ def _auto_retry_reset_character():
 def _auto_retry_walk_forward():
     if not AUTO_RETRY_WALK_OUT:
         return True
+    settle = COMPATIBILITY_SETTINGS["respawn_settle_sec"]
+    print(f"[RECOVERY] Waiting {settle:g}s after respawn before walking")
+    if not _auto_retry_wait(settle):
+        return False
     if _auto_retry_cancelled() or not focus_game_window():
         print("[RECOVERY] Roblox could not be focused for the walk-out step")
         return False
@@ -7960,13 +8098,15 @@ def _auto_retry_walk_forward():
             with _stop_input_gate:
                 if _auto_retry_cancelled():
                     return False
-                pydirectinput.keyDown("w")
-                key_is_down = True
-            deadline = time.time() + duration
-            while time.time() < deadline:
-                if _auto_retry_cancelled():
+                if not _game_has_focus():
                     return False
-                time.sleep(min(0.1, max(0.0, deadline - time.time())))
+                key_is_down = True
+                pydirectinput.keyDown("w")
+            deadline = time.monotonic() + duration
+            while time.monotonic() < deadline:
+                if _auto_retry_cancelled() or not _game_has_focus():
+                    return False
+                time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
         finally:
             if key_is_down:
                 pydirectinput.keyUp("w")
@@ -8147,7 +8287,14 @@ def _ui_apply_setting_unlocked(key, value):
     global TRAINING_ORDER_CUSTOM, AGILITY_MODE
     global AGILITY_GREEN_OBSERVE_SEC, AGILITY_INTER_STRING_WAIT_SEC, AGILITY_AFTER_GREEN_SETTLE_SEC
 
-    if key == "start_delay_sec":
+    if key in COMPATIBILITY_DEFAULTS:
+        _set_compatibility_setting(key, value)
+    elif key == "startup_window_mode":
+        if value not in ("unchanged", "fullscreen", "windowed"):
+            raise ValueError("Unknown startup window mode")
+        RESTORE_FULLSCREEN_ON_START = value == "fullscreen"
+        WINDOWED_MODE_ON_START = value == "windowed"
+    elif key == "start_delay_sec":
         START_DELAY = _bounded_float(value, 0.0, 30.0)
     elif key == "gc_gravity_target_g":
         GC_GRAVITY_TARGET_G = _normalize_gravity_target(value, strict=True)
@@ -8296,7 +8443,11 @@ def _ui_apply_setting(key, value):
         except Exception:
             # Keep the live state consistent with the UI and the last complete
             # config when persistence fails.
-            _ui_apply_setting_unlocked(key, previous_settings[key])
+            if key == "startup_window_mode":
+                for legacy_key in ("restore_fullscreen_on_start", "windowed_mode_on_start"):
+                    _ui_apply_setting_unlocked(legacy_key, previous_settings[legacy_key])
+            else:
+                _ui_apply_setting_unlocked(key, previous_settings[key])
             raise
 
 
@@ -8600,6 +8751,7 @@ def run_ui_server(sidecar_pid=None, auth_token=None):
 
     ui_dir = os.path.join(BASE_DIR, "ui")
     app = Flask(__name__, static_folder=ui_dir, static_url_path="")
+    app.config["MAX_CONTENT_LENGTH"] = 1024 * 1024
 
     # This API drives raw mouse/keyboard injection and listens on a predictable
     # loopback port, so lock it to same-origin local callers. The only legit
@@ -8769,8 +8921,10 @@ def run_ui_server(sidecar_pid=None, auth_token=None):
 
     @app.route("/command", methods=["POST"])
     def command():
-        data = request.get_json() or {}
-        action = (data.get("action") or "").strip().lower()
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict) or not isinstance(data.get("action"), str):
+            return jsonify({"ok": False, "msg": "Expected an object with an action string"}), 400
+        action = data["action"].strip().lower()
         value = data.get("value")
 
         try:

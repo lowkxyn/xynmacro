@@ -105,6 +105,7 @@ class TestTraitClickStrategy:
 class TestClickCurrentPosition:
     def test_sends_only_button_packets_without_moving_the_cursor(self):
         user32 = MagicMock()
+        user32.SendInput.return_value = 2
         with patch.object(core.win32api, "GetCursorPos", return_value=(400, 300)), \
              patch.object(core, "_user32", user32), \
              patch.object(core, "_make_mouse_input", wraps=core._make_mouse_input) as mouse_input:

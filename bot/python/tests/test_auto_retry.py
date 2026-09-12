@@ -290,6 +290,8 @@ class AutoRetryTests(unittest.TestCase):
             core._USER_STOP_LATCHED = True
 
         with (
+            patch.object(core, "_auto_retry_wait", return_value=True),
+            patch.object(core, "_game_has_focus", return_value=True),
             patch.object(core, "focus_game_window", return_value=True),
             patch.object(core.pydirectinput, "keyDown", side_effect=key_down_then_stop),
             patch.object(core.pydirectinput, "keyUp") as key_up,

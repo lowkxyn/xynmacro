@@ -1,0 +1,49 @@
+.xyn-app {
+  --bg:#0d0d10;--surface:#15151a;--input:#191920;--hover:#22222a;
+  --border:rgba(255,255,255,.10);--text:#e2e3e7;--text2:#9a9da4;--text3:#858893;
+  --accent:#b4bbc8;--accent-soft:rgba(180,187,200,.10);--good:#7eb39a;--danger:#c08a8a;
+  --radius:10px;--sidebar:216px;
+  color:var(--text);background:var(--bg);font:13px/1.5 Inter,system-ui,sans-serif;
+  border:1px solid var(--border);border-radius:12px;overflow:hidden;
+}
+.xyn-app * {box-sizing:border-box}
+.xyn-app.xyn-aero {--bg:#080b14;--surface:#111725;--input:#131d30;--accent:#939aff;--accent-soft:rgba(129,140,248,.12)}
+.xyn-app .xyn-titlebar,.xyn-app .xyn-footer {display:flex;align-items:center;gap:12px;padding:10px 16px;border-bottom:1px solid var(--border);font-size:12px;color:var(--text2)}
+.xyn-app .xyn-footer {border-bottom:0;border-top:1px solid var(--border)}
+.xyn-app .xyn-titlebar strong {color:var(--text)}
+.xyn-app .xyn-body {display:grid;grid-template-columns:var(--sidebar) minmax(0,1fr);min-height:500px}
+.xyn-app .xyn-nav {padding:16px 10px;border-right:1px solid var(--border);display:flex;flex-direction:column;gap:6px}
+.xyn-app .xyn-nav a {text-decoration:none;color:var(--text2);padding:10px 12px;border-radius:8px}
+.xyn-app .xyn-nav a[aria-current=page] {color:var(--text);background:var(--accent-soft);box-shadow:inset 2px 0 var(--accent)}
+.xyn-app .xyn-main {padding:24px;min-width:0}
+.xyn-app h1 {font-size:26px;line-height:1.2;margin:0 0 8px;font-weight:650}
+.xyn-app h2 {font-size:13px;margin:24px 0 10px;color:var(--text2);font-weight:600}
+.xyn-app p {max-width:70ch;margin:0;color:var(--text2)}
+.xyn-app .xyn-panel {background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
+.xyn-app .xyn-row {display:flex;justify-content:space-between;align-items:center;gap:12px;padding:14px 16px;flex-wrap:wrap}
+.xyn-app .xyn-row+.xyn-row {border-top:1px solid var(--border)}
+.xyn-app .xyn-label {min-width:0;overflow-wrap:anywhere}
+.xyn-app .xyn-help {font-size:12px;color:var(--text2);padding:0 16px 14px}
+.xyn-app .xyn-controls {display:flex;gap:8px;align-items:center;flex-wrap:wrap;max-width:100%}
+.xyn-app button,.xyn-app input,.xyn-app select {font:inherit;color:var(--text);background:var(--input);border:1px solid var(--border);border-radius:8px;padding:7px 10px;max-width:100%}
+.xyn-app button {cursor:pointer;min-height:32px;flex-shrink:0}
+.xyn-app button:hover {background:var(--hover);border-color:var(--accent)}
+.xyn-app button.xyn-primary {background:var(--accent);color:var(--bg);font-weight:650}
+.xyn-app button.xyn-danger {color:var(--danger)}
+.xyn-app :focus-visible {outline:2px solid var(--accent);outline-offset:3px}
+.xyn-app :disabled {opacity:.5;cursor:not-allowed}
+.xyn-app .xyn-list {display:flex;flex-direction:column;gap:8px;padding:14px 16px;margin:0;list-style:none}
+.xyn-app .xyn-list li {display:flex;align-items:center;justify-content:space-between;gap:12px;border:1px solid var(--border);border-radius:8px;padding:8px 12px;min-height:42px}
+.xyn-app .xyn-list li span {min-width:0;overflow-wrap:anywhere}
+.xyn-app .xyn-pill {display:flex;gap:10px;align-items:center;padding:8px 14px;border-radius:999px;background:var(--surface);border:1px solid var(--border);max-width:100%}
+.xyn-app .xyn-activity {min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+.xyn-app .xyn-dot {width:7px;height:7px;border-radius:50%;background:var(--good);flex-shrink:0}
+.xyn-app .xyn-mono {font:12px 'DM Mono',ui-monospace,monospace;color:var(--text2);white-space:nowrap}
+.xyn-app .xyn-spacer {flex:1}
+@media(max-width:760px) {
+  .xyn-app .xyn-body {grid-template-columns:1fr}
+  .xyn-app .xyn-nav {flex-direction:row;overflow-x:auto;border-right:0;border-bottom:1px solid var(--border)}
+  .xyn-app .xyn-nav a {white-space:nowrap}
+  .xyn-app .xyn-main {padding:18px 14px}
+}
+@media(prefers-reduced-motion:no-preference) {.xyn-app button,.xyn-app .xyn-nav a {transition:background .12s,border-color .12s}}

@@ -50,6 +50,7 @@ jobs:
           }
           "version=$version" >> $env:GITHUB_OUTPUT
           "tag=v$version" >> $env:GITHUB_OUTPUT
+          "prerelease=$($version.Contains('-').ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
 
       - name: Validate signing configuration
         shell: pwsh
@@ -73,14 +74,26 @@ jobs:
         env:
           TAURI_UPDATER_PUBLIC_KEY: ${{ vars.TAURI_UPDATER_PUBLIC_KEY }}
         run: |
+          $isBeta = '${{ steps.release.outputs.prerelease }}' -eq 'true'
+          $endpoint = if ($isBeta) {
+            'https://github.com/lowkxyn/xynmacro/releases/download/${{ steps.release.outputs.tag }}/latest.json'
+          } else {
+            'https://github.com/lowkxyn/xynmacro/releases/latest/download/latest.json'
+          }
           $config = @{
             plugins = @{
               updater = @{
                 pubkey = $env:TAURI_UPDATER_PUBLIC_KEY
-                endpoints = @('https://github.com/lowkxyn/xynmacro/releases/latest/download/latest.json')
+                endpoints = @($endpoint)
                 windows = @{ installMode = 'passive' }
               }
             }
+          }
+          if ($isBeta) {
+            # Separate installation and app-data directory; never overwrite stable.
+            $config.identifier = 'com.htcgc.xyn.beta'
+            $config.productName = 'XynMacro Beta'
+            $config.mainBinaryName = 'XynMacroBeta'
           }
           $config | ConvertTo-Json -Depth 5 | Set-Content bot/src-tauri/tauri.updater.ci.json
 
@@ -177,7 +190,7 @@ jobs:
           releaseName: XynMacro v${{ steps.release.outputs.version }}
           releaseBody: ${{ steps.notes.outputs.notes }}
           releaseDraft: false
-          prerelease: false
+          prerelease: ${{ steps.release.outputs.prerelease }}
           args: --bundles nsis --config src-tauri/tauri.updater.ci.json
           uploadUpdaterJson: true
           updaterJsonPreferNsis: true

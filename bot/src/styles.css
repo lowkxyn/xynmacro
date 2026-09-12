@@ -14,7 +14,7 @@
   --accent-dim:rgba(180,187,200,.07);
   --text:#e2e3e7;
   --text2:#9a9da4;
-  --text3:#5e6168;
+  --text3:#858893;
   --green:#7eb39a;
   --red:#c08a8a;
   --red-dim:rgba(192,138,138,.14);
@@ -1456,3 +1456,24 @@ body.sidebar-dragging *{user-select:none!important}
   padding: 4px 12px; border: 1px solid #fff; border-radius: 6px;
   background: transparent; color: #fff; font: inherit; cursor: pointer;
 }
+
+/* Keep settings and training order usable at narrow widths without shrinking hit targets. */
+.row-item{gap:12px;flex-wrap:wrap}
+.row-label{min-width:0;overflow-wrap:anywhere}
+.row-ctrl{max-width:100%;flex-wrap:wrap;gap:8px}
+.row-ctrl select{max-width:100%;width:auto;min-width:130px}
+.row-ctrl button{flex-shrink:0}
+.inp:disabled{opacity:.45;cursor:not-allowed}
+.stat-item{height:auto;min-height:40px;gap:8px}
+.stat-item-left{flex:1 1 auto;min-width:0}
+.stat-item-label{min-width:0;overflow-wrap:anywhere;line-height:1.35}
+.stat-item-controls{flex:0 0 auto}
+.stat-drag-handle{flex-shrink:0;touch-action:none}
+.stat-item .btn-mini{min-height:28px}
+.stat-drag-handle:focus-visible,.btn-mini:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.window-frame.compact .hud-stat{overflow:hidden;text-overflow:ellipsis;min-width:0;flex:1}
+.window-frame.compact .titlebar-drag{min-width:0}
+.window-frame.compact .titlebar-controls{flex-shrink:0}
+.macro-lightweight .window-frame::before,.macro-lightweight .window-frame::after{animation:none!important}
+.macro-lightweight [class]{backdrop-filter:none!important}
+@media(max-width:900px){.stat-item{padding:10px}.nav-label{overflow-wrap:anywhere}}

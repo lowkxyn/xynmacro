@@ -76,17 +76,18 @@
         </span>
         <span class="nav-label">Dashboard</span>
       </button>
-      <button class="nav-btn" data-view="controls" data-tooltip="Controls" aria-label="Controls">
+      <button class="nav-btn" data-view="controls" data-tooltip="Training" aria-label="Training">
         <span class="nav-icon">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M4.93 4.93a10 10 0 0 0 0 14.14"/></svg>
         </span>
-        <span class="nav-label">Controls</span>
+        <span class="nav-label">Training</span>
       </button>
-      <button class="nav-btn" data-view="tuning" data-tooltip="Tuning" aria-label="Tuning">
+      <button class="nav-btn" data-view="input" data-tooltip="Input &amp; Display" aria-label="Input &amp; Display"><span class="nav-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="6" y="2" width="12" height="20" rx="6"/><path d="M12 2v7"/></svg></span><span class="nav-label">Input &amp; Display</span></button>
+      <button class="nav-btn" data-view="tuning" data-tooltip="Minigames" aria-label="Minigames">
         <span class="nav-icon">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>
         </span>
-        <span class="nav-label">Tuning</span>
+        <span class="nav-label">Minigames</span>
       </button>
       <button class="nav-btn" data-view="ki" data-tooltip="Calibration" aria-label="Calibration">
         <span class="nav-icon">
@@ -94,11 +95,11 @@
         </span>
         <span class="nav-label">Calibration</span>
       </button>
-      <button class="nav-btn" data-view="logs" data-tooltip="Logs" aria-label="Logs">
+      <button class="nav-btn" data-view="logs" data-tooltip="Diagnostics" aria-label="Diagnostics">
         <span class="nav-icon">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
         </span>
-        <span class="nav-label">Logs</span>
+        <span class="nav-label">Diagnostics</span>
       </button>
       <button class="nav-btn" data-view="settings" data-tooltip="Settings" aria-label="Settings">
         <span class="nav-icon">
@@ -178,32 +179,6 @@
       </div>
       <div class="run-summary" id="runSummary" hidden></div>
 
-      <div class="section-title">After Run</div>
-      <div class="panel shutdown-panel">
-        <div class="row-item">
-          <span class="row-label">Game Action</span>
-          <div class="row-ctrl">
-            <select class="inp after-run-select" id="afterRunGameAction" aria-label="Game action after the training order finishes">
-              <option value="none">Do Nothing</option>
-              <option value="main_menu">Go to Main Menu</option>
-              <option value="close_game">Close Roblox</option>
-              <option value="zero_gravity">Stay in GC at 0G</option>
-            </select>
-          </div>
-        </div>
-        <div class="row-hint">Runs only after every selected stat finishes. The 0G action keeps Roblox open and confirms the GC gravity control reached 0G.</div>
-        <div class="row-item">
-          <span class="row-label">Shut Down PC</span>
-          <div class="row-ctrl"><button type="button" class="toggle" id="toggleShutdownFinished" role="switch" aria-checked="false" aria-label="Shut down PC when the training order finishes" onclick="toggleSetting('shutdown_pc_when_finished',this)"></button></div>
-        </div>
-        <div class="row-hint">Schedules a cancellable Windows shutdown 60 seconds after the run.</div>
-        <div class="row-item shutdown-dependent" id="afterRunFailureRow">
-          <span class="row-label">Run Enabled Actions If Macro Fails</span>
-          <div class="row-ctrl"><button type="button" class="toggle" id="toggleAfterRunFailure" role="switch" aria-checked="false" aria-label="Run enabled after-run actions if the macro fails" onclick="toggleSetting('after_run_on_failure',this)"></button></div>
-        </div>
-        <div class="row-hint shutdown-dependent-hint" id="afterRunFailureHint">Applies to both the selected game action and PC shutdown. Manual Stop never runs after-run actions.</div>
-      </div>
-
       <div class="section-title">Setup Checklist</div>
       <div class="panel panel-static">
         <div class="check-item">
@@ -259,24 +234,22 @@
     <!-- CONTROLS -->
     <div class="view" id="controls">
       <div class="page-header">
-        <h1>Controls</h1>
+        <h1>Training</h1>
         <p>Training queue and runtime behavior</p>
       </div>
 
-      <div class="section-title">WASD Mode</div>
+      <div class="section-title">Training Order</div>
       <div class="panel">
-        <div class="row-item">
-          <span class="row-label">Input Strategy</span>
-          <div class="row-ctrl">
-            <div class="seg-ctrl" id="agilityModeSeg" role="group" aria-label="WASD input strategy">
-              <button class="seg-btn" type="button" data-val="v2" aria-pressed="false" onclick="setAgilityMode('v2')">Adaptive (v2)</button>
-              <button class="seg-btn" type="button" data-val="v1" aria-pressed="false" onclick="setAgilityMode('v1')">Burst (v1)</button>
-            </div>
-          </div>
+        <div class="row-item" style="align-items:flex-start;flex-direction:column;gap:10px">
+          <span class="row-label">Queue (runs top to bottom)</span>
+          <div id="statOrderList" class="stat-order-list"></div>
         </div>
-        <div class="row-hint">Adaptive confirms each key turned green before sending the next. Burst reads all visible letters at once and sends them together. Try Burst if Adaptive feels too slow.</div>
+        <div class="row-item" style="align-items:flex-start;flex-direction:column;gap:10px">
+          <span class="row-label">Available Stats (click Add)</span>
+          <div id="statPoolList" class="stat-pool-list"></div>
+        </div>
+        <div class="row-hint">Drag to reorder. Remove or add stats to build your queue. Changes apply on the next run.</div>
       </div>
-
       <div class="section-title">Startup</div>
       <div class="panel">
         <div class="row-item">
@@ -297,24 +270,7 @@
           <div class="row-ctrl"><button type="button" class="toggle" id="togglePreventSleep" role="switch" aria-checked="false" aria-label="Prevent PC sleep while running" onclick="toggleSetting('prevent_sleep_while_running',this)"></button></div>
         </div>
         <div class="row-hint">Keeps Windows and the display awake while the macro is active so screen detection continues. The hold is released immediately when the run stops or errors.</div>
-        <div class="row-item">
-          <span class="row-label">Fullscreen On Start</span>
-          <div class="row-ctrl"><button type="button" class="toggle" id="toggleRestoreFullscreen" role="switch" aria-checked="false" aria-label="Put Roblox back into fullscreen when the macro starts" onclick="toggleSetting('restore_fullscreen_on_start',this)"></button></div>
-        </div>
-        <div class="row-hint">Roblox restored from the taskbar comes back windowed even when it was fullscreen, which shifts every scan region. On Start, XynMacro measures the window and presses F11 only if it is smaller than its monitor. Turn this off if you deliberately play windowed.</div>
-        <div class="row-item">
-          <span class="row-label">Windowed Mode</span>
-          <div class="row-ctrl">
-            <button type="button" class="btn" id="btnWindowNow" onclick="setGameWindowed()">Size Window Now</button>
-            <button type="button" class="toggle" id="toggleWindowedMode" role="switch" aria-checked="false" aria-label="Size Roblox to a 1920x1080 window when the macro starts" onclick="toggleSetting('windowed_mode_on_start',this)"></button>
-          </div>
-        </div>
-        <div class="row-hint">Sizes Roblox to a 1920&times;1080 window centred on screen, without changing your display resolution — the alternative to "Set 1080p" if your monitor is bigger than 1080p. Needs room for the title bar, so a 1920&times;1080 display can't use this; use Fullscreen On Start there instead. When both this and Fullscreen On Start are on, this one wins.</div>
-        <div class="row-item">
-          <span class="row-label">Confirm Resolution Changes</span>
-          <div class="row-ctrl"><button type="button" class="toggle" id="toggleDisplayConfirm" role="switch" aria-checked="false" aria-label="Ask to confirm a display resolution change before keeping it" onclick="toggleSetting('display_confirm_changes',this)"></button></div>
-        </div>
-        <div class="row-hint">After "Set 1080p", asks you to confirm and reverts automatically after 10 seconds if you don't — the safety net for a mode your monitor can't display. The timer runs in the backend, so it still fires if the window is unreadable. Off applies the change immediately, as before.</div>
+
       </div>
 
       <div class="section-title">Error Recovery</div>
@@ -342,34 +298,11 @@
           <span class="row-label">Walk Out After Respawn</span>
           <div class="row-ctrl"><button type="button" class="toggle" id="toggleAutoRetryWalkOut" role="switch" aria-checked="false" aria-label="Walk forward after respawn" onclick="toggleSetting('auto_retry_walk_out',this)"></button></div>
         </div>
-        <div class="row-item">
-          <span class="row-label">Walk Forward</span>
+<div class="row-item"><span class="row-label">Wait after respawn</span><div class="row-ctrl"><input type="number" class="inp" id="respawnSettle" min="0" max="30" step="0.25" aria-label="respawnSettle"><span class="unit">sec</span></div></div><div class="row-hint">Waits after the death dialog closes, before holding W. Increase this if the character loads slowly. This is a settling delay, not proof that loading finished.</div>        <div class="row-item">
+          <span class="row-label">Hold W for</span>
           <div class="row-ctrl"><input type="number" class="inp" id="autoRetryWalkSeconds" value="2.5" step="0.5" min="0.5" max="10" aria-label="Walk forward duration after respawn"><span class="unit">sec</span></div>
         </div>
-        <div class="row-hint">Movement is character/camera-relative. Different spawn angles can still send the character the wrong way, so the restarted run must confirm the Training Mode menu before clicking anything.</div>
-      </div>
-
-      <div class="section-title">Hotkeys</div>
-      <div class="panel">
-        <div class="row-item">
-          <span class="row-label">Start / Stop</span>
-          <div class="row-ctrl">
-            <button class="keybind-btn" data-setting-key="start_stop_hotkey" data-value="f6" aria-label="Start or stop hotkey">F6</button>
-          </div>
-        </div>
-        <div class="row-item">
-          <span class="row-label">Skip Current Stat</span>
-          <div class="row-ctrl">
-            <button class="keybind-btn" data-setting-key="manual_next_key" data-value="l" aria-label="Skip current stat hotkey">L</button>
-          </div>
-        </div>
-        <div class="row-item">
-          <span class="row-label">Pause / Resume</span>
-          <div class="row-ctrl">
-            <button class="keybind-btn" data-setting-key="pause_hotkey" data-value="u" aria-label="Pause or resume hotkey">U</button>
-          </div>
-        </div>
-        <div class="row-hint">Click a hotkey, then press the replacement key. Esc cancels. These global hotkeys work while Roblox has focus.</div>
+        <div class="row-hint">W is released on Stop, focus loss or an error. Movement is character/camera-relative. Different spawn angles can still send the character the wrong way, so the restarted run must confirm the Training Mode menu before clicking anything.</div>
       </div>
 
       <div class="section-title">Auto-Senzu</div>
@@ -411,25 +344,67 @@
         <div class="row-hint">Delay After Red waits before the first attempt. Recovery Check waits for recovered HP before one retry or resuming the same category. When every bean type allowed by Bean Preference runs out, Auto-Senzu disables for that run and training continues.</div>
       </div>
 
-      <div class="section-title">Training Order</div>
-      <div class="panel">
-        <div class="row-item" style="align-items:flex-start;flex-direction:column;gap:10px">
-          <span class="row-label">Queue (runs top to bottom)</span>
-          <div id="statOrderList" class="stat-order-list"></div>
+      <div class="section-title">After Run</div>
+      <div class="panel shutdown-panel">
+        <div class="row-item">
+          <span class="row-label">Game Action</span>
+          <div class="row-ctrl">
+            <select class="inp after-run-select" id="afterRunGameAction" aria-label="Game action after the training order finishes">
+              <option value="none">Do Nothing</option>
+              <option value="main_menu">Go to Main Menu</option>
+              <option value="close_game">Close Roblox</option>
+              <option value="zero_gravity">Stay in GC at 0G</option>
+            </select>
+          </div>
         </div>
-        <div class="row-item" style="align-items:flex-start;flex-direction:column;gap:10px">
-          <span class="row-label">Available Stats (click Add)</span>
-          <div id="statPoolList" class="stat-pool-list"></div>
+        <div class="row-hint">Runs only after every selected stat finishes. The 0G action keeps Roblox open and confirms the GC gravity control reached 0G.</div>
+        <div class="row-item">
+          <span class="row-label">Shut Down PC</span>
+          <div class="row-ctrl"><button type="button" class="toggle" id="toggleShutdownFinished" role="switch" aria-checked="false" aria-label="Shut down PC when the training order finishes" onclick="toggleSetting('shutdown_pc_when_finished',this)"></button></div>
         </div>
-        <div class="row-hint">Drag to reorder. Remove or add stats to build your queue. Changes apply on the next run.</div>
+        <div class="row-hint">Schedules a cancellable Windows shutdown 60 seconds after the run.</div>
+        <div class="row-item shutdown-dependent" id="afterRunFailureRow">
+          <span class="row-label">Run Enabled Actions If Macro Fails</span>
+          <div class="row-ctrl"><button type="button" class="toggle" id="toggleAfterRunFailure" role="switch" aria-checked="false" aria-label="Run enabled after-run actions if the macro fails" onclick="toggleSetting('after_run_on_failure',this)"></button></div>
+        </div>
+        <div class="row-hint shutdown-dependent-hint" id="afterRunFailureHint">Applies to both the selected game action and PC shutdown. Manual Stop never runs after-run actions.</div>
       </div>
+
 
     </div>
 
+<div class="view" id="input"><div class="page-header"><h1>Input &amp; Display</h1><p>Mouse compatibility, shortcuts and Roblox window setup</p></div><div class="section-title">Mouse input</div><div class="panel"><div class="row-item"><span class="row-label">Macro click button</span><div class="row-ctrl"><select class="inp" id="mouseClickButton" aria-label="Macro click button"><option value="left">Left button</option><option value="right">Right button</option><option value="windows">Follow Windows</option></select></div></div><div class="row-hint">Applies to all automated game clicks, including menus and respawn. Use Left or Right if a remapping app overrides Windows. Takes effect on the next click; each down/up pair stays together.</div><div class="row-hint" id="effectiveClickButton">Effective button: left</div></div><div class="section-title">Display</div><div class="panel"><div class="row-item"><span class="row-label">Roblox window on Start</span><div class="row-ctrl"><select class="inp" id="startupWindowMode" aria-label="Roblox window on Start"><option value="unchanged">Leave as it is</option><option value="fullscreen">Fullscreen</option><option value="windowed">1080p window</option></select></div></div><div class="row-hint">Choose one mode. A 1080p window needs a display larger than 1920 × 1080 to fit its borders.</div><div class="row-item"><span class="row-label">Resize Roblox now</span><div class="row-ctrl"><button type="button" class="btn-sm" id="btnWindowNow" onclick="setGameWindowed()">Resize to 1080p window</button></div></div><div class="row-hint">Changes the game window, not your display resolution.</div>        <div class="row-item">
+          <span class="row-label">Confirm Resolution Changes</span>
+          <div class="row-ctrl"><button type="button" class="toggle" id="toggleDisplayConfirm" role="switch" aria-checked="false" aria-label="Ask to confirm a display resolution change before keeping it" onclick="toggleSetting('display_confirm_changes',this)"></button></div>
+        </div>
+        <div class="row-hint">After "Set 1080p", asks you to confirm and reverts automatically after 10 seconds if you don't — the safety net for a mode your monitor can't display. The timer runs in the backend, so it still fires if the window is unreadable. Off applies the change immediately, as before.</div></div>      <div class="section-title">Hotkeys</div>
+      <div class="panel">
+        <div class="row-item">
+          <span class="row-label">Start / Stop</span>
+          <div class="row-ctrl">
+            <button class="keybind-btn" data-setting-key="start_stop_hotkey" data-value="f6" aria-label="Start or stop hotkey">F6</button>
+          </div>
+        </div>
+        <div class="row-item">
+          <span class="row-label">Skip Current Stat</span>
+          <div class="row-ctrl">
+            <button class="keybind-btn" data-setting-key="manual_next_key" data-value="l" aria-label="Skip current stat hotkey">L</button>
+          </div>
+        </div>
+        <div class="row-item">
+          <span class="row-label">Pause / Resume</span>
+          <div class="row-ctrl">
+            <button class="keybind-btn" data-setting-key="pause_hotkey" data-value="u" aria-label="Pause or resume hotkey">U</button>
+          </div>
+        </div>
+        <div class="row-hint">Click a hotkey, then press the replacement key. Esc cancels. These global hotkeys work while Roblox has focus.</div>
+      </div>
+
+</div>
     <!-- TUNING -->
     <div class="view" id="tuning">
       <div class="page-header">
-        <h1>Tuning</h1>
+        <h1>Minigames</h1>
         <p>Advanced detector and timing adjustments</p>
       </div>
 
@@ -450,10 +425,24 @@
         <div class="row-hint">Progression tracking is the primary completion signal. No-Progress Fallback Switch additionally advances to the next stat after the timeout below when tracking has not locked and no progress color is seen; off by default. After-Switch Wait pauses after moving to a new stat.</div>
       </div>
 
+      <div class="section-title">WASD Mode</div>
+      <div class="panel">
+        <div class="row-item">
+          <span class="row-label">Input Strategy</span>
+          <div class="row-ctrl">
+            <div class="seg-ctrl" id="agilityModeSeg" role="group" aria-label="WASD input strategy">
+              <button class="seg-btn" type="button" data-val="v2" aria-pressed="false" onclick="setAgilityMode('v2')">Adaptive (v2)</button>
+              <button class="seg-btn" type="button" data-val="v1" aria-pressed="false" onclick="setAgilityMode('v1')">Burst (v1)</button>
+            </div>
+          </div>
+        </div>
+        <div class="row-hint">Adaptive confirms each key turned green before sending the next. Burst reads all visible letters at once and sends them together. Try Burst if Adaptive feels too slow.</div>
+      </div>
+
       <div class="section-title">WASD Timings</div>
       <div class="panel">
         <div class="row-item">
-          <span class="row-label">Key Press Duration</span>
+          <span class="row-label">Delay after key tap</span>
           <div class="row-ctrl"><input type="number" class="inp" id="wasdKeyPress" step="0.001" min="0" max="1" aria-label="WASD key press duration in seconds"><span class="unit">sec</span></div>
         </div>
         <div class="row-item">
@@ -465,18 +454,18 @@
           <div class="row-ctrl"><input type="number" class="inp" id="wasdPostBurst" step="0.01" min="0" max="5" aria-label="WASD post-burst cooldown in seconds"><span class="unit">sec</span></div>
         </div>
         <div class="row-item">
-          <span class="row-label">v2 Green Observe</span>
+          <span class="row-label">Wait for key confirmation</span>
           <div class="row-ctrl"><input type="number" class="inp" id="wasdGreenObserve" step="0.05" min="0.1" max="5" aria-label="WASD green observe time in seconds"><span class="unit">sec</span></div>
         </div>
         <div class="row-item">
-          <span class="row-label">v2 After-Burst Settle</span>
+          <span class="row-label">Pause after confirmed keys</span>
           <div class="row-ctrl"><input type="number" class="inp" id="wasdAfterGreenSettle" step="0.05" min="0" max="5" aria-label="WASD after-burst settle time in seconds"><span class="unit">sec</span></div>
         </div>
         <div class="row-item">
-          <span class="row-label">v2 Inter-String Wait</span>
+          <span class="row-label">Wait for next sequence</span>
           <div class="row-ctrl"><input type="number" class="inp" id="wasdInterStringWait" step="0.1" min="0.1" max="10" aria-label="WASD inter-string wait in seconds"><span class="unit">sec</span></div>
         </div>
-        <div class="row-hint">Key Press, Stabilize, and Post-Burst control Burst mode. In Adaptive mode, Green Observe is the time allowed for each key to turn green before retrying; After-Burst Settle pauses before scanning again, and Inter-String Wait limits how long the next sequence is polled.</div>
+        <div class="row-hint">Delay after key tap applies to every simulated key tap, including F and Tab. Each key is held for 30 ms. Stabilize and Post-Burst control Burst mode. In Adaptive mode, Green Observe is the time allowed for each key to turn green before retrying; After-Burst Settle pauses before scanning again, and Inter-String Wait limits how long the next sequence is polled.</div>
       </div>
 
       <div class="section-title">Health Timing</div>
@@ -492,13 +481,13 @@
         </div>
         <div class="row-hint">v1 scales the original narrow red probe over the target zone. v2 finds the Health bar and tracks the moving red marker into the middle of the green target.</div>
         <div class="row-item">
-          <span class="row-label">HP Hit Cooldown</span>
+          <span class="row-label">Minimum time between Health F presses</span>
           <div class="row-ctrl"><input type="number" class="inp" id="healthHitCooldown" step="0.1" min="0" max="5" aria-label="Health hit cooldown in seconds"><span class="unit">sec</span></div>
         </div>
-        <div class="row-hint">HP Hit Cooldown: minimum gap between F-key presses during health training.</div>
+        <div class="row-hint">Minimum time between Health F presses: minimum gap between F-key presses during health training.</div>
       </div>
 
-      <div class="section-title">Ki Detection &amp; Timing</div>
+<div class="row-item"><span class="row-label">Restart Health after each F press (beta)</span><div class="row-ctrl"><button type="button" class="toggle" id="toggleRestartHealth" role="switch" aria-checked="false" aria-label="Restart Health after each F press" onclick="toggleSetting('restart_health_after_hit',this)"></button></div></div><div class="row-hint">Off by default. Returns to the training menu and reselects Health. Confirm that progress is retained before using this for a full run.</div>      <div class="section-title">Ki Detection &amp; Timing</div>
       <div class="panel">
         <div class="row-item">
           <span class="row-label">Mode</span>
@@ -524,7 +513,7 @@
           <span class="row-label">v2 · Latency Compensation</span>
           <div class="row-ctrl"><input type="number" class="inp" id="kiLatencyComp" step="10" min="0" max="250" aria-label="Ki latency compensation in milliseconds"><span class="unit">ms</span></div>
         </div>
-        <div class="row-hint">v2 only: fire the click this many ms early using the ring's measured shrink speed. 0 = off (right for a fast PC on low ping). Raise if clicks consistently land late (ring already gone) on a slower PC or high-ping session — the ring shrinks ~10px per 100ms, so start around your ping.</div>
+        <div class="row-hint">v2 only: fire the click this many ms early using the ring's measured shrink speed. 0 = off (right for a fast PC on low ping). Raise if clicks consistently land late (ring already gone) on a slower PC or high-ping session — the ring shrinks ~10px per 100ms, adjust in small steps and compare in-game results. Network ping alone is not the input delay.</div>
         <div class="row-item">
           <span class="row-label">v2 · Ring Brightness Min</span>
           <div class="row-ctrl"><input type="number" class="inp" id="kiV8V2BrightnessThreshold" step="5" min="50" max="255" aria-label="Ki ring brightness minimum"></div>
@@ -542,10 +531,11 @@
         <div class="row-hint"><b>Turn this on if Ki Control and Ki Damage never click while every other stat works.</b> The dot detector looks for the black "1" inside the orange dot using a fixed brightness value, and anything that lifts your display's brightness pushes the "1" out of range — BIOS "game mode" or vibrance profiles, HDR, a monitor colour profile, Night Light. Measured, a 2% lift is enough to stop it detecting entirely. This measures the "1" against the dot's own brightness instead, so it survives those shifts. Beta: it has been tested against known-good dots at brightness lifts up to 1.5×, but not yet against a wide set of non-Ki screens, so it may in theory be more willing to accept a false dot. Leave it off if Ki already works for you.</div>
       </div>
 
+<div class="panel"><div class="row-item"><span class="row-label">Restart Ki after each circle click (beta)</span><div class="row-ctrl"><button type="button" class="toggle" id="toggleRestartKi" role="switch" aria-checked="false" aria-label="Restart Ki after each circle click" onclick="toggleSetting('restart_ki_after_hit',this)"></button></div></div><div class="row-hint">Applies to Ki Control and Ki Damage. Confirm the game credits each hit before relying on this.</div><div class="row-item"><span class="row-label">Wait before reopening training</span><div class="row-ctrl"><input type="number" class="inp" id="restartHitDelay" min="0.05" max="2" step="0.05" aria-label="restartHitDelay"><span class="unit">sec</span></div></div><div class="row-hint">Shared by Health and Ki restart. Too short can cancel progress; too long can remove the speed benefit.</div></div>
       <div style="display:flex;gap:10px;margin-top:20px;align-items:center">
         <button class="btn-sm" id="undoButton" onclick="undoLastChange()" disabled title="Nothing to undo">↶ Undo</button>
         <button class="btn-sm" onclick="resetMacroSettings()">Reset macro settings</button>
-        <span class="row-sub" style="margin-left:auto">Auto-save: changes apply immediately</span>
+        <span class="row-sub" style="margin-left:auto">Auto-saved. Training order and startup options apply on the next run.</span>
       </div>
     </div>
 
@@ -653,7 +643,7 @@
     <!-- LOGS -->
     <div class="view" id="logs">
       <div class="page-header">
-        <h1>Logs</h1>
+        <h1>Diagnostics</h1>
         <p>Real-time console output from the macro engine</p>
       </div>
       <div class="log-toolbar">
@@ -664,7 +654,7 @@
           <button class="btn-sm" onclick="clearLogs()" title="Clear this view only; the backend session log is kept">Clear view</button>
         </div>
       </div>
-      <div class="section-title">Support Diagnostics</div>
+<div class="section-title">Scan performance</div><div class="panel"><div class="row-item"><span class="row-label">Main-loop limit</span><div class="row-ctrl"><input type="number" class="inp" id="scanRateLimit" min="0" max="240" step="1" aria-label="scanRateLimit"><span class="unit">Hz</span></div></div><div class="row-hint">0 = unlimited; otherwise 10–240 loops per second. Limits the outer minigame loop only. Inner WASD/ring tracking keeps its existing timing. Lower limits reduce work but may miss brief targets.</div><div class="row-hint" id="scanPerformance">Start a run to measure the minigame loop rate.</div></div>      <div class="section-title">Support Diagnostics</div>
       <div class="panel diagnostic-panel">
         <div class="row-item">
           <span class="row-label">Diagnostic Mode</span>
@@ -778,6 +768,8 @@
 
       <div class="section-title">Background</div>
       <div class="panel">
+        <div class="row-item"><label class="row-label" for="reduceRunEffects">Reduce effects while running</label><div class="row-ctrl"><input type="checkbox" id="reduceRunEffects" checked aria-label="Reduce effects while running"></div></div>
+        <div class="row-hint">Pauses decorative backgrounds and reduces Aero blur during training. Your chosen appearance returns after the run.</div>
         <div class="row-item">
           <span class="row-label">Animated effect</span>
           <div class="row-ctrl"><select class="inp" id="bgEffect" aria-label="Animated background effect">
@@ -1083,6 +1075,7 @@
 <script src="screen-state.js"></script>
 <script src="update-state.js"></script>
 <script src="preference-migration.js"></script>
+<script src="theme-state.js"></script>
 <script src="main.js"></script>
 </body>
 </html>

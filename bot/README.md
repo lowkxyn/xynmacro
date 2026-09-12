@@ -1,5 +1,25 @@
 # XynMacro developer guide
 
+## 1.8 beta
+
+The beta adds respawn settling delay, mouse-button compatibility, optional Health/Ki
+restart-after-hit, main-loop performance controls and a reorganised interface.
+Restart-after-hit is off by default pending actual DBOG acceptance.
+
+Training contains the queue, startup, recovery and after-run behaviour. Input & Display
+contains mouse choice, window mode and hotkeys. Minigames groups modes and timing;
+Diagnostics contains logs and measured loop rate. Calibration remains available.
+
+Tagged prereleases install as **XynMacro Beta**, using the separate
+`com.htcgc.xyn.beta` app-data profile. Do not run beta and stable at the same time.
+The beta updater is pinned to its tag; install later beta versions manually. Stable
+users retain the normal latest-release feed. This separation is applied by the CI
+overlay; a plain local build uses the base configuration.
+
+See [audit and acceptance](docs/1.8-beta-audit.md) and the
+[portable style guide](docs/style-kit/STYLE-GUIDE.md). The latter includes a copyable
+design brief, scoped CSS and a static layout/HUD reference for other projects.
+
 XynMacro is a Windows Tauri application with a WebView2 frontend and a Python computer-
 vision sidecar. The sidecar captures Roblox with MSS/OpenCV, detects game state, and sends
 input through Windows APIs. The shell owns the window, sidecar lifecycle, updates, and IPC.

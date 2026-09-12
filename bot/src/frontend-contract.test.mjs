@@ -152,8 +152,11 @@ test('a failed command is never silent', () => {
   assert.match(main, /window\.addEventListener\('unhandledrejection', \(e\) => _reportUiError/);
 });
 
-test('fullscreen restore and resolution confirm are both optional', () => {
-  for (const key of ['restore_fullscreen_on_start', 'display_confirm_changes']) {
+test('startup window mode is exclusive and resolution confirm remains optional', () => {
+  assert.match(html, /id="startupWindowMode"/);
+  assert.match(html, /value="unchanged"/);
+  assert.match(main, /startup_window_mode: 'startupWindowMode'/);
+  for (const key of ['display_confirm_changes']) {
     assert.match(html, new RegExp(`toggleSetting\\('${key}',this\\)`));
     assert.ok(main.includes(`${key}: 'toggle`), `${key} missing from toggleMap`);
   }
