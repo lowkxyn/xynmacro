@@ -16,6 +16,8 @@ import json
 import re
 import threading
 import hmac
+import subprocess
+import notifications
 from urllib.parse import urlencode
 
 # ================= APP INFO =================
@@ -919,6 +921,7 @@ def _finish_minigame_cycle(started):
     previous = LOOP_METRICS["last_cycle_ms"]
     smoothed = elapsed * 1000 if not previous else previous * 0.8 + elapsed * 200
     LOOP_METRICS.update(last_cycle_ms=smoothed, loops_per_second=1000 / smoothed)
+    notifications.progress(max(0, time.time() - MACRO_STARTED_AT), CURRENT_TRAINING_STATE)
 
 
 def _sanitize_training_order(value):
@@ -7028,6 +7031,8 @@ def _ui_state_snapshot():
         "effective_click_button": _effective_click_button(),
         "stop_requested": bool(running and UI_STOP_REQUESTED),
         "last_run": last_run,
+        "shutdown": _shutdown_snapshot(),
+        "notifications": notifications.snapshot(),
         "progression": None,
         "senzu_remaining": SENZU_REMAINING,
         "senzu_active_type": SENZU_ACTIVE_TYPE,
@@ -7844,38 +7849,82 @@ def _run_after_actions(outcome, reason):
     return action != "none" or bool(SHUTDOWN_PC_WHEN_FINISHED)
 
 
-def _schedule_pc_shutdown(outcome, reason):
-    """Schedule a cancellable Windows shutdown for an eligible run outcome."""
-    if not _should_shutdown_pc(outcome):
-        return False
-    if os.name != "nt":
-        print("[POWER] PC shutdown is only supported on Windows")
-        return False
+_shutdown_lock = threading.RLock()
+_shutdown_timer = None
+_shutdown_generation = 0
+_shutdown_status = "idle"
+_shutdown_deadline = 0.0
 
-    import subprocess
 
-    outcome_label = "finished" if outcome == "completed" else "failed"
-    comment = f"XynMacro {outcome_label}: {str(reason)[:160]}"
-    shutdown_executable = os.path.join(
-        os.environ.get("SystemRoot", r"C:\Windows"), "System32", "shutdown.exe"
-    )
-    command = [
-        shutdown_executable, "/s", "/t", str(PC_SHUTDOWN_DELAY_SEC),
-        "/c", comment,
-    ]
+def _shutdown_snapshot():
+    with _shutdown_lock:
+        return {
+            "status": _shutdown_status,
+            "pending": _shutdown_status == "pending",
+            "seconds_remaining": max(0, math.ceil(_shutdown_deadline - time.monotonic()))
+            if _shutdown_status == "pending" else 0,
+        }
+
+
+def _cancel_pc_shutdown():
+    global _shutdown_status, _shutdown_generation, _shutdown_timer
+    with _shutdown_lock:
+        if _shutdown_status != "pending":
+            return False, "No cancellable XynMacro countdown is pending."
+        _shutdown_generation += 1
+        if _shutdown_timer is not None:
+            _shutdown_timer.cancel()
+            _shutdown_timer = None
+        _shutdown_status = "cancelled"
+    print("[POWER] XynMacro shutdown countdown cancelled")
+    return True, "Shutdown countdown cancelled."
+
+
+def _dispatch_pc_shutdown(generation):
+    global _shutdown_status, _shutdown_timer
+    with _shutdown_lock:
+        if generation != _shutdown_generation or _shutdown_status != "pending":
+            return
+        if _USER_STOP_LATCHED:
+            _cancel_pc_shutdown()
+            return
+        # Commit only when our cancellable countdown expires. Never abort a
+        # Windows countdown belonging to another application via shutdown /a.
+        _shutdown_status = "requesting"
+        _shutdown_timer = None
+    executable = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "shutdown.exe")
     try:
-        subprocess.Popen(
-            command,
+        result = subprocess.run(
+            [executable, "/s", "/t", "0", "/c", "XynMacro training run ended"],
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            capture_output=True, timeout=5, check=False,
         )
-    except OSError as error:
-        print(f"[POWER] Could not schedule PC shutdown: {error}")
-        return False
+        status = "requested" if result.returncode == 0 else "failed"
+    except subprocess.TimeoutExpired:
+        status = "unknown"
+    except OSError:
+        status = "failed"
+    with _shutdown_lock:
+        _shutdown_status = status
+    print(f"[POWER] Windows shutdown request: {status}")
 
-    print(
-        f"[POWER] PC shutdown scheduled in {PC_SHUTDOWN_DELAY_SEC}s "
-        "(run 'shutdown /a' to cancel)"
-    )
+
+def _schedule_pc_shutdown(outcome, reason):
+    global _shutdown_status, _shutdown_timer, _shutdown_generation, _shutdown_deadline
+    with _shutdown_lock:
+        if not _should_shutdown_pc(outcome) or os.name != "nt":
+            return False
+        if _shutdown_status in ("pending", "requesting", "requested", "unknown"):
+            return False
+        _shutdown_generation += 1
+        _shutdown_status = "pending"
+        _shutdown_deadline = time.monotonic() + PC_SHUTDOWN_DELAY_SEC
+        _shutdown_timer = threading.Timer(
+            PC_SHUTDOWN_DELAY_SEC, _dispatch_pc_shutdown, args=(_shutdown_generation,)
+        )
+        _shutdown_timer.daemon = True
+        _shutdown_timer.start()
+    print(f"[POWER] Shutdown in {PC_SHUTDOWN_DELAY_SEC}s; cancel in XynMacro or close the app")
     return True
 
 
@@ -7908,6 +7957,7 @@ def _finalize_run_result():
         f"category={category or '-'} elapsed={elapsed:.1f}s telemetry={telemetry_log}"
     )
     _run_after_actions(outcome, reason)
+    notifications.send(outcome, elapsed, category)
 
 
 def _auto_retry_can_run(retries_used):
@@ -8171,6 +8221,7 @@ def _runtime_error_is_retryable(message):
 def _run_macro_safe():
     global CURRENT_TRAINING_STATE, TRAINING_MENU_VISIBLE, CONTROLLER_PAUSED
     global SENZU_STATUS, SENZU_ACTIVE_TYPE
+    notifications.begin_run()
     sleep_hold_active = bool(PREVENT_SLEEP_WHILE_RUNNING)
     if sleep_hold_active:
         _set_thread_sleep_hold(True)
@@ -8547,6 +8598,9 @@ def _ui_start_macro(allow_windowed_fallback=False):
     # and both spawn a MACRO_THREAD, leaving multiple macro loops clicking in
     # parallel and only one of them seeing the stop signal.
     with _macro_start_lock:
+        _cancel_pc_shutdown()
+        if _shutdown_snapshot()["status"] in ("requesting", "requested", "unknown"):
+            return False, "A Windows shutdown request was sent. Resolve it before starting.", None
         if _ui_is_running():
             return True, "Already running", None
         if not _sanitize_training_order(TRAINING_ORDER_CUSTOM):
@@ -8592,6 +8646,7 @@ def _ui_stop_macro():
     with _stop_input_gate:
         _USER_STOP_LATCHED = True
         UI_STOP_REQUESTED = True
+    _cancel_pc_shutdown()
     if _ui_is_running():
         _record_run_outcome("stopped", "User requested stop")
     return True, "Stop requested"
@@ -8935,6 +8990,7 @@ def run_ui_server(sidecar_pid=None, auth_token=None):
                 ok, msg, code = _ui_start_macro(allow_windowed_fallback=allow_fallback)
                 return jsonify({"ok": ok, "msg": msg, "code": code})
             if action == "session_shutdown_clean":
+                _cancel_pc_shutdown()
                 # The launcher is about to kill this process on purpose. Its own
                 # parent watchdog would not get to run first.
                 _release_session_marker()
@@ -8942,6 +8998,18 @@ def run_ui_server(sidecar_pid=None, auth_token=None):
             if action == "stop":
                 ok, msg = _ui_stop_macro()
                 return jsonify({"ok": ok, "msg": msg})
+            if action == "shutdown_cancel":
+                ok, msg = _cancel_pc_shutdown()
+                return jsonify({"ok": ok, "msg": msg, "shutdown": _shutdown_snapshot()})
+            if action == "notifications_save":
+                state = notifications.configure(value)
+                return jsonify({"ok": True, "msg": "Notification settings saved", "notifications": state})
+            if action == "notifications_clear":
+                state = notifications.clear()
+                return jsonify({"ok": True, "msg": "Webhook removed", "notifications": state})
+            if action == "notifications_test":
+                queued = notifications.send("test")
+                return jsonify({"ok": queued, "msg": "Test queued; check delivery status" if queued else "Save a webhook first, or wait if rate limited"})
             if action == "set":
                 key = value.get("key") if isinstance(value, dict) else None
                 val = value.get("value") if isinstance(value, dict) else value
@@ -8990,6 +9058,8 @@ def run_ui_server(sidecar_pid=None, auth_token=None):
                 if _ui_is_running():
                     return jsonify({"ok": False, "msg": "Stop the macro before factory reset"})
                 with _config_lock:
+                    notifications.clear()
+                    _cancel_pc_shutdown()
                     factory_reset_configuration()
                 register_start_stop_hotkey()
                 register_manual_next_hotkey()
@@ -9198,6 +9268,7 @@ if __name__ == "__main__":
     SAVE_DIR = os.path.join(DATA_DIR, "saves")
     _load_save_dir()
     seed_defaults()
+    notifications.load(os.path.join(JSON_DIR, "notifications.dpapi"))
     load_master_config()
     load_button_overrides()
     load_region_overrides()

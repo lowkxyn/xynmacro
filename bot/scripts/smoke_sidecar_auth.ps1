@@ -39,6 +39,7 @@ foreach ($a in @('--sidecar', '--pid', "$launcherPid", '--data-dir', $dataDir,
 }
 $psi.RedirectStandardInput = $true
 $psi.UseShellExecute = $false
+$psi.CreateNoWindow = $true
 
 $proc = [Diagnostics.Process]::Start($psi)
 $proc.StandardInput.WriteLine($token)
@@ -62,6 +63,27 @@ try {
     $ok = Invoke-RestMethod -Uri "http://127.0.0.1:$port/health" -Headers @{ 'X-XynMacro-Token' = $token }
     if (-not $ok.ok) { throw "Authenticated /health did not report ok." }
 
+    $headers = @{ 'X-XynMacro-Token' = $token }
+    $state = Invoke-RestMethod -Uri "http://127.0.0.1:$port/state" -Headers $headers
+    if ($state.shutdown.pending -or $state.notifications.enabled -or $state.notifications.configured) {
+        throw 'A fresh sidecar must not schedule shutdown or send notifications.'
+    }
+    # Synthetic URL, disabled configuration: verify the frozen DPAPI dependency
+    # without sending any message or touching an actual webhook.
+    $syntheticUrl = 'https://discord.com/api/webhooks/123456789012345678/' + ('x' * 60)
+    $saveBody = @{ action = 'notifications_save'; value = @{ url = $syntheticUrl; enabled = $false; progress_minutes = 0 } } | ConvertTo-Json -Depth 4
+    $saved = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:$port/command" -Headers $headers -ContentType 'application/json' -Body $saveBody
+    if (-not $saved.ok -or -not $saved.notifications.configured -or $saved.notifications.enabled) {
+        throw 'Frozen sidecar could not save disabled encrypted notification settings.'
+    }
+    $stateText = Invoke-WebRequest -Uri "http://127.0.0.1:$port/state" -Headers $headers
+    if ($stateText.Content.Contains($syntheticUrl)) { throw 'Webhook URL leaked in state.' }
+    $clearBody = @{ action = 'notifications_clear' } | ConvertTo-Json
+    $cleared = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:$port/command" -Headers $headers -ContentType 'application/json' -Body $clearBody
+    if (-not $cleared.ok -or (Test-Path -LiteralPath (Join-Path $dataDir 'json/notifications.dpapi'))) {
+        throw 'Frozen sidecar did not remove notification storage.'
+    }
+
     # The token must actually be enforced, not merely accepted.
     try {
         Invoke-RestMethod -Uri "http://127.0.0.1:$port/health" -ErrorAction Stop | Out-Null
@@ -74,5 +96,10 @@ try {
     Write-Output "Sidecar stdin auth verified on port $port."
 } finally {
     if (-not $proc.HasExited) { $proc.Kill(); $proc.WaitForExit(5000) | Out-Null }
-    Remove-Item -Recurse -Force $dataDir -ErrorAction SilentlyContinue
+    $resolvedSmokeDir = [IO.Path]::GetFullPath($dataDir)
+    $smokePrefix = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\') + '\sidecar-smoke-'
+    if (-not $resolvedSmokeDir.StartsWith($smokePrefix, [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'Refusing cleanup outside the temporary smoke-test directory.'
+    }
+    Remove-Item -LiteralPath $resolvedSmokeDir -Recurse -Force -ErrorAction SilentlyContinue
 }

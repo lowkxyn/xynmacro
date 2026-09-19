@@ -1,5 +1,7 @@
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{
+  --ui-zoom:1;
+  --shutdown-banner-height:0px;
   --bg:#0d0d10;
   --bg-alt:#15151a;
   --bg-card:rgba(22,22,28,.86);
@@ -207,56 +209,6 @@ html,body{background:transparent}
 }
 .titlebar-drag{flex:1;display:flex;align-items:center;height:100%;padding-left:14px;position:relative;min-width:0}
 .titlebar-title{font-size:11px;font-weight:600;color:var(--text3);letter-spacing:.3px;transition:opacity .22s ease}
-/* Windows has no glyph for regional-indicator flag emoji (🇪🇸 renders as "ES"),
-   so the flag is drawn in CSS. Sized in em, so it tracks whatever font-size the
-   parent uses — titlebar tag and the big centred pop share this one rule. */
-.flag-es{
-  display:inline-block;width:1.4em;height:.95em;vertical-align:-.12em;margin-left:.35em;
-  border-radius:2px;box-shadow:0 0 0 1px rgba(0,0,0,.35);
-  background:linear-gradient(#c60b1e 0 25%,#ffc400 25% 75%,#c60b1e 75% 100%);
-}
-
-/* Centred on the window, not on .titlebar-drag. pointer-events:none so a mousedown
-   here still reaches .titlebar-drag underneath and the window stays draggable. */
-.tb-tag{
-  position:absolute;left:50%;top:0;transform:translateX(-50%);
-  height:100%;display:flex;align-items:center;pointer-events:none;
-  font-family:var(--font-mono);font-size:15px;font-weight:700;
-  color:var(--text2);letter-spacing:.6px;white-space:nowrap;
-  transition:opacity .22s ease;
-}
-/* Compact mode hands the whole bar to the HUD — get out of its way. */
-.window-frame.compact .tb-tag{opacity:0}
-
-/* Launch confetti. Clipped by .window-frame's overflow:hidden, so bits vanish at
-   the rounded edges instead of spilling onto the OS desktop. Removed from the DOM
-   once the animation ends — see spawnLaunchConfetti() in main.js. */
-.confetti-layer{position:absolute;inset:0;pointer-events:none;z-index:60;overflow:hidden}
-.wspain-pop{
-  position:absolute;left:50%;top:50%;z-index:61;pointer-events:none;
-  font-family:var(--font-mono);font-size:38px;font-weight:700;letter-spacing:1px;
-  color:var(--text);text-shadow:0 4px 24px rgba(0,0,0,.55);white-space:nowrap;
-  animation:wspain-pop 2.4s cubic-bezier(.2,.9,.3,1) forwards;
-}
-@keyframes wspain-pop{
-  0%{transform:translate(-50%,-50%) scale(.6);opacity:0}
-  14%{transform:translate(-50%,-50%) scale(1.06);opacity:1}
-  22%{transform:translate(-50%,-50%) scale(1)}
-  75%{transform:translate(-50%,-50%) scale(1);opacity:1}
-  100%{transform:translate(-50%,-58%) scale(.96);opacity:0}
-}
-.confetti-bit{
-  position:absolute;top:-24px;font-size:var(--bit-size,18px);line-height:1;
-  will-change:transform,opacity;
-  animation:confetti-fall var(--bit-dur,2.6s) linear var(--bit-delay,0s) forwards;
-}
-@keyframes confetti-fall{
-  0%{transform:translateY(0) rotate(0deg);opacity:0}
-  8%{opacity:1}
-  75%{opacity:1}
-  100%{transform:translateY(105vh) rotate(var(--bit-spin,360deg));opacity:0}
-}
-@media (prefers-reduced-motion:reduce){.confetti-layer{display:none}}
 /* Compact HUD: overlays the title area when window is rolled up. */
 .titlebar-hud{
   position:absolute;left:14px;top:0;height:100%;right:14px;
@@ -335,10 +287,23 @@ button:focus-visible,[role="button"]:focus-visible,[role="separator"]:focus-visi
 .app-shell{
   display:grid;grid-template-columns:var(--sidebar-w) 1fr;
   grid-template-rows:1fr auto;
-  height:calc(100% - 32px);position:relative;z-index:1;overflow:hidden;
+  zoom:var(--ui-zoom);
+  width:100%;
+  height:calc(100% - (32px + var(--shutdown-banner-height)) / var(--ui-zoom));position:relative;z-index:1;overflow:hidden;
   transition:opacity .22s ease;
 }
 .window-frame.compact .app-shell{opacity:0;pointer-events:none}
+
+.shutdown-notice{--shutdown-banner-height:42px}
+.shutdown-banner{position:relative;z-index:3;display:flex;align-items:center;justify-content:space-between;gap:12px;height:42px;padding:5px 16px;background:var(--red-dim);color:var(--text);font-size:12px}
+.shutdown-banner[hidden],.shutdown-cancel[hidden],#cancelShutdownButton[hidden]{display:none}
+.window-frame.compact .shutdown-banner{display:none}
+.shutdown-cancel{flex-shrink:0;border:1px solid var(--red);border-radius:8px;background:var(--bg);color:var(--red);font:inherit;font-size:10px;padding:2px 7px;cursor:pointer;-webkit-app-region:no-drag}
+.zoom-controls{gap:6px;flex-wrap:wrap}
+#zoomValue{min-width:42px;text-align:center;font-family:var(--font-mono)}
+.inp.webhook-url{width:240px;max-width:100%;text-align:left}
+.notification-actions{gap:6px;flex-wrap:wrap}
+#notificationStatus{overflow-wrap:anywhere}
 
 /* Compact-mode pill. Window height = 32px with border-radius = half-height for a true pill.
    Transparent OS window + DWM rounding off keeps the rounded edges subpixel-AA via WebView2

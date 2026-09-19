@@ -1,7 +1,7 @@
 import sys
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import patch, Mock
 
 
 PYTHON_DIR = Path(__file__).resolve().parents[1]
@@ -12,6 +12,11 @@ import xynmacro_core as core
 
 class ShutdownPolicyTests(unittest.TestCase):
     def setUp(self):
+        self.timer_patch = patch.object(core.threading, "Timer")
+        self.timer = self.timer_patch.start()
+        self.addCleanup(self.timer_patch.stop)
+        core._shutdown_status = "idle"
+        core._shutdown_timer = None
         self.shutdown_finished = core.SHUTDOWN_PC_WHEN_FINISHED
         self.game_action = core.AFTER_RUN_GAME_ACTION
         self.on_failure = core.AFTER_RUN_ON_FAILURE
@@ -21,6 +26,8 @@ class ShutdownPolicyTests(unittest.TestCase):
         core._AFTER_ACTIONS_BLOCKED = False
 
     def tearDown(self):
+        core._shutdown_status = "idle"
+        core._shutdown_timer = None
         core.SHUTDOWN_PC_WHEN_FINISHED = self.shutdown_finished
         core.AFTER_RUN_GAME_ACTION = self.game_action
         core.AFTER_RUN_ON_FAILURE = self.on_failure
@@ -44,8 +51,8 @@ class ShutdownPolicyTests(unittest.TestCase):
         self.assertFalse(core._should_run_after_actions("incomplete"))
         self.assertFalse(core._should_shutdown_pc("incomplete"))
 
-    @patch("subprocess.Popen")
-    def test_eligible_shutdown_uses_cancellable_windows_countdown(self, popen):
+    @patch("subprocess.run", return_value=Mock(returncode=0))
+    def test_eligible_shutdown_waits_in_app_before_requesting_windows(self, run):
         core.SHUTDOWN_PC_WHEN_FINISHED = True
         core.AFTER_RUN_ON_FAILURE = False
 
@@ -53,9 +60,71 @@ class ShutdownPolicyTests(unittest.TestCase):
             scheduled = core._schedule_pc_shutdown("completed", "Training order completed")
 
         self.assertTrue(scheduled)
-        command = popen.call_args.args[0]
+        run.assert_not_called()
+        self.assertTrue(core._shutdown_snapshot()["pending"])
+        self.assertEqual(self.timer.call_args.args[0], 60)
+        self.timer.return_value.start.assert_called_once()
+        core._dispatch_pc_shutdown(core._shutdown_generation)
+        command = run.call_args.args[0]
         self.assertTrue(command[0].lower().endswith("system32\\shutdown.exe"))
-        self.assertEqual(command[1:4], ["/s", "/t", "60"])
+        self.assertEqual(command[1:4], ["/s", "/t", "0"])
+        self.assertNotIn("/f", command)
+        self.assertEqual(core._shutdown_snapshot()["status"], "requested")
+
+    @patch("subprocess.run")
+    def test_cancel_prevents_a_stale_timer_from_shutting_down(self, run):
+        core.SHUTDOWN_PC_WHEN_FINISHED = True
+        with patch.object(core.os, "name", "nt"):
+            core._schedule_pc_shutdown("completed", "done")
+        generation = core._shutdown_generation
+        self.assertTrue(core._cancel_pc_shutdown()[0])
+        core._dispatch_pc_shutdown(generation)
+        run.assert_not_called()
+        self.assertEqual(core._shutdown_snapshot()["status"], "cancelled")
+
+    @patch("subprocess.run")
+    def test_stop_cancels_pending_countdown_and_blocks_rescheduling(self, run):
+        core.SHUTDOWN_PC_WHEN_FINISHED = True
+        with patch.object(core.os, "name", "nt"), patch.object(core, "_ui_is_running", return_value=False):
+            core._schedule_pc_shutdown("completed", "done")
+            generation = core._shutdown_generation
+            core._ui_stop_macro()
+            self.assertFalse(core._schedule_pc_shutdown("completed", "late result"))
+            core._dispatch_pc_shutdown(generation)
+        run.assert_not_called()
+
+    @patch("subprocess.run")
+    def test_duplicate_countdown_and_unowned_cancel_are_noops(self, run):
+        self.assertFalse(core._cancel_pc_shutdown()[0])
+        core.SHUTDOWN_PC_WHEN_FINISHED = True
+        with patch.object(core.os, "name", "nt"):
+            self.assertTrue(core._schedule_pc_shutdown("completed", "done"))
+            self.assertFalse(core._schedule_pc_shutdown("completed", "duplicate"))
+        self.timer.assert_called_once()
+        run.assert_not_called()
+
+    def test_failed_and_uncertain_windows_requests_are_not_reported_as_success(self):
+        for result, expected in [(Mock(returncode=5), "failed"), (OSError(), "failed"),
+                                 (core.subprocess.TimeoutExpired("shutdown", 5), "unknown")]:
+            with self.subTest(expected=expected):
+                core._shutdown_status = "pending"
+                with patch("subprocess.run") as run:
+                    if isinstance(result, Exception):
+                        run.side_effect = result
+                    else:
+                        run.return_value = result
+                    core._dispatch_pc_shutdown(core._shutdown_generation)
+                self.assertEqual(core._shutdown_snapshot()["status"], expected)
+
+    @patch("subprocess.run")
+    def test_start_cancels_countdown_even_if_game_is_missing(self, run):
+        core.SHUTDOWN_PC_WHEN_FINISHED = True
+        with patch.object(core.os, "name", "nt"):
+            core._schedule_pc_shutdown("completed", "done")
+        with patch.object(core, "_ui_is_running", return_value=False), patch.object(core, "update_game_window", return_value=False), patch.object(core, "restore_game_window", return_value=False):
+            core._ui_start_macro()
+        self.assertEqual(core._shutdown_snapshot()["status"], "cancelled")
+        run.assert_not_called()
 
     @patch("subprocess.Popen")
     def test_ineligible_outcomes_never_launch_shutdown(self, popen):

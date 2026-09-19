@@ -20,7 +20,6 @@
 <div class="titlebar" id="titlebar">
   <!-- Centered on the whole window, so it sits outside .titlebar-drag rather than
        being pushed off-centre by the width of the window controls. -->
-  <span class="tb-tag" aria-hidden="true">W spain<span class="flag-es"></span></span>
   <div class="titlebar-drag">
     <span class="titlebar-title">XynMacro</span>
     <div class="titlebar-hud">
@@ -31,6 +30,7 @@
       <span class="hud-sep" id="hudSep" style="display:none">·</span>
       <span class="hud-stat" id="hudStat"></span>
       <span class="hud-time" id="hudTime"></span>
+      <button type="button" class="shutdown-cancel" id="hudCancelShutdown" hidden onclick="cancelShutdown()">Cancel shutdown</button>
     </div>
   </div>
   <div class="titlebar-controls">
@@ -59,6 +59,7 @@
   </div>
 </div>
 
+<div class="shutdown-banner" id="shutdownBanner" hidden><span id="shutdownMessage" role="status"></span><button type="button" class="btn-sm danger" id="cancelShutdownButton" hidden onclick="cancelShutdown()">Cancel shutdown</button></div>
 <div class="app-shell">
   <aside class="sidebar">
     <div class="sidebar-brand">
@@ -344,6 +345,16 @@
         <div class="row-hint">Delay After Red waits before the first attempt. Recovery Check waits for recovered HP before one retry or resuming the same category. When every bean type allowed by Bean Preference runs out, Auto-Senzu disables for that run and training continues.</div>
       </div>
 
+      <div class="section-title">Discord notifications</div>
+      <div class="panel" id="notificationPanel">
+        <div class="row-item"><label class="row-label" for="notificationEnabled">Send run updates</label><div class="row-ctrl"><input type="checkbox" id="notificationEnabled"></div></div>
+        <div class="row-hint">Finished, stopped and error notifications. Optional progress updates are sent while training. No screenshots, chat, logs or mentions are included.</div>
+        <div class="row-item"><label class="row-label" for="notificationUrl">Webhook URL</label><div class="row-ctrl"><input type="password" class="inp webhook-url" id="notificationUrl" aria-label="Discord webhook URL" placeholder="Paste Discord webhook URL" autocomplete="new-password" spellcheck="false"></div></div>
+        <div class="row-hint">Stored encrypted for this Windows user, separately from macro settings. Leave blank to keep the saved webhook. A message already sending may finish after disabling.</div>
+        <div class="row-item"><label class="row-label" for="notificationInterval">Progress interval</label><div class="row-ctrl"><select class="inp" id="notificationInterval" aria-label="Progress notification interval"><option value="0">Final status only</option><option value="5">Every 5 minutes</option><option value="10">Every 10 minutes</option><option value="15">Every 15 minutes</option><option value="30">Every 30 minutes</option><option value="60">Every hour</option></select></div></div>
+        <div class="row-item"><span class="row-label" id="notificationStatus" role="status">Not configured</span><div class="row-ctrl notification-actions"><button type="button" class="btn-sm" id="notificationSave">Save</button><button type="button" class="btn-sm" id="notificationTest">Send test</button><button type="button" class="btn-sm danger" id="notificationClear">Remove</button></div></div>
+      </div>
+
       <div class="section-title">After Run</div>
       <div class="panel shutdown-panel">
         <div class="row-item">
@@ -362,7 +373,7 @@
           <span class="row-label">Shut Down PC</span>
           <div class="row-ctrl"><button type="button" class="toggle" id="toggleShutdownFinished" role="switch" aria-checked="false" aria-label="Shut down PC when the training order finishes" onclick="toggleSetting('shutdown_pc_when_finished',this)"></button></div>
         </div>
-        <div class="row-hint">Schedules a cancellable Windows shutdown 60 seconds after the run.</div>
+        <div class="row-hint">Starts a 60-second countdown in XynMacro. Cancel, Stop, a new run or closing the app cancels it. After the countdown, Windows is asked to shut down without forcing apps closed.</div>
         <div class="row-item shutdown-dependent" id="afterRunFailureRow">
           <span class="row-label">Run Enabled Actions If Macro Fails</span>
           <div class="row-ctrl"><button type="button" class="toggle" id="toggleAfterRunFailure" role="switch" aria-checked="false" aria-label="Run enabled after-run actions if the macro fails" onclick="toggleSetting('after_run_on_failure',this)"></button></div>
@@ -377,7 +388,9 @@
           <span class="row-label">Confirm Resolution Changes</span>
           <div class="row-ctrl"><button type="button" class="toggle" id="toggleDisplayConfirm" role="switch" aria-checked="false" aria-label="Ask to confirm a display resolution change before keeping it" onclick="toggleSetting('display_confirm_changes',this)"></button></div>
         </div>
-        <div class="row-hint">After "Set 1080p", asks you to confirm and reverts automatically after 10 seconds if you don't — the safety net for a mode your monitor can't display. The timer runs in the backend, so it still fires if the window is unreadable. Off applies the change immediately, as before.</div></div>      <div class="section-title">Hotkeys</div>
+        <div class="row-hint">After "Set 1080p", asks you to confirm and reverts automatically after 10 seconds if you don't — the safety net for a mode your monitor can't display. The timer runs in the backend, so it still fires if the window is unreadable. Off applies the change immediately, as before.</div></div>      <div class="section-title">Macro interface</div>
+      <div class="panel"><div class="row-item"><span class="row-label">Interface zoom</span><div class="row-ctrl zoom-controls"><button type="button" class="btn-sm" id="zoomOut" aria-label="Zoom out">−</button><output id="zoomValue" aria-live="polite">100%</output><button type="button" class="btn-sm" id="zoomIn" aria-label="Zoom in">+</button><button type="button" class="btn-sm" id="zoomReset">Reset</button></div></div><div class="row-hint">Ctrl + / − to zoom, Ctrl 0 to reset. Changes the macro workspace only. The title bar, compact HUD and Roblox stay the same size.</div></div>
+      <div class="section-title">Hotkeys</div>
       <div class="panel">
         <div class="row-item">
           <span class="row-label">Start / Stop</span>
@@ -814,12 +827,12 @@
           <span class="row-label">Macro settings</span>
           <div class="row-ctrl"><button class="btn-sm" onclick="resetMacroSettings()">Reset macro settings</button></div>
         </div>
-        <div class="row-hint">Restores controls and tuning only. Calibration, appearance, window size, save location, presets, and logs are kept.</div>
+        <div class="row-hint">Restores controls and tuning only. Calibration, notifications, appearance, window size, save location, presets, and logs are kept.</div>
         <div class="row-item">
           <span class="row-label">Factory reset</span>
           <div class="row-ctrl"><button class="btn-sm danger" onclick="factoryResetApp()">Factory reset app</button></div>
         </div>
-        <div class="row-hint">Restores settings, calibration, save location, appearance, update preferences, sidebar width, and window position/size. Saved logs and custom theme presets are kept.</div>
+        <div class="row-hint">Restores settings, calibration, save location, appearance, update preferences, zoom, sidebar width, and window position/size. Removes the saved webhook and cancels a pending shutdown countdown. Saved logs and custom theme presets are kept.</div>
       </div>
 
     </div>

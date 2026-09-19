@@ -4,7 +4,7 @@ const XYNMACRO_PREFERENCE_PREFIX = 'xynmacro-';
    saved appearance before first paint. No preference data leaves the WebView. */
 (function(){
   const legacyPrefix = ['x', 'macro-'].join('');
-  const suffixes = ['ui-style', 'auto-update', 'update-ignored-version', 'changelog-seen', 'announcement-seen', 'welcome-seen', 'wspain-seen'];
+  const suffixes = ['ui-style', 'auto-update', 'update-ignored-version', 'changelog-seen', 'announcement-seen', 'welcome-seen'];
   XynMacroPreferenceMigration.migratePreferences(
     localStorage, legacyPrefix, XYNMACRO_PREFERENCE_PREFIX, suffixes
   );
@@ -39,65 +39,12 @@ window.addEventListener('DOMContentLoaded', () => {
     setTimeout(() => {
       splash.classList.add('hide');
       setTimeout(() => { splash.remove(); }, 500);
-      celebrateWSpain();
     }, wait);
   }
   window.addEventListener('backend-ready', hide, { once: true });
   // Hard cap so a stuck sidecar doesn't lock the UI forever.
   setTimeout(hide, 8000);
 });
-
-/* One-time "W spain" moment: a centred card plus an emoji shower as the splash
-   fades. Fires once per install — the flag lives in ACTIVE_PREFERENCE_KEYS, so a
-   config reset replays it. Everything is pointer-events:none and self-removing. */
-const WSPAIN_SEEN_KEY = XYNMACRO_PREFERENCE_PREFIX + 'wspain-seen';
-function celebrateWSpain() {
-  const frame = document.querySelector('.window-frame');
-  if (!frame || localStorage.getItem(WSPAIN_SEEN_KEY)) return;
-  localStorage.setItem(WSPAIN_SEEN_KEY, '1');
-  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-
-  const pop = document.createElement('div');
-  pop.className = 'wspain-pop';
-  pop.setAttribute('aria-hidden', 'true');
-  pop.innerHTML = 'W spain<span class="flag-es"></span>';
-  frame.appendChild(pop);
-  setTimeout(() => pop.remove(), 2600);
-
-  spawnLaunchConfetti();
-}
-
-/* One emoji shower. Purely decorative: the layer is pointer-events:none and
-   tears itself down, so nothing lingers in the DOM. */
-// No flag here — it would fall as the literal letters "ES" on Windows.
-const CONFETTI_EMOJI = ['🎉', '🎊', '✨', '🥳', '🎈'];
-function spawnLaunchConfetti(count = 26) {
-  const frame = document.querySelector('.window-frame');
-  if (!frame || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-
-  const layer = document.createElement('div');
-  layer.className = 'confetti-layer';
-  layer.setAttribute('aria-hidden', 'true');
-
-  let longest = 0;
-  for (let i = 0; i < count; i++) {
-    const bit = document.createElement('span');
-    bit.className = 'confetti-bit';
-    bit.textContent = CONFETTI_EMOJI[Math.floor(Math.random() * CONFETTI_EMOJI.length)];
-    const dur = 2.2 + Math.random() * 1.8;
-    const delay = Math.random() * 1.2;
-    bit.style.left = (Math.random() * 100).toFixed(2) + '%';
-    bit.style.setProperty('--bit-size', (13 + Math.random() * 12).toFixed(1) + 'px');
-    bit.style.setProperty('--bit-dur', dur.toFixed(2) + 's');
-    bit.style.setProperty('--bit-delay', delay.toFixed(2) + 's');
-    bit.style.setProperty('--bit-spin', (Math.random() < 0.5 ? -1 : 1) * (180 + Math.random() * 540) + 'deg');
-    longest = Math.max(longest, dur + delay);
-    layer.appendChild(bit);
-  }
-
-  frame.appendChild(layer);
-  setTimeout(() => layer.remove(), longest * 1000 + 200);
-}
 
 /* Hard failure from the Rust shell: the sidecar never came up. Replace the silent
    "loaded but dead" state (every poll fails quietly) with a visible, explained bar. */
@@ -193,19 +140,52 @@ window.__xynInlineProbeFired = false;
 
 const { invoke } = window.__TAURI__.core;
 
+const ZOOM_STEPS = [0.8, 0.9, 1, 1.1, 1.25];
+let interfaceZoom = 1;
+function applyInterfaceZoom(value, persist = true) {
+  window.dispatchEvent(new Event('xyn-zoom-changed'));
+  const requested = Number(value);
+  interfaceZoom = Number.isFinite(requested) && requested >= 0.8 && requested <= 1.25
+    ? ZOOM_STEPS.reduce((best, step) => Math.abs(step - requested) < Math.abs(best - requested) ? step : best, 1)
+    : 1;
+  document.documentElement.style.setProperty('--ui-zoom', String(interfaceZoom));
+  document.getElementById('zoomValue').textContent = `${Math.round(interfaceZoom * 100)}%`;
+  document.getElementById('zoomOut').disabled = interfaceZoom === ZOOM_STEPS[0];
+  document.getElementById('zoomIn').disabled = interfaceZoom === ZOOM_STEPS.at(-1);
+  if (persist) localStorage.setItem('xynmacro-ui-zoom', String(interfaceZoom));
+  window.dispatchEvent(new Event('resize'));
+}
+function stepInterfaceZoom(direction) {
+  applyInterfaceZoom(ZOOM_STEPS[Math.max(0, Math.min(ZOOM_STEPS.length - 1, ZOOM_STEPS.indexOf(interfaceZoom) + direction))]);
+}
+applyInterfaceZoom(localStorage.getItem('xynmacro-ui-zoom') || 1, false);
+document.getElementById('zoomOut').addEventListener('click', () => stepInterfaceZoom(-1));
+document.getElementById('zoomIn').addEventListener('click', () => stepInterfaceZoom(1));
+document.getElementById('zoomReset').addEventListener('click', () => applyInterfaceZoom(1));
+window.addEventListener('keydown', event => {
+  if (!event.ctrlKey || event.altKey || !['+', '=', '-', '_', '0'].includes(event.key)) return;
+  event.preventDefault();
+  if (event.key === '0') applyInterfaceZoom(1);
+  else stepInterfaceZoom(['+', '='].includes(event.key) ? 1 : -1);
+}, true);
+window.addEventListener('wheel', event => {
+  // Keep native WebView zoom from scaling the title bar on top of workspace zoom.
+  if (event.ctrlKey) event.preventDefault();
+}, { passive: false });
+
 const ACTIVE_PREFERENCE_KEYS = [
   'dbog-theme',
   'dbog-bg',
   'dbog-bg-speed',
   'xynmacro-reduce-run-effects',
   'xynmacro-ui-style',
+  'xynmacro-ui-zoom',
   'dbog-sidebar-width',
   'xynmacro-auto-update',
   'xynmacro-update-ignored-version',
   'xynmacro-changelog-seen',
   'xynmacro-announcement-seen',
   'xynmacro-welcome-seen',
-  'xynmacro-wspain-seen',
 ];
 
 // Deleting the visible macro_config.json is a complete reset on next launch.
@@ -1076,6 +1056,83 @@ window.wcCompact = () => {
     }
   }
 
+  let shutdownBusy = false;
+  function renderShutdown(state) {
+    if (!state) return;
+    const pending = !!state.pending;
+    const labels = {
+      requesting: 'Sending shutdown request to Windows…',
+      requested: 'Shutdown requested. Windows may be waiting for open apps.',
+      failed: 'Windows did not accept the shutdown request.',
+      unknown: 'Shutdown request status is unknown. Check Windows before starting again.',
+    };
+    const message = pending ? `PC shutdown in ${state.seconds_remaining}s` : (labels[state.status] || '');
+    document.getElementById('shutdownBanner').hidden = !message;
+    document.getElementById('shutdownMessage').textContent = message;
+    document.documentElement.classList.toggle('shutdown-notice', !!message);
+    for (const id of ['cancelShutdownButton', 'hudCancelShutdown']) {
+      const button = document.getElementById(id);
+      button.hidden = !pending;
+      button.disabled = shutdownBusy;
+      button.textContent = shutdownBusy ? 'Cancelling…' : `Cancel shutdown${id === 'hudCancelShutdown' ? ` · ${state.seconds_remaining}s` : ''}`;
+    }
+  }
+  window.cancelShutdown = async () => {
+    if (shutdownBusy) return;
+    shutdownBusy = true;
+    for (const id of ['cancelShutdownButton', 'hudCancelShutdown']) document.getElementById(id).disabled = true;
+    const response = await sendCommand('shutdown_cancel');
+    shutdownBusy = false;
+    renderShutdown(response.shutdown);
+    for (const id of ['cancelShutdownButton', 'hudCancelShutdown']) document.getElementById(id).disabled = false;
+    showToast(response.msg || 'Could not confirm cancellation. Try again.', response.ok ? 'ok' : 'err');
+  };
+
+  let notificationDraft = false;
+  let notificationBusy = false;
+  let notificationState = {};
+  function renderNotifications(state) {
+    if (!state) return;
+    notificationState = state;
+    document.getElementById('notificationStatus').textContent = state.configured
+      ? `Webhook saved · ${state.status}` : state.status || 'Not configured';
+    if (!notificationDraft) {
+      document.getElementById('notificationEnabled').checked = !!state.enabled;
+      document.getElementById('notificationInterval').value = String(state.progress_minutes || 0);
+    }
+    document.getElementById('notificationSave').disabled = notificationBusy;
+    document.getElementById('notificationTest').disabled = notificationBusy || !state.configured;
+    document.getElementById('notificationClear').disabled = notificationBusy || !state.configured;
+    for (const id of ['notificationUrl', 'notificationEnabled', 'notificationInterval']) {
+      document.getElementById(id).disabled = notificationBusy;
+    }
+  }
+  for (const id of ['notificationUrl', 'notificationEnabled', 'notificationInterval']) {
+    document.getElementById(id).addEventListener('input', () => { notificationDraft = true; });
+  }
+  async function notificationCommand(action, value) {
+    if (notificationBusy) return;
+    notificationBusy = true;
+    renderNotifications(notificationState);
+    const response = await sendCommand(action, value);
+    notificationBusy = false;
+    if (response.ok && action !== 'notifications_test') {
+      document.getElementById('notificationUrl').value = '';
+      notificationDraft = false;
+    }
+    renderNotifications(response.notifications || notificationState);
+    showToast(response.msg || (response.ok ? 'Notification settings updated' : 'Notification request failed'), response.ok ? 'ok' : 'err');
+  }
+  document.getElementById('notificationSave').addEventListener('click', () => {
+    const value = { enabled: document.getElementById('notificationEnabled').checked,
+      progress_minutes: Number(document.getElementById('notificationInterval').value) };
+    const url = document.getElementById('notificationUrl').value.trim();
+    if (url) value.url = url;
+    notificationCommand('notifications_save', value);
+  });
+  document.getElementById('notificationTest').addEventListener('click', () => notificationCommand('notifications_test'));
+  document.getElementById('notificationClear').addEventListener('click', () => notificationCommand('notifications_clear'));
+
   /* Display resolution switch (Setup checklist) */
   const _btnRes1080 = document.getElementById('btnRes1080');
   if (_btnRes1080) _btnRes1080.addEventListener('click', async () => {
@@ -1258,7 +1315,7 @@ window.wcCompact = () => {
       if (!draggedRow) return;
 
       draggedRow.style.transition = 'none';
-      draggedRow.style.transform = `translateY(${dy}px) scale(1.03)`;
+      draggedRow.style.transform = `translateY(${dy / interfaceZoom}px) scale(1.03)`;
 
       const draggedCenter = d.rects[d.fromIdx].top + d.rects[d.fromIdx].height / 2 + dy;
       let newIdx = d.fromIdx;
@@ -1276,12 +1333,12 @@ window.wcCompact = () => {
         if (i === d.fromIdx) continue;
         let shift = 0;
         if (d.fromIdx < d.curIdx) {
-          if (i > d.fromIdx && i <= d.curIdx) shift = -(rowRect.height + 6);
+          if (i > d.fromIdx && i <= d.curIdx) shift = -(rowRect.height + 6 * interfaceZoom);
         } else if (d.fromIdx > d.curIdx) {
-          if (i >= d.curIdx && i < d.fromIdx) shift = rowRect.height + 6;
+          if (i >= d.curIdx && i < d.fromIdx) shift = rowRect.height + 6 * interfaceZoom;
         }
         d.rows[i].style.transition = 'transform .22s cubic-bezier(.2,.8,.2,1)';
-        d.rows[i].style.transform = shift ? `translateY(${shift}px)` : '';
+        d.rows[i].style.transform = shift ? `translateY(${shift / interfaceZoom}px)` : '';
         d.rows[i].classList.toggle('shifting', !!shift);
       }
     }
@@ -1350,6 +1407,7 @@ window.wcCompact = () => {
           window.removeEventListener('pointerup', onUp);
           window.removeEventListener('pointercancel', onCancel);
           window.removeEventListener('blur', onCancel);
+          window.removeEventListener('xyn-zoom-changed', onCancel);
           _endDrag();
         };
         const onCancel = () => {
@@ -1358,6 +1416,7 @@ window.wcCompact = () => {
         };
         window.addEventListener('pointercancel', onCancel);
         window.addEventListener('blur', onCancel);
+        window.addEventListener('xyn-zoom-changed', onCancel);
         window.addEventListener('pointermove', onMove);
         window.addEventListener('pointerup', onUp);
       });
@@ -1389,7 +1448,7 @@ window.wcCompact = () => {
       const dy = oldTop - newTop;
       if (Math.abs(dy) < 1) return;
       el.animate(
-        [{ transform: `translateY(${dy}px)` }, { transform: 'translateY(0px)' }],
+        [{ transform: `translateY(${dy / interfaceZoom}px)` }, { transform: 'translateY(0px)' }],
         { duration: 220, easing: 'cubic-bezier(.2,.8,.2,1)' }
       );
     });
@@ -2270,6 +2329,8 @@ window.wcCompact = () => {
 
   function applyState(state) {
     if (!state) return;
+    renderShutdown(state.shutdown);
+    renderNotifications(state.notifications);
 
     const hash = JSON.stringify(state);
     const changed = hash !== _lastStateHash;
@@ -3121,6 +3182,22 @@ window.wcCompact = () => {
 
   // What's-new content, newest first. Each entry: {version, notes:[{h, items[]}]}.
   const CHANGELOG = [
+    { version: '1.8.0-beta.2', notes: [
+      { h: 'Workspace controls', items: [
+        'Added saved interface zoom from 80% to 125% in Input & Display, with Ctrl + / minus / 0 shortcuts. The title bar, compact HUD and Roblox keep their size.',
+        'Removed the W spain title tag and startup celebration. Respawn walking is unchanged.',
+      ] },
+      { h: 'Notifications and shutdown', items: [
+        'Optional Discord webhook messages for finished, stopped and failed runs, plus selectable progress intervals. Disabled until configured; stored encrypted for your Windows user.',
+        'Notifications send only outcome, elapsed time and the current trait. No screenshots, chat, logs or mentions. Use Send test to check your webhook.',
+        'PC shutdown now uses a 60-second countdown inside XynMacro, with Cancel available in normal and compact views. Stop, a new run or closing the app cancels the countdown.',
+        'At zero, XynMacro asks Windows to shut down without forcing apps closed. Request errors are reported; no real shutdown was performed during automated testing.',
+      ] },
+      { h: 'Pending gameplay work', items: [
+        'Chat auto-hide, Ki recharge, race healing and respawn weight equipment remain planned pending game controls and visual evidence.',
+        'Install this beta manually from its release. Beta and stable use separate profiles; do not run them simultaneously.',
+      ] },
+    ] },
     { version: '1.8.0-beta.1', notes: [
       { h: 'Input and recovery', items: [
         'Choose Left, Right or Follow Windows for all automated game clicks.',
@@ -4001,7 +4078,7 @@ window.wcCompact = () => {
       sidebarHandle.classList.add('dragging');
       document.body.classList.add('sidebar-dragging');
       const onMove = (ev) => {
-        setSidebarWidth(ev.clientX);
+        setSidebarWidth((ev.clientX - document.querySelector('.app-shell').getBoundingClientRect().left) / interfaceZoom);
       };
       const onUp = () => {
         window.removeEventListener('mousemove', onMove);
