@@ -3182,7 +3182,7 @@ window.wcCompact = () => {
 
   // What's-new content, newest first. Each entry: {version, notes:[{h, items[]}]}.
   const CHANGELOG = [
-    { version: '1.8.0-beta.2', notes: [
+    { version: '1.8.0-beta.3', notes: [
       { h: 'Workspace controls', items: [
         'Added saved interface zoom from 80% to 125% in Input & Display, with Ctrl + / minus / 0 shortcuts. The title bar, compact HUD and Roblox keep their size.',
         'Removed the W spain title tag and startup celebration. Respawn walking is unchanged.',
@@ -3192,6 +3192,10 @@ window.wcCompact = () => {
         'Notifications send only outcome, elapsed time and the current trait. No screenshots, chat, logs or mentions. Use Send test to check your webhook.',
         'PC shutdown now uses a 60-second countdown inside XynMacro, with Cancel available in normal and compact views. Stop, a new run or closing the app cancels the countdown.',
         'At zero, XynMacro asks Windows to shut down without forcing apps closed. Request errors are reported; no real shutdown was performed during automated testing.',
+      ] },
+      { h: 'Release checks', items: [
+        'Updated rustls to 0.23.45 for RUSTSEC-2026-0285. Beta 2 was blocked by the dependency audit and was not published.',
+        'Progress notifications skip a busy settings save instead of waiting in the minigame loop.',
       ] },
       { h: 'Pending gameplay work', items: [
         'Chat auto-hide, Ki recharge, race healing and respawn weight equipment remain planned pending game controls and visual evidence.',

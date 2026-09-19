@@ -10,7 +10,7 @@ Training contains the queue, startup, recovery and after-run behaviour. Input & 
 contains mouse choice, window mode and hotkeys. Minigames groups modes and timing;
 Diagnostics contains logs and measured loop rate. Calibration remains available.
 
-Beta 2 adds workspace zoom (Input & Display, or Ctrl + / minus / 0), removes the
+Beta 3 adds workspace zoom (Input & Display, or Ctrl + / minus / 0), removes the
 W spain startup decoration, and adds optional Discord notifications under Training.
 Webhook URLs are encrypted for the current Windows user and never included in state
 snapshots. Notifications are off until configured. Final outcomes and optional progress
@@ -18,7 +18,7 @@ messages contain only status, elapsed time and the current trait.
 
 Shutdown now counts down inside XynMacro for 60 seconds. Cancel is available in normal
 and compact views; Stop, another Start or closing the app also cancels before the Windows
-request is sent. See [beta 2 decisions and remaining game work](docs/1.8-beta2-plan.md)
+request is sent. See [beta 3 decisions and remaining game work](docs/1.8-beta3-plan.md)
 for limits and the deferred chat, Ki recharge, race healing and weight-equipping ideas.
 
 Tagged prereleases install as **XynMacro Beta**, using the separate

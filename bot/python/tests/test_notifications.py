@@ -151,3 +151,12 @@ class NotificationTests(unittest.TestCase):
 
     def test_invalid_elapsed_never_breaks_final_notification(self):
         self.assertIn("0m 0s", notify._payload("completed", None)["content"])
+
+    def test_progress_never_waits_for_a_settings_save(self):
+        busy_lock = Mock()
+        busy_lock.acquire.return_value = False
+        with patch.object(notify, "_lock", busy_lock), patch.object(notify, "send") as send:
+            notify.progress(600, "Health")
+        busy_lock.acquire.assert_called_once_with(blocking=False)
+        busy_lock.release.assert_not_called()
+        send.assert_not_called()

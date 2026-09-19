@@ -205,9 +205,14 @@ def begin_run():
 
 def progress(elapsed, category):
     global _next_progress
-    with _lock:
+    # UI saves can wait on disk/DPAPI. The minigame loop must never wait with them.
+    if not _lock.acquire(blocking=False):
+        return
+    try:
         interval = _settings["progress_minutes"] * 60
         if not _settings["enabled"] or not interval or time.monotonic() < _next_progress:
             return
         _next_progress = time.monotonic() + interval
-    send("progress", elapsed, category)
+        send("progress", elapsed, category)
+    finally:
+        _lock.release()
