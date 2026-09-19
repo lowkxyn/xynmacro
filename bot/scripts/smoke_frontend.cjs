@@ -19,11 +19,11 @@ fs.mkdirSync(output, {recursive:true});
  await page.route('https://raw.githubusercontent.com/**', route=>route.fulfill({json:{}}));
  await page.addInitScript(() => {
    for(const key of ['xynmacro-welcome-seen','xynmacro-wspain-seen']) localStorage.setItem(key,'1');
-   localStorage.setItem('xynmacro-changelog-seen','1.8.0-beta.3');
+   localStorage.setItem('xynmacro-changelog-seen','1.8.0-beta.4');
    localStorage.setItem('xynmacro-auto-update','0');
    localStorage.setItem('dbog-bg','none');
    window.qaCommands=[];
-   window.qaState={version:'1.8.0-beta.3',running:false,available_stats:['Health','Agility','Ki Control','Physical Damage','Ki Damage'],config:{training_order:['Health','Agility','Ki Control','Physical Damage','Ki Damage'],agility_mode:'v2',health_mode:'v2_track',ki_v8_mode:'v2_ring',mouse_click_button:'left',respawn_settle_sec:1,scan_rate_limit_hz:0,startup_window_mode:'unchanged',restart_after_hit_delay_sec:.2},game_window:{found:true,minimized:false,width:1920,height:1080},screen:{width:1920,height:1080,device:'mock',scale:1},telemetry:{},button_calibration:{current:{},overrides:{}},region_calibration:{current:{},overrides:{}}};
+   window.qaState={version:'1.8.0-beta.4',running:false,available_stats:['Health','Agility','Ki Control','Physical Damage','Ki Damage'],config:{training_order:['Health','Agility','Ki Control','Physical Damage','Ki Damage'],agility_mode:'v2',health_mode:'v2_track',ki_v8_mode:'v2_ring',mouse_click_button:'left',respawn_settle_sec:1,scan_rate_limit_hz:0,startup_window_mode:'unchanged',restart_after_hit_delay_sec:.2},game_window:{found:true,minimized:false,width:1920,height:1080},screen:{width:1920,height:1080,device:'mock',scale:1},telemetry:{},button_calibration:{current:{},overrides:{}},region_calibration:{current:{},overrides:{}}};
    window.__TAURI__={core:{invoke:async(command,args)=>{
      if(command==='proxy_get') return args.path.startsWith('/logs')?[]:structuredClone(window.qaState);
      if(command==='send_to_python') {

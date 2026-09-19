@@ -3,6 +3,51 @@
 All notable changes to XynMacro. This file is generated from the in-app
 "What's new" notes by `scripts/changelog.mjs` — edit those, not this file.
 
+## 1.8.0-beta.4
+
+### Internal cleanup
+- Themes, the custom-colour editor and the animated background moved out of the main script into their own module. No new gameplay features in this build.
+- Notification and shutdown controls now have separate modules and regression tests.
+- Shared settings mappings preserve existing defaults, saved preferences and training order while reducing duplicate code.
+- Your themes, presets, background effect and speed are unchanged, and the settings keep working exactly as before.
+
+## 1.8.0-beta.3
+
+### Workspace controls
+- Added saved interface zoom from 80% to 125% in Input & Display, with Ctrl + / minus / 0 shortcuts. The title bar, compact HUD and Roblox keep their size.
+- Removed the W spain title tag and startup celebration. Respawn walking is unchanged.
+
+### Notifications and shutdown
+- Optional Discord webhook messages for finished, stopped and failed runs, plus selectable progress intervals. Disabled until configured; stored encrypted for your Windows user.
+- Notifications send only outcome, elapsed time and the current trait. No screenshots, chat, logs or mentions. Use Send test to check your webhook.
+- PC shutdown now uses a 60-second countdown inside XynMacro, with Cancel available in normal and compact views. Stop, a new run or closing the app cancels the countdown.
+- At zero, XynMacro asks Windows to shut down without forcing apps closed. Request errors are reported; no real shutdown was performed during automated testing.
+
+### Release checks
+- Updated rustls to 0.23.45 for RUSTSEC-2026-0285. Beta 2 was blocked by the dependency audit and was not published.
+- Progress notifications skip a busy settings save instead of waiting in the minigame loop.
+
+### Pending gameplay work
+- Chat auto-hide, Ki recharge, race healing and respawn weight equipment remain planned pending game controls and visual evidence.
+- Install this beta manually from its release. Beta and stable use separate profiles; do not run them simultaneously.
+
+## 1.8.0-beta.1
+
+### Input and recovery
+- Choose Left, Right or Follow Windows for all automated game clicks.
+- Wait after respawn before walking. W releases on Stop, focus loss and errors.
+- Partial mouse input is detected and the button is released before reporting an error.
+
+### Training experiments
+- Optional restart-after-hit for Health and Ki, off by default. Live progress and timing still need gameplay verification.
+- Main-loop scan limit and measured loop rate in Diagnostics. Inner minigame tracking is unchanged.
+
+### Layout and compatibility
+- Training order is first; input/display settings have their own page; minigame modes and timings are grouped.
+- Responsive trait rows, styled resize button, settings search and clearer timing labels.
+- Optional reduced effects while running and stricter imported-theme validation.
+- Beta installs separately from stable. Do not run both apps at the same time: they share game inputs and hotkeys.
+
 ## 1.7.3
 
 ### Training reliability

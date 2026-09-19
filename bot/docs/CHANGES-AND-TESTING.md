@@ -1,7 +1,6 @@
 # XynMacro: changes and checks for later
 
-Published build: [1.8.0-beta.3](https://github.com/lowkxyn/xynmacro/releases/tag/v1.8.0-beta.3).
-The refactor described below is newer source on `feature/1.8-beta`; it is not in that installer. Stable remains 1.7.3. Nothing needs testing right now.
+Release candidate: [1.8.0-beta.4](https://github.com/lowkxyn/xynmacro/releases/tag/v1.8.0-beta.4), pending the release pipeline. It includes the changes below and both refactor passes. Stable remains 1.7.3. Nothing needs testing right now.
 
 ## What changed across the 1.8 betas
 
@@ -17,13 +16,13 @@ The refactor described below is newer source on `feature/1.8-beta`; it is not in
 
 The reusable appearance kit is in [style-kit/STYLE-GUIDE.md](style-kit/STYLE-GUIDE.md), with CSS and a sample page beside it.
 
-## Refactor after beta.3
+## Refactors included in beta.4
 
-Notification and shutdown controls now live in separate frontend modules with their own tests. One settings table now supplies the defaults, saved settings and settings sent to the interface. This reduces duplicated mappings without changing the setting names, default values, game detection or timing.
+Theme, custom-colour, preset and animated-background controls now live in a dedicated module with nine behavioral tests. Notification and shutdown controls now live in separate frontend modules with their own tests. One settings table now supplies the defaults, saved settings and settings sent to the interface. This reduces duplicated mappings without changing the setting names, default values, game detection or timing.
 
 Settings validation, migration and reset side effects remain explicit in the Python core. A complete TypeScript conversion, removal of inline handlers and stricter development authentication are separate follow-ups, not completed work.
 
-Refactor verification: 334 Python tests plus 55 subtests, 53 frontend tests, and headless Edge checks passed. Both snapshot forms were also compared with the shipped implementation using different values for all 45 mapped fields. The sidecar rebuilt successfully and its executable archive contains the new settings module. The rebuilt sidecar was not launched, so this is not a fresh packaged-startup test. No installed app was replaced.
+Refactor verification: 334 Python tests plus 55 subtests, 62 frontend tests, and headless Edge checks passed. Both snapshot forms were also compared with the shipped implementation using different values for all 45 mapped fields. The sidecar rebuilt successfully and its executable archive contains the new settings module. The rebuilt sidecar was not launched, so this is not a fresh packaged-startup test. No installed app was replaced.
 
 ## Quick check when you have time
 
