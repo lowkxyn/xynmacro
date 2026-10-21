@@ -1,0 +1,27 @@
+[package]
+name = "xyn_setup"
+version = "2.0.0"
+description = "XynMacro Setup: branded window that runs the XynMacro NSIS installer silently"
+authors = ["Xyn"]
+edition = "2021"
+
+[[bin]]
+name = "XynMacroSetup"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# custom-protocol embeds dist/ into the exe, so a plain `cargo build --release` gives a shippable setup.
+tauri = { version = "2.11.6", features = ["custom-protocol"] }
+tauri-plugin-dialog = "2"
+serde = { version = "1", features = ["derive"] }
+winreg = "0.55"
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Threading"] }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true

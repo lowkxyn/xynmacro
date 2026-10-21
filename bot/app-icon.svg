@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="tileG" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#181a21"/><stop offset="1" stop-color="#0c0d12"/>
+    </linearGradient>
+    <!-- silver face: bright top, deep mid, metallic bounce at the bottom -->
+    <linearGradient id="silver" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset=".28" stop-color="#dde3ec"/>
+      <stop offset=".55" stop-color="#a6b0c0"/>
+      <stop offset=".8" stop-color="#7d8798"/>
+      <stop offset="1" stop-color="#b4bcc9"/>
+    </linearGradient>
+    <!-- diagonal sheen sweep over the face -->
+    <linearGradient id="sheen" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity=".5"/>
+      <stop offset=".38" stop-color="#ffffff" stop-opacity="0"/>
+      <stop offset=".62" stop-color="#ffffff" stop-opacity="0"/>
+      <stop offset=".85" stop-color="#ffffff" stop-opacity=".18"/>
+    </linearGradient>
+    <g id="bx"><path d="M159.96698762035763 198.0 123.57083906464925 136.47317744154057 120.585969738652 131.6588720770289 75.13892709766162 58.0H97.18844566712517L130.98486932599724 115.00137551581844L134.16231086657496 120.20082530949107L182.0165061898212 198.0ZM73.98349381017881 198.0 122.70426409903715 117.98624484181569 157.8486932599725 58.0H179.89821182943604L133.58459422283357 133.77716643741405L96.03301237964237 198.0Z"/></g>
+  </defs>
+
+  <rect width="256" height="256" rx="56" fill="url(#tileG)"/>
+
+  <!-- very slight rightward (italic) lean on the whole mark -->
+  <g transform="matrix(1,0,-0.06,1,7.68,0)">
+    <!-- deep extrusion, straight down, no outlines anywhere -->
+    <use href="#bx" fill="#20242c" transform="translate(0,9)"/>
+    <use href="#bx" fill="#262b34" transform="translate(0,8)"/>
+    <use href="#bx" fill="#2c323c" transform="translate(0,7)"/>
+    <use href="#bx" fill="#333a45" transform="translate(0,6)"/>
+    <use href="#bx" fill="#3b424e" transform="translate(0,5)"/>
+    <use href="#bx" fill="#434b58" transform="translate(0,4)"/>
+    <use href="#bx" fill="#4c5563" transform="translate(0,3)"/>
+    <use href="#bx" fill="#56606f" transform="translate(0,2)"/>
+    <use href="#bx" fill="#616c7c" transform="translate(0,1)"/>
+    <!-- face: silver gradient + sheen, no stroke (kills the crossing lines) -->
+    <use href="#bx" fill="url(#silver)"/>
+    <use href="#bx" fill="url(#sheen)"/>
+  </g>
+</svg>

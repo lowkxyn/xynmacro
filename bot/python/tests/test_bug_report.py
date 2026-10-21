@@ -1,0 +1,212 @@
+"""A bug report is posted publicly to GitHub by the user, so two things matter:
+it must never leak who they are, and it must contain what actually decides whether
+a bug is fixable."""
+from unittest.mock import patch
+
+import pytest
+
+import xynmacro_core as core
+
+
+@pytest.fixture(autouse=True)
+def offline_display(monkeypatch):
+    # Report-format tests shouldn't discover whichever game window is open.
+    monkeypatch.setattr(core, "GAME_HWND", None)
+    monkeypatch.setattr(core, "update_game_window", lambda: False)
+    monkeypatch.setattr(core, "_current_game_monitor_info", lambda: None)
+    # Never the profile of the machine running the suite.
+    monkeypatch.setenv("USERPROFILE", r"C:\Users\SyntheticUser")
+    monkeypatch.setenv("USERNAME", "SyntheticUser")
+    monkeypatch.setattr(core, "_registry_value", lambda *_: "Synthetic hardware")
+
+
+class TestScrubbing:
+    def test_replaces_the_profile_path(self):
+        with patch.dict("os.environ", {"USERPROFILE": r"C:\Users\SyntheticUser", "USERNAME": "SyntheticUser"}):
+            out = core._scrub_user_paths(r"failed to read C:\Users\SyntheticUser\AppData\x.json")
+        assert "SyntheticUser" not in out
+        assert "%USERPROFILE%" in out
+
+    def test_replaces_a_bare_username(self):
+        with patch.dict("os.environ", {"USERPROFILE": "", "USERNAME": "SyntheticUser"}):
+            assert "SyntheticUser" not in core._scrub_user_paths("logged in as SyntheticUser")
+
+    def test_is_case_insensitive(self):
+        with patch.dict("os.environ", {"USERPROFILE": "", "USERNAME": "SyntheticUser"}):
+            assert "SYNTHETICUSER" not in core._scrub_user_paths(r"C:\USERS\SYNTHETICUSER\file")
+
+    def test_leaves_short_usernames_alone(self):
+        # A 1-2 char name would match inside ordinary words and shred the report.
+        with patch.dict("os.environ", {"USERPROFILE": "", "USERNAME": "ab"}):
+            assert core._scrub_user_paths("the alphabet") == "the alphabet"
+
+    def test_handles_empty_and_none(self):
+        assert core._scrub_user_paths("") == ""
+        assert core._scrub_user_paths(None) is None
+
+    def test_scrubs_fake_discord_webhooks_in_description(self):
+        for host in ("discord.com", "discordapp.com", "canary.discord.com", "ptb.discordapp.com"):
+            fake_url = f"https://{host}/api/webhooks/123456789012345678/" + "x" * 60
+            body = core.build_bug_report([], description=f"notification failed: {fake_url}")
+            assert fake_url not in body
+            assert "<webhook removed>" in body
+
+
+class TestReportBody:
+    def test_always_names_the_app_and_version(self):
+        body = core.build_bug_report([])
+        assert body.startswith("**XynMacro**")
+        # The launcher supplies APP_VERSION; running the sidecar alone leaves it None.
+        assert str(core.APP_VERSION or "unknown version") in body
+
+    def test_records_the_users_description(self):
+        assert "it froze" in core.build_bug_report([], description="it froze")
+
+    def test_marks_a_missing_description_rather_than_leaving_it_blank(self):
+        assert "not described" in core.build_bug_report([])
+
+    def test_includes_only_the_requested_sections(self):
+        body = core.build_bug_report(["display"])
+        assert "### Display" in body
+        assert "### Settings" not in body
+
+    def test_ignores_unknown_section_names(self):
+        assert "###" not in core.build_bug_report(["../etc/passwd", "nope"]).split("What happened")[1]
+
+    def test_reports_the_webview_version_because_it_broke_every_button_once(self):
+        body = core.build_bug_report(["system"], webview="Chrome/150.0.0.0")
+        assert "Chrome/150.0.0.0" in body
+
+    def test_scrubs_the_whole_body_including_the_description(self):
+        with patch.dict("os.environ", {"USERPROFILE": "", "USERNAME": "SyntheticUser"}):
+            assert "SyntheticUser" not in core.build_bug_report([], description="I am SyntheticUser")
+
+    def test_game_section_works_with_roblox_closed(self):
+        # People file bugs exactly when things are not running.
+        with patch.object(core, "update_game_window", return_value=False), \
+             patch.object(core, "GAME_HWND", None):
+            assert "not found" in core.build_bug_report(["game"]) or \
+                   "minimized" in core.build_bug_report(["game"])
+
+
+class TestIssueUrl:
+    def test_builds_a_link_to_the_public_repo(self):
+        payload = core.bug_report_payload([], description="hi")
+        assert payload["url"].startswith(core.ISSUE_URL + "?")
+        assert payload["too_long"] is False
+
+    def test_refuses_a_link_that_github_would_truncate(self):
+        payload = core.bug_report_payload([], description="x" * (core.ISSUE_URL_LIMIT + 500))
+        assert payload["url"] is None
+        assert payload["too_long"] is True
+
+    def test_percent_encodes_the_body(self):
+        payload = core.bug_report_payload([], description="a b&c=d")
+        assert " " not in payload["url"].split("?", 1)[1]
+        assert "&c=d" not in payload["url"]
+
+    def test_markdown_matches_what_the_link_carries(self):
+        payload = core.bug_report_payload(["display"], description="same")
+        assert payload["markdown"] == core.build_bug_report(["display"], description="same")
+
+
+class TestSystemProfile:
+    def test_never_raises(self):
+        assert isinstance(core._system_profile(), dict)
+
+    def test_reports_whether_this_is_a_packaged_build(self):
+        assert "frozen" in core._system_profile()
+
+
+class TestDisplaySection:
+    def test_omits_unknown_sizes_instead_of_printing_zero_by_zero(self):
+        # "0x0" in a public issue reads as a measurement, not as missing data.
+        with patch.object(core, "_get_screen_info", return_value={"width": 0, "height": 0}), \
+             patch.object(core, "_current_game_monitor_info", return_value={}):
+            assert "0x0" not in core.build_bug_report(["display"])
+
+    def test_reports_real_sizes_when_known(self):
+        with patch.object(core, "_get_screen_info", return_value={"width": 2560, "height": 1600}), \
+             patch.object(core, "_current_game_monitor_info", return_value={}):
+            assert "2560x1600" in core.build_bug_report(["display"])
+
+
+class TestCaptureSection:
+    """Detection reads pixels, so a report has to be able to say what the capture
+    actually looked like. Asking a user for a screenshot does not work — the
+    screen looks fine to them, which is the whole problem."""
+
+    def setup_method(self):
+        self.rejection = core._ki_v8_last_digit_rejection
+        core._ki_v8_last_digit_rejection = None
+
+    def teardown_method(self):
+        core._ki_v8_last_digit_rejection = self.rejection
+
+    def test_reports_the_levels_it_measured(self):
+        with patch.object(core, "_capture_brightness_profile", return_value={
+            "source": "Roblox client", "black_floor": 2, "median": 90, "white_point": 250,
+        }):
+            body = core.build_bug_report(["capture"])
+        assert "black floor 2" in body
+        assert "white point 250" in body
+
+    def test_flags_a_lifted_black_floor(self):
+        with patch.object(core, "_capture_brightness_profile", return_value={
+            "source": "Roblox client", "black_floor": 61, "median": 140, "white_point": 255,
+        }):
+            body = core.build_bug_report(["capture"])
+        assert "Black is not arriving as black" in body
+
+    def test_does_not_flag_a_lifted_floor_when_roblox_was_not_captured(self):
+        # The app's own window has no true black, so the floor says nothing there.
+        with patch.object(core, "_capture_brightness_profile", return_value={
+            "source": "primary screen (Roblox not found)",
+            "black_floor": 61, "median": 140, "white_point": 255,
+        }):
+            body = core.build_bug_report(["capture"])
+        assert "Black is not arriving as black" not in body
+
+    def test_survives_a_capture_that_fails(self):
+        with patch.object(core, "_capture_brightness_profile", return_value=None):
+            assert "could not capture" in core.build_bug_report(["capture"])
+
+    def test_carries_the_numbers_that_identify_a_rejected_ki_dot(self):
+        core._ki_v8_last_digit_rejection = {
+            "at": core.time.time(), "dot_r": 23, "columns": 0, "threshold": 90,
+            "needed": 129, "dot_brightness": 205, "adaptive": False,
+        }
+        with patch.object(core, "_capture_brightness_profile", return_value=None):
+            body = core.build_bug_report(["capture"])
+        # "using 90, needed 129" is the entire diagnosis in one line.
+        assert "using threshold 90" in body
+        assert "needed 129" in body
+        assert "adaptive off" in body
+
+    def test_says_so_when_no_dot_was_ever_rejected(self):
+        with patch.object(core, "_capture_brightness_profile", return_value=None):
+            assert "none this session" in core.build_bug_report(["capture"])
+
+    def test_is_omitted_unless_requested(self):
+        assert "### Capture" not in core.build_bug_report(["display"])
+
+
+class TestInterfaceErrors:
+    def test_includes_errors_the_backend_never_sees(self):
+        # A CSP change once killed every button while the sidecar log stayed clean.
+        body = core.build_bug_report(["logs"], ui_errors=["12:00:01 UI error: boom"])
+        assert "Interface errors" in body
+        assert "boom" in body
+
+    def test_omits_the_row_when_there_were_none(self):
+        assert "Interface errors" not in core.build_bug_report(["logs"])
+
+    def test_caps_how_many_are_carried(self):
+        body = core.build_bug_report(["logs"], ui_errors=[f"err{i}" for i in range(40)])
+        assert "err39" in body
+        assert "err0\n" not in body
+
+    def test_scrubs_them_like_everything_else(self):
+        with patch.dict("os.environ", {"USERPROFILE": "", "USERNAME": "SyntheticUser"}):
+            body = core.build_bug_report(["logs"], ui_errors=["failed for SyntheticUser"])
+        assert "SyntheticUser" not in body

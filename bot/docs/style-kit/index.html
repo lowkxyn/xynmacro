@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Xyn interface starter</title>
+<link rel="stylesheet" href="xyn-style.css">
+<style>body{margin:24px;background:#07070a}main{max-width:1100px;margin:auto}</style>
+<main class="xyn-app">
+  <header class="xyn-titlebar"><strong>Project name</strong><span class="xyn-spacer"></span><span>Interface reference</span></header>
+  <div class="xyn-body">
+    <nav class="xyn-nav" aria-label="Project"><a href="#overview" aria-current="page">Overview</a><a href="#workflow">Workflow</a><a href="#preferences">Preferences</a><a href="#compact">Compact HUD</a></nav>
+    <div class="xyn-main" id="overview">
+      <h1>Your workspace</h1><p>A compact interface for the things you use often.</p>
+      <h2 id="workflow">Workflow</h2>
+      <div class="xyn-panel"><ol class="xyn-list"><li><span>1. Review incoming work</span><button type="button">Open</button></li><li><span>2. Complete selected items</span><button type="button">Open</button></li><li><span>3. Check the result</span><button type="button">Open</button></li></ol></div>
+      <h2 id="preferences">Preferences</h2>
+      <div class="xyn-panel"><div class="xyn-row"><label class="xyn-label" for="mode">Working mode</label><div class="xyn-controls"><select id="mode"><option>Balanced</option><option>Quiet</option></select></div></div><p class="xyn-help">Explain what changes when this option is selected.</p><div class="xyn-row"><span>Ready when you are</span><button type="button" class="xyn-primary">Start</button></div></div>
+      <h2 id="compact">Compact HUD</h2><div class="xyn-pill"><span class="xyn-dot" aria-hidden="true"></span><span class="xyn-activity" title="Working on the current selection">Working on the current selection</span><span class="xyn-mono">02:14</span><button type="button" class="xyn-danger">Stop</button><button type="button">Expand</button></div>
+    </div>
+  </div>
+  <footer class="xyn-footer"><span class="xyn-dot" aria-hidden="true"></span><span>Static style reference; wire controls to your project.</span></footer>
+</main></html>

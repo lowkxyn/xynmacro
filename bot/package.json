@@ -1,0 +1,15 @@
+{
+  "name": "xynmacro",
+  "private": true,
+  "version": "2.0.0",
+  "type": "module",
+  "scripts": {
+    "tauri": "tauri",
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "test": "node --test src/screen-state.test.mjs src/update-state.test.mjs src/preference-migration.test.mjs src/frontend-contract.test.mjs src/theme-state.test.mjs src/run-controls.test.mjs src/appearance-controls.test.mjs src/healing-settings.test.mjs src/calibration-controls.test.mjs src/setting-controls.test.mjs src/toggle-settings.test.mjs src/log-sharing.test.mjs"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}

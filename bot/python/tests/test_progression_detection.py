@@ -1,0 +1,169 @@
+import sys
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+import cv2
+import numpy as np
+
+
+PYTHON_DIR = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PYTHON_DIR))
+
+import xynmacro_core as core
+
+
+WHITE = (230, 230, 230, 255)
+
+
+def progression_frame(right_matches=True, include_word=True):
+    frame = np.zeros((500, 700, 4), dtype=np.uint8)
+
+    if include_word:
+        for index in range(8):
+            x = 35 + index * 24
+            cv2.rectangle(frame, (x, 70), (x + 4, 93), WHITE, -1)
+
+    cv2.rectangle(frame, (260, 60), (267, 94), WHITE, -1)
+    cv2.rectangle(frame, (350, 60), (357, 94), WHITE, -1)
+    cv2.rectangle(frame, (310, 68), (314, 91), WHITE, -1)
+
+    # Left numeral: an L-shaped connected glyph with a 10x24 bounding box.
+    cv2.rectangle(frame, (280, 68), (283, 91), WHITE, -1)
+    cv2.rectangle(frame, (280, 88), (289, 91), WHITE, -1)
+
+    if right_matches:
+        cv2.rectangle(frame, (330, 68), (333, 91), WHITE, -1)
+        cv2.rectangle(frame, (330, 88), (339, 91), WHITE, -1)
+    else:
+        # Mirrored L keeps the same dimensions but has a clearly different mask.
+        cv2.rectangle(frame, (336, 68), (339, 91), WHITE, -1)
+        cv2.rectangle(frame, (330, 88), (339, 91), WHITE, -1)
+
+    return frame
+
+
+class ProgressionDetectionTests(unittest.TestCase):
+    def test_matching_progression_numbers_are_complete(self):
+        self.assertIs(
+            core._progression_completion_from_frame(progression_frame()),
+            True,
+        )
+
+    def test_different_progression_numbers_are_incomplete(self):
+        self.assertIs(
+            core._progression_completion_from_frame(
+                progression_frame(right_matches=False)
+            ),
+            False,
+        )
+
+    def test_unrelated_matching_parenthesized_numbers_are_ignored(self):
+        self.assertIsNone(
+            core._progression_completion_from_frame(
+                progression_frame(include_word=False)
+            )
+        )
+
+    def test_live_complete_label_over_the_chamber_wall(self):
+        # Camera facing the lavender wall after a respawn: the old >190 white cut
+        # merged "20)" into the wall and read 20/20 as incomplete.
+        frame = cv2.imread(str(PYTHON_DIR / "tests" / "fixtures" / "progression_20of20_over_wall.png"))
+        self.assertIs(core._progression_completion_from_frame(frame), True)
+
+    def test_live_single_digit_target_is_read(self):
+        # Low-level targets read "(0/5)": the bracket gap is ~50 px, below the old
+        # 55 px floor, so neither completion nor GC recovery could see the label.
+        frame = cv2.imread(str(PYTHON_DIR / "tests" / "fixtures" / "progression_0of5.png"))
+        self.assertIs(core._progression_completion_from_frame(frame), False)
+        self.assertIsNotNone(core._progression_signature_from_frame(frame))
+
+    def test_blank_frame_is_unknown(self):
+        blank = np.zeros((500, 700, 4), dtype=np.uint8)
+        self.assertIsNone(core._progression_completion_from_frame(blank))
+
+    def test_tracking_messages_match_enabled_fallback_mode(self):
+        with patch.object(core, "NO_YELLOW_FALLBACK_ENABLED", True):
+            self.assertIn(
+                "fallback is no longer needed",
+                core._progression_tracking_message("Health"),
+            )
+            self.assertIn("fallback timeout available", core._first_yellow_message())
+
+    def test_tracking_messages_match_disabled_fallback_mode(self):
+        with patch.object(core, "NO_YELLOW_FALLBACK_ENABLED", False):
+            self.assertIn("fallback remains disabled", core._progression_tracking_message("Health"))
+            self.assertIn("fallback timeout is disabled", core._first_yellow_message())
+
+    def test_whole_and_decimal_countdowns_keep_their_natural_format(self):
+        self.assertEqual(core._format_seconds(5), "5s")
+        self.assertEqual(core._format_seconds(2.5), "2.5s")
+
+    def test_manual_skips_cannot_report_a_completed_training_order(self):
+        self.assertEqual(
+            core._training_order_result([]),
+            ("completed", "Training order completed"),
+        )
+        self.assertEqual(
+            core._training_order_result(["Ki Control", "Ki Damage"]),
+            (
+                "incomplete",
+                "Training order ended with skipped stats: Ki Control, Ki Damage",
+            ),
+        )
+
+    def test_progression_loss_does_not_arm_before_tracking_locks(self):
+        self.assertEqual(
+            core._progression_ui_loss_state(
+                "Ki Damage", None, None, 20.0, None
+            ),
+            (None, False),
+        )
+
+    def test_progression_loss_stops_only_after_continuous_timeout(self):
+        with patch.object(core, "PROGRESSION_UI_LOST_TIMEOUT_SEC", 8.0):
+            missing_since, lost = core._progression_ui_loss_state(
+                "Ki Damage", "Ki Damage", None, 20.0, None
+            )
+            self.assertEqual(missing_since, 20.0)
+            self.assertFalse(lost)
+
+            missing_since, lost = core._progression_ui_loss_state(
+                "Ki Damage", "Ki Damage", None, 27.99, missing_since
+            )
+            self.assertFalse(lost)
+
+            missing_since, lost = core._progression_ui_loss_state(
+                "Ki Damage", "Ki Damage", None, 28.0, missing_since
+            )
+            self.assertTrue(lost)
+
+    def test_progression_read_or_suspension_resets_loss_timer(self):
+        self.assertEqual(
+            core._progression_ui_loss_state(
+                "Ki Damage", "Ki Damage", False, 24.0, 20.0
+            ),
+            (None, False),
+        )
+        self.assertEqual(
+            core._progression_ui_loss_state(
+                "Ki Damage", "Ki Damage", None, 24.0, 20.0,
+                suspended=True,
+            ),
+            (None, False),
+        )
+
+    def test_training_ui_loss_drops_stale_lock_without_stopping(self):
+        with patch.object(core, "UI_STOP_REQUESTED", False):
+            core.PROGRESSION_TRACKED_STATE = "Health"
+            core.PROGRESSION_COMPLETE = False
+
+            core._recover_from_training_ui_loss("Health")
+
+            self.assertFalse(core.UI_STOP_REQUESTED)
+            self.assertIsNone(core.PROGRESSION_TRACKED_STATE)
+            self.assertIsNone(core.PROGRESSION_COMPLETE)
+
+
+if __name__ == "__main__":
+    unittest.main()
