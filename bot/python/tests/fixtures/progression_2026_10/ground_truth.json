@@ -1,0 +1,1148 @@
+{
+  "d2a2_Agility_0000.png": {
+    "level": null,
+    "sha256": "6ac001190b682083b1eec71afe5bd37b023f9f236722563ace3e5b08ea98fe56",
+    "fixture": true,
+    "completion": null
+  },
+  "d2a2_Agility_0010.png": {
+    "level": 0,
+    "sha256": "76310cec26631c5411aa705172bf5901805ca092760ccc0a6c020c30ab4424ba",
+    "fixture": false,
+    "completion": false
+  },
+  "d2a2_Agility_0020.png": {
+    "level": 0,
+    "sha256": "082c94ba363c5151ac34fc7abfc3f508cfeecc356cc585afd39ec8b884b0cfd6",
+    "fixture": true,
+    "completion": false
+  },
+  "d2a2_Agility_0030.png": {
+    "level": 0,
+    "sha256": "d04f45d74f1006b4d2b41b2430f26fcf04c4708a5d366faea212dbe4bbc1ea3e",
+    "fixture": false,
+    "completion": false
+  },
+  "d2a2_Agility_0040.png": {
+    "level": 0,
+    "sha256": "afe63f471e33c27e5f23d78600c2962eaa374aa9ae3b7dae43122bdb62329d12",
+    "fixture": false,
+    "completion": null
+  },
+  "d2a2_Agility_0050.png": {
+    "level": 0,
+    "sha256": "db50fefce99eb3c24c39971ccff997b08e838ccdeab83d01b23eb1b5025f9950",
+    "fixture": false,
+    "completion": false
+  },
+  "d2a2_Agility_0060.png": {
+    "level": 1,
+    "sha256": "38e5003f0bec861f1cc20623c90300e7bf662b7ccc7f39e99264556366774a46",
+    "fixture": true,
+    "completion": false
+  },
+  "d2a2_Agility_0070.png": {
+    "level": 1,
+    "sha256": "0b2905272f1b1fff516fce527882e46f674ae24da6b4513309ed4ee38083af15",
+    "fixture": false,
+    "completion": null
+  },
+  "d2a2_Agility_final.png": {
+    "level": 1,
+    "sha256": "e3c4f92f73666717ff2138a7dcea4051b0723755fc47ba217b5557a0af1959b7",
+    "fixture": true,
+    "completion": false
+  },
+  "d2chain_Health_0000.png": {
+    "level": null,
+    "sha256": "9b60a930c1cfd1a25bd55fe9577068dc279776074cea9c2d412cc8a3dd144db9",
+    "fixture": true,
+    "completion": null
+  },
+  "d2chain_Health_0010.png": {
+    "level": 6,
+    "sha256": "1b2fdf3d7f555c77324a3e26545df520958824703239bf5dad740c1177c4bb6b",
+    "fixture": true,
+    "completion": false
+  },
+  "d2chain_Health_0020.png": {
+    "level": 6,
+    "sha256": "413a6f6572c75d469a389186da3141ce5f74f01de23689f222816fddbd26fa8b",
+    "fixture": false,
+    "completion": false
+  },
+  "d2chain_Health_0030.png": {
+    "level": 6,
+    "sha256": "6b7fab9e85125485cebe847e87bba60ca1c0d6a079b696d2872fd397cb8ce1b9",
+    "fixture": false,
+    "completion": false
+  },
+  "d2chain_Health_0040.png": {
+    "level": 6,
+    "sha256": "e21c1be1b17746667f6d399d89624205b5bcab1730574221bfbc0b3df5ddd5e2",
+    "fixture": false,
+    "completion": false
+  },
+  "d2chain_Health_0050.png": {
+    "level": 6,
+    "sha256": "2be82eb50051577da34d8a14bcab34c7804632a2c2cae25b1942b26ff5b1650c",
+    "fixture": false,
+    "completion": false
+  },
+  "d2chain_Health_0060.png": {
+    "level": 6,
+    "sha256": "6adc178af8c584d7bca2ef5e7a7ae6ab603898dfbdddb5af040f1c08876859b8",
+    "fixture": false,
+    "completion": false
+  },
+  "d2chain_Health_0070.png": {
+    "level": 7,
+    "sha256": "443d37baff814ca84c9377006c9096aed16a00a6218ba9755cd368bf872c4fc0",
+    "fixture": true,
+    "completion": false
+  },
+  "d2chain_Health_0080.png": {
+    "level": 7,
+    "sha256": "9f25dd03303748a716840a6265b1d76d757c00b4ed973a75e40436faa82a57c8",
+    "fixture": false,
+    "completion": false
+  },
+  "d2chain_Health_0090.png": {
+    "level": 7,
+    "sha256": "5de2645f485ac6f6cc5309a0bd47395f6b5363ce68ff56de2cddb9d763bc427d",
+    "fixture": false,
+    "completion": false
+  },
+  "d2chain_Health_0100.png": {
+    "level": 7,
+    "sha256": "d87dd4c01a6120cab558cfe14c0f55db4f293f9d056b00e4dd79753e35b8af92",
+    "fixture": false,
+    "completion": false
+  },
+  "d2chain_Health_0110.png": {
+    "level": 7,
+    "sha256": "c9100902ede245084999df04252d6a379b0a1a4e51dc10fd9d71b88d5d4cb717",
+    "fixture": false,
+    "completion": false
+  },
+  "d2chain_Health_0120.png": {
+    "level": 8,
+    "sha256": "4a93a3926d959d509e62ee324eef68df35d569b97de065085f5d30e94bc459c5",
+    "fixture": true,
+    "completion": false
+  },
+  "d2chain_Health_0130.png": {
+    "level": 8,
+    "sha256": "99c26a3d1c5456c5d06f1e9798337588b259f72d4f439866432f0df7ad24567a",
+    "fixture": false,
+    "completion": false
+  },
+  "d2chain_Health_0140.png": {
+    "level": 8,
+    "sha256": "4af01740997eaae323340f10fce3ac8926e2da4baf6a3cb5a268dde36dc8493c",
+    "fixture": false,
+    "completion": false
+  },
+  "d2chain_Health_0150.png": {
+    "level": 8,
+    "sha256": "cbbae2847690a557805dc83dc7485ef36ca43738de5f97b710146622e2330462",
+    "fixture": false,
+    "completion": false
+  },
+  "d2chain_Health_0160.png": {
+    "level": 8,
+    "sha256": "9b5f8f98fc695d4d646be9f89b3c110c504d8eeb9bf5f67c1aa6ef5b9cb08909",
+    "fixture": false,
+    "completion": false
+  },
+  "d2chain_Health_0170.png": {
+    "level": 8,
+    "sha256": "93be08d65bf0fddc3bbe5d010d109a82a0fb807626191992e32bdcc5b560c39e",
+    "fixture": false,
+    "completion": false
+  },
+  "d2chain_Health_0180.png": {
+    "level": 9,
+    "sha256": "f75d56e5a0eaf1be425c2b80333b02623546a4a5fe7118d44d9c466bc012b443",
+    "fixture": true,
+    "completion": false
+  },
+  "d2chain_Health_0190.png": {
+    "level": 9,
+    "sha256": "87a7cc1c3434d8571d10c1701e8cbee236ee8bd13eb1d77882fbe91ab074d183",
+    "fixture": false,
+    "completion": false
+  },
+  "d2chain_Health_0200.png": {
+    "level": 9,
+    "sha256": "19e20ceddc8d5e95bd79cada998249dd9b8336282051ab5d6d410781b0df4430",
+    "fixture": false,
+    "completion": false
+  },
+  "d2chain_Health_0210.png": {
+    "level": 9,
+    "sha256": "95f4c0bbd0d7bb657219e5547cd7ef9a12ca7539791f796c52a90d0db3654515",
+    "fixture": false,
+    "completion": false
+  },
+  "d2chain_Health_0220.png": {
+    "level": 10,
+    "sha256": "ad15155b4a687b6051fd0d9201aa701554026b8e29e78cbc85d9911ae6f6f446",
+    "fixture": true,
+    "completion": false
+  },
+  "d2chain_Health_0230.png": {
+    "level": 10,
+    "sha256": "9577f0d10df903b2bbf6d33b7131cbb40e95f926fe2534b29d9f055138404223",
+    "fixture": false,
+    "completion": false
+  },
+  "d2chain_Health_0240.png": {
+    "level": 10,
+    "sha256": "fd45fcfe28a3f864b2c42b8442f0441a8d927ba9e26b96f77bcade29d0b482f6",
+    "fixture": false,
+    "completion": false
+  },
+  "d2chain_Health_0250.png": {
+    "level": 10,
+    "sha256": "19f0afcfa0bd28afd04f1afdfae4bedb4ff4f6227a10a939d0e958599e7ff2ff",
+    "fixture": false,
+    "completion": false
+  },
+  "d2chain_Health_0260.png": {
+    "level": 10,
+    "sha256": "58f56f2efedd319e5079fa956d18da3c6634baca30c6e1e5955e0a2f8a53df69",
+    "fixture": false,
+    "completion": false
+  },
+  "d2chain_Health_0270.png": {
+    "level": 11,
+    "sha256": "e4a0af8ba259aa89fd207b99cd34c6f320c6f79c3c5478c52b74b76a674c75ab",
+    "fixture": true,
+    "completion": false
+  },
+  "d2chain_Health_0280.png": {
+    "level": 11,
+    "sha256": "b0f02b9ef3934b9df043875d213efc227f63eba8be0afe954b5aa47bd6ef5efe",
+    "fixture": false,
+    "completion": false
+  },
+  "d2chain_Health_0290.png": {
+    "level": 11,
+    "sha256": "1e1b59c7f389533936ed9795a886e13c62a2920b08b3e41bfeb5889da72be61f",
+    "fixture": false,
+    "completion": false
+  },
+  "d2chain_Health_0300.png": {
+    "level": 11,
+    "sha256": "c5bb01ef0997c1c8ed00ac86c01171d3bf50b914da93ebbc337f7d206e58d3e0",
+    "fixture": true,
+    "completion": false
+  },
+  "d2chain_Health_0310.png": {
+    "level": 11,
+    "sha256": "a81ca601fb1abf657ebc6d38f723b77bd03d0dff66381c48d905f61eb51e3925",
+    "fixture": false,
+    "completion": false
+  },
+  "d2chain_Health_0320.png": {
+    "level": 11,
+    "sha256": "64a3c13bfeb36b7f2775c0cc368d383f1907c1b861543004dd25ba6cedd8cc10",
+    "fixture": false,
+    "completion": false
+  },
+  "d2chain_Health_0330.png": {
+    "level": 12,
+    "sha256": "48ed021ea05179567c71c8af697f44375ab6157abec1ea64282a0fd8ed1cfcf7",
+    "fixture": true,
+    "completion": false
+  },
+  "d2chain_Health_0340.png": {
+    "level": 12,
+    "sha256": "7461577c4b4f8b39a7bf9398903a103a5ef78851637c630005a07dda818732a0",
+    "fixture": false,
+    "completion": false
+  },
+  "d2chain_Health_0350.png": {
+    "level": 12,
+    "sha256": "a2449f4391ec1dcf80136ef9200e17557c0e66bc4751ae427bc384a6c391ff79",
+    "fixture": false,
+    "completion": false
+  },
+  "d2chain_Health_0360.png": {
+    "level": 13,
+    "sha256": "4703693f05f096185f27b11b6406166b9977f43817b7ff126c8e5a2fd8819c11",
+    "fixture": true,
+    "completion": false
+  },
+  "d2chain_Health_0370.png": {
+    "level": 13,
+    "sha256": "8c06eba6c3a1d19fe959cb2ac631f776758a33f973578757e59a0736ee0e56a2",
+    "fixture": false,
+    "completion": false
+  },
+  "d2chain_Health_0380.png": {
+    "level": 13,
+    "sha256": "911218c998c0327c44ead5ccb3ec134cb6262ef68609472e358bd4c7a673aac2",
+    "fixture": false,
+    "completion": false
+  },
+  "d2chain_Health_0390.png": {
+    "level": 13,
+    "sha256": "ba018c47a495d4c34ee7b328b4a94ae881a730fd9d31984d898d011d86abeced",
+    "fixture": false,
+    "completion": false
+  },
+  "d2chain_Health_0400.png": {
+    "level": 13,
+    "sha256": "8641cc7bd2c6b448f01d3cdc062283d5c68b8fcc1890461d821638c1b37d3692",
+    "fixture": false,
+    "completion": false
+  },
+  "d2chain_Health_0410.png": {
+    "level": 13,
+    "sha256": "8b5f1278915d10c46132f9672bd71a3dbc9070967d33db290547d4558d9bdf7e",
+    "fixture": false,
+    "completion": false
+  },
+  "d2chain_Health_0420.png": {
+    "level": 14,
+    "sha256": "7a03efcd24f357afc6d39d7a7d98c9d5b4ad0a01c2af224d3174f57c0295fd55",
+    "fixture": true,
+    "completion": false
+  },
+  "d2chain_Health_0430.png": {
+    "level": null,
+    "sha256": "d8f63f30b251d5985f18365d4971cc55a6b5bb049800056161a3250e06f87f06",
+    "fixture": true,
+    "completion": null
+  },
+  "d2chain_Health_0440.png": {
+    "level": 14,
+    "sha256": "22d1b10f98929538dc55428edb527cdd62a34fbeb757740760009c690de32f4c",
+    "fixture": true,
+    "completion": false
+  },
+  "d2chain_Health_0450.png": {
+    "level": 14,
+    "sha256": "2d897ebf0ec1190ad7066d05dd0a4d91e46f12fd3c8c7ac1b17bdd67306cad0d",
+    "fixture": false,
+    "completion": false
+  },
+  "d2chain_Health_0460.png": {
+    "level": 14,
+    "sha256": "1994fd4f4437890df012fe537907e3fef915a0d2c1c457a45f78552cbd8171e1",
+    "fixture": false,
+    "completion": false
+  },
+  "d2chain_Health_0470.png": {
+    "level": 14,
+    "sha256": "980bdd5e004a8774b1f36476359a8705ee802ce1d8c38b68fdc2ef53aed535eb",
+    "fixture": false,
+    "completion": false
+  },
+  "d2chain_Health_0480.png": {
+    "level": 15,
+    "sha256": "03e5193521a3522eb79f2df7c556d10364e9acf7e1faad3d6deef69fe74299ca",
+    "fixture": true,
+    "completion": false
+  },
+  "d2chain_Health_0490.png": {
+    "level": 15,
+    "sha256": "ec7a2795dc0c95c070dfeec97c45d3d3d234e3369235669d0f0c87caecd1024e",
+    "fixture": true,
+    "completion": false
+  },
+  "d2chain_Health_0500.png": {
+    "level": null,
+    "sha256": "7c0ba3c664890e7f9b6451e1ed04c4032b170e3a38089e0441e931cb4922b23b",
+    "fixture": false,
+    "completion": null
+  },
+  "d2chain_Health_0510.png": {
+    "level": 15,
+    "sha256": "f3a1da5df1b189b807f97f52c4d99a5c22af612c3721dc9506c00749002697bf",
+    "fixture": false,
+    "completion": false
+  },
+  "d2chain_Health_0520.png": {
+    "level": 15,
+    "sha256": "0260ca72c7199ea911340815e29e1b5534ac0da9a0418ae32d6392720196ce2b",
+    "fixture": false,
+    "completion": false
+  },
+  "d2chain_Health_0530.png": {
+    "level": 16,
+    "sha256": "e2efb77c30eb738376198ba61418e1c73c43ad8f6cfa025a7bc04329a5515f56",
+    "fixture": true,
+    "completion": false
+  },
+  "d2chain_Health_0540.png": {
+    "level": 16,
+    "sha256": "49bae7fbb276b9faa7990c61310bef3b24e0382fd3e410c69785d4f57e71f317",
+    "fixture": true,
+    "completion": false
+  },
+  "d2chain_Health_0550.png": {
+    "level": 16,
+    "sha256": "c919e8f6944c13e38ae8f829f3d0105a21440b6ea8b79fdad8b0959de0f15bf8",
+    "fixture": false,
+    "completion": false
+  },
+  "d2chain_Health_0560.png": {
+    "level": 16,
+    "sha256": "c7597c23514f08842076831642d852dbd675c41840c1fe18e81e562315a7a478",
+    "fixture": false,
+    "completion": false
+  },
+  "d2chain_Health_0570.png": {
+    "level": 16,
+    "sha256": "58b4852c72a4b7fdf13df3d6241cad31e3d95556624f96c13ceae837682a5a44",
+    "fixture": false,
+    "completion": false
+  },
+  "d2chain_Health_0580.png": {
+    "level": 17,
+    "sha256": "bca5ee3e2dc0d02379fb46fc8ac498d10079052a03ac2bd3b21e2f501cf80f67",
+    "fixture": true,
+    "completion": false
+  },
+  "d2chain_Health_0590.png": {
+    "level": 17,
+    "sha256": "397922650346b8d68d3b31f2a2dfc507d04bb316aba66b2e604bc7e4b6fd5120",
+    "fixture": true,
+    "completion": false
+  },
+  "d2chain_Health_0600.png": {
+    "level": 17,
+    "sha256": "a882a9e031dbabd61e678325b0a11f6d703ba14a84ed7940fd06b08e4f46b267",
+    "fixture": false,
+    "completion": false
+  },
+  "d2chain_Health_0610.png": {
+    "level": 17,
+    "sha256": "d336c2554e6ba7490b6fa9a836d855bcb05b677874503c6604331acc2dba7b54",
+    "fixture": false,
+    "completion": false
+  },
+  "d2chain_Health_0620.png": {
+    "level": 17,
+    "sha256": "55262df3e9886c9b51eee8e8e10149fefb47be887eb1b68e35260e19a0df327c",
+    "fixture": false,
+    "completion": false
+  },
+  "d2chain_Health_0630.png": {
+    "level": 18,
+    "sha256": "e3ce33e19a39099693661fd63bd5dc57ab884285fc8386b3358b2c4b6f730e6d",
+    "fixture": true,
+    "completion": false
+  },
+  "d2chain_Health_0640.png": {
+    "level": 18,
+    "sha256": "444fcd71bf724a3efc465edfff1057e3e912d276c7bb61e74ffe0d4d2ce30702",
+    "fixture": true,
+    "completion": false
+  },
+  "d2chain_Health_0650.png": {
+    "level": 18,
+    "sha256": "1e775b0a9c6c1196ac439993684eb9cbe1b224a82a3a048e7792fb748266a949",
+    "fixture": false,
+    "completion": false
+  },
+  "d2chain_Health_0660.png": {
+    "level": 18,
+    "sha256": "5d8e84a22fb85596b76ba8871a96febd9292a2285a371a018b41e87d61a08062",
+    "fixture": false,
+    "completion": false
+  },
+  "d2chain_Health_0670.png": {
+    "level": 18,
+    "sha256": "64cf2ff6e127c69d33f4dfe8e1224298c9893105da1b7f9d5e1ca12d583a0714",
+    "fixture": false,
+    "completion": false
+  },
+  "d2chain_Health_0680.png": {
+    "level": 18,
+    "sha256": "ef7679bd1a4d14b756972a3357b3e00593a4750b761a3379048f5e84ebe380b6",
+    "fixture": false,
+    "completion": false
+  },
+  "d2chain_Health_0690.png": {
+    "level": 19,
+    "sha256": "2d87f93e6cee204b394570e17a866019590610ce6dac4b7efb2f506701385b3e",
+    "fixture": true,
+    "completion": false
+  },
+  "d2chain_Health_0700.png": {
+    "level": 19,
+    "sha256": "4b3ed2ea24cd923badc0407cc6efda1f54358bf59f5a6f3c4f1bc61532db05a0",
+    "fixture": false,
+    "completion": false
+  },
+  "d2chain_Health_0710.png": {
+    "level": 19,
+    "sha256": "85b7465f3cf0c5931773082d6b544706c4411e9587acd10632f73a1818768f6d",
+    "fixture": false,
+    "completion": false
+  },
+  "d2chain_Health_0720.png": {
+    "level": 19,
+    "sha256": "bfde46096f17250405762dd71e2fde972c219ee1f941ab92fd267bbbdb9992da",
+    "fixture": false,
+    "completion": false
+  },
+  "d2chain_Health_0730.png": {
+    "level": 19,
+    "sha256": "5d26facefd68d52e7c69579cfc3f7f4558b4063590487a2e1ad357702ac019cc",
+    "fixture": false,
+    "completion": false
+  },
+  "d2chain_Health_0740.png": {
+    "level": 19,
+    "sha256": "e4ab99668162f97ddb4f40494e1ce9e4b34ccb6b5279ce0eb9009745d2df0beb",
+    "fixture": false,
+    "completion": false
+  },
+  "d2chain_Health_0750.png": {
+    "level": 1,
+    "sha256": "0126e33d164ee0b59dc7b5358c91901e857317a92df9b0e0ddebe90f43313422",
+    "fixture": true,
+    "completion": false
+  },
+  "d2chain_Health_final.png": {
+    "level": 1,
+    "sha256": "8895b1f4159277ce9ac3c9ca0679fc1a0b277a0fa7676139e9fb22e4e321a8e6",
+    "fixture": true,
+    "completion": false
+  },
+  "d2k1_KiControl_0000.png": {
+    "level": null,
+    "sha256": "2c7ad2a5758a40605c4c43157837f4b01d6f8bd75d83ab299218e4e2f9cd9fc7",
+    "fixture": false,
+    "completion": null
+  },
+  "d2k1_KiControl_0010.png": {
+    "level": 0,
+    "sha256": "dda9f3f196b4a950e8cb3282f5e1cf7f358ca3c794ff51805f5ba49c006fd819",
+    "fixture": true,
+    "completion": false
+  },
+  "d2k1_KiControl_0020.png": {
+    "level": 0,
+    "sha256": "6bd73ee535ac7a9a45b8407159fc81bcdc66a335d6a21e4a6992f9f843854eb4",
+    "fixture": false,
+    "completion": false
+  },
+  "d2k1_KiControl_0030.png": {
+    "level": 0,
+    "sha256": "109848e3b574f16a376c47b3e2f2db652b1a972129a7aee62657be32feb7eac2",
+    "fixture": false,
+    "completion": false
+  },
+  "d2k1_KiControl_0040.png": {
+    "level": 0,
+    "sha256": "109848e3b574f16a376c47b3e2f2db652b1a972129a7aee62657be32feb7eac2",
+    "fixture": false,
+    "completion": false
+  },
+  "d2k1_KiControl_0050.png": {
+    "level": 0,
+    "sha256": "ff8c7bc1726d2f7a879734ba824f083707bf2b4714c06c1073e47fa271bea56d",
+    "fixture": false,
+    "completion": false
+  },
+  "d2k1_KiControl_final.png": {
+    "level": 1,
+    "sha256": "40571ebe14b5b0ac243438c7fc826e4f1a41e53973e384fb53b4fc66657551ca",
+    "fixture": true,
+    "completion": false
+  },
+  "d2kid1_KiDamage_0000.png": {
+    "level": null,
+    "sha256": "a812cad7ea9e1e14406886bc069d004b0dc4959c7f75c8c19f043ed3c434acb8",
+    "fixture": true,
+    "completion": null
+  },
+  "d2kid1_KiDamage_0010.png": {
+    "level": null,
+    "sha256": "07a3fbc559e70fc163870321ce5b6e5442ee36a48dc074afc7539d6692756b8c",
+    "fixture": true,
+    "completion": null
+  },
+  "d2kid1_KiDamage_0020.png": {
+    "level": 0,
+    "sha256": "fcd0e87c52373e3df03570a9bef8a0fafd105acae52ac3ff54da5374cced20cf",
+    "fixture": true,
+    "completion": false
+  },
+  "d2kid1_KiDamage_0030.png": {
+    "level": 0,
+    "sha256": "b4e16255f74f4a6be9c4152f42c315b597131e2da8c6605e38377a5ab4cb7af2",
+    "fixture": true,
+    "completion": false
+  },
+  "d2kid1_KiDamage_0040.png": {
+    "level": 0,
+    "sha256": "9052b6c2c9420c4f5659a1b6ca89abfaacda7b1e6e8464bb8e74222be27e8046",
+    "fixture": true,
+    "completion": false
+  },
+  "d2kid1_KiDamage_0050.png": {
+    "level": 0,
+    "sha256": "396fbe49cf412e7d13c26481e3040bad441c58db67dc415e0c86227907fe835b",
+    "fixture": true,
+    "completion": false
+  },
+  "d2kid1_KiDamage_final.png": {
+    "level": 0,
+    "sha256": "25c967d69e4ffb7390684dbcb163c7676bece287fce7dabc1fe830effa8d8ad9",
+    "fixture": true,
+    "completion": false
+  },
+  "d2s1_Health_0000.png": {
+    "level": null,
+    "sha256": "e9e5263648a191ca6f40079d0479830a33556d3dc2ca36c7a5b72ebad8cbc408",
+    "fixture": false,
+    "completion": null
+  },
+  "d2s1_Health_0010.png": {
+    "level": 0,
+    "sha256": "ea84503cb863fbfca5e97856f69e544324456e6cb5606ee7fc32618a69acbb4f",
+    "fixture": false,
+    "completion": false
+  },
+  "d2s1_Health_0020.png": {
+    "level": 0,
+    "sha256": "8b42b4ee8845e94ac52f26a6f80ba4a445a6bc249e99cdbf7f1bc17f5ae993ad",
+    "fixture": false,
+    "completion": false
+  },
+  "d2s1_Health_0030.png": {
+    "level": 1,
+    "sha256": "a4642e79adedf7232c3179736900b8ca843c369dee9207c435e721732467567a",
+    "fixture": false,
+    "completion": false
+  },
+  "d2s1_Health_0040.png": {
+    "level": 1,
+    "sha256": "1cc5dbe2ad4c4f2e3f9f74099ca251558c1a968745d857db5ce0810701a7d7bd",
+    "fixture": false,
+    "completion": false
+  },
+  "d2s1_Health_0050.png": {
+    "level": 1,
+    "sha256": "7c7c88342c34d146705da8dab967afc100a2a260ef3e53357a37dd5ca6ec3e1b",
+    "fixture": false,
+    "completion": false
+  },
+  "d2s1_Health_0060.png": {
+    "level": 2,
+    "sha256": "ae7df4f6709372d2c2d27701428021bb52d4d5e18dce6df2bb177f27340534d7",
+    "fixture": false,
+    "completion": false
+  },
+  "d2s1_Health_0070.png": {
+    "level": 2,
+    "sha256": "da43e0ce3b50c04757d81723e0e58392d9723a0eddb3eb06f27ef86aaec06cf1",
+    "fixture": false,
+    "completion": false
+  },
+  "d2s1_Health_0080.png": {
+    "level": 2,
+    "sha256": "c9f47fdf5a5a1f254bc7376230abc14ff5805224a669816f225e420f6ceefa0a",
+    "fixture": false,
+    "completion": false
+  },
+  "d2s1_Health_0090.png": {
+    "level": 2,
+    "sha256": "19c14f798a55a68460ba7e572d5cb63bdeae7752c0b7b15aa229b544c4b3c33c",
+    "fixture": false,
+    "completion": false
+  },
+  "d2s1_Health_0100.png": {
+    "level": 3,
+    "sha256": "02ef88a6946daa5f2adfd77b293dee37c28fd108d5f2d72154b9a9e8deb2e390",
+    "fixture": false,
+    "completion": false
+  },
+  "d2s1_Health_0110.png": {
+    "level": 3,
+    "sha256": "f20016bf01751cd6a3aa9bcefd4802b8a46710d9b2139296d8109947a34e377a",
+    "fixture": false,
+    "completion": false
+  },
+  "d2s1_Health_0120.png": {
+    "level": 3,
+    "sha256": "813acd61df26dca3ebb9382fd60edd47adee050361ebb73b920059e1229d9e10",
+    "fixture": false,
+    "completion": false
+  },
+  "d2s1_Health_0130.png": {
+    "level": 4,
+    "sha256": "839a1560c13c1803ad107fe8fded37c9330f09cc7233de7af1bc22be9ed8f25a",
+    "fixture": true,
+    "completion": false
+  },
+  "d2s1_Health_0140.png": {
+    "level": 4,
+    "sha256": "f1c34852a8aeccb6c36665e1a037bb20a961d073b6c384f53ed47dd274b21bb7",
+    "fixture": false,
+    "completion": false
+  },
+  "d2s1_Health_0150.png": {
+    "level": 4,
+    "sha256": "38dfc4fca5abcd0972227b65e250d2dc7f2d5f8b931963a3be26fe6e07185dae",
+    "fixture": false,
+    "completion": false
+  },
+  "d2s1_Health_0160.png": {
+    "level": 5,
+    "sha256": "818c42560c28f6bfed600af48527f7d309eb1593084b4b98d2efdf7239476e83",
+    "fixture": true,
+    "completion": false
+  },
+  "d2s1_Health_0170.png": {
+    "level": 5,
+    "sha256": "d7ea6b6a822bbb39fcdb1386789e5cd9a22be87ddf00c07a1877cd372ec7751e",
+    "fixture": false,
+    "completion": false
+  },
+  "d2s1_Health_0180.png": {
+    "level": 5,
+    "sha256": "04378f0aa6dfdc6a027487547b5cf4a8b0fd267a59a9e0091fb9885b9e04bdef",
+    "fixture": false,
+    "completion": false
+  },
+  "d2s1_Health_0190.png": {
+    "level": 6,
+    "sha256": "c15907dd644e56b6a8899b5079d9f777c84cc608d4506e4ad5a74fe4cc96389b",
+    "fixture": false,
+    "completion": false
+  },
+  "d2s1_Health_final.png": {
+    "level": 6,
+    "sha256": "10ea5a7499feb23a0490ab7383c07259dc9474c7263a16d33006d697befad18e",
+    "fixture": true,
+    "completion": false
+  },
+  "d3full_PhysicalDamage_0000.png": {
+    "level": null,
+    "sha256": "779139d94a99185616b79b9dd51d3acac3105e44bfab5dd46c78030d9396c932",
+    "fixture": true,
+    "completion": null
+  },
+  "d3full_PhysicalDamage_0010.png": {
+    "level": 0,
+    "sha256": "c0f1351e1f68956cb954b31d7d03d7a24cf85c16c51a976dcc6aba8df232070c",
+    "fixture": true,
+    "completion": false
+  },
+  "d3full_PhysicalDamage_0020.png": {
+    "level": 0,
+    "sha256": "620ba2cc2d4320aee9fd47591fc0604cdd9b5c45b2b38d81aedbe8924eccab9b",
+    "fixture": false,
+    "completion": false
+  },
+  "d3full_PhysicalDamage_0030.png": {
+    "level": 0,
+    "sha256": "874cc407bf0342c0554774834c43280f6d9935ab1edf868d560b8c3b286ad204",
+    "fixture": false,
+    "completion": false
+  },
+  "d3full_PhysicalDamage_0040.png": {
+    "level": 0,
+    "sha256": "8e8f1f1fe765de88b5ff01c2eb717450af0252c34a198df77024ea0b83fb8dab",
+    "fixture": false,
+    "completion": false
+  },
+  "d3full_PhysicalDamage_0050.png": {
+    "level": 0,
+    "sha256": "1bde82680fb647561886ac2b4e9927b7ee06db25805e3df7474f3a909d9a6cf4",
+    "fixture": false,
+    "completion": false
+  },
+  "d3full_PhysicalDamage_0060.png": {
+    "level": 0,
+    "sha256": "fd66f5212c9fffe8ea796b44580860df24feeda4538219405c4b02a229721036",
+    "fixture": false,
+    "completion": false
+  },
+  "d3full_PhysicalDamage_0070.png": {
+    "level": 0,
+    "sha256": "46a8a94574c79e75288ed4484ef9312584db1ea93c07a00343456207b613d927",
+    "fixture": false,
+    "completion": false
+  },
+  "d3full_PhysicalDamage_0080.png": {
+    "level": 1,
+    "sha256": "3bd01c1eb91ff81aa7a413a8caed2994e62caf50c7612a82940744a77d5799ea",
+    "fixture": true,
+    "completion": false
+  },
+  "d3full_PhysicalDamage_0090.png": {
+    "level": 1,
+    "sha256": "23002fcc0f41e178f216344c3e82bffefe416d84be995c7b67d78bc83b80978c",
+    "fixture": false,
+    "completion": false
+  },
+  "d3full_PhysicalDamage_0100.png": {
+    "level": 1,
+    "sha256": "f98b7708a99d19c485e73646ceb26b71b4af705263ecf9e508e7a1795fb7e8df",
+    "fixture": false,
+    "completion": false
+  },
+  "d3full_PhysicalDamage_0110.png": {
+    "level": 1,
+    "sha256": "716d885a05c53c1a822e80dc2c721ff5b54dff663aa2baca1a883561aff03951",
+    "fixture": false,
+    "completion": false
+  },
+  "d3full_PhysicalDamage_0120.png": {
+    "level": 1,
+    "sha256": "d6b5e40665e32d1012e66890ef57946127eb70cec83e6d3173c94f894a29cfbc",
+    "fixture": false,
+    "completion": false
+  },
+  "d3full_PhysicalDamage_0130.png": {
+    "level": 1,
+    "sha256": "7f99b630d8a68e29c0e470d413eb92691a71d2ad996b8c1a8c7c24a6eb6be376",
+    "fixture": false,
+    "completion": false
+  },
+  "d3full_PhysicalDamage_0140.png": {
+    "level": 1,
+    "sha256": "c63a1ab46fbf8fdd68efce6ffdb2f4ab72b1c4c0ea218d66c0490b2e68e9862d",
+    "fixture": false,
+    "completion": false
+  },
+  "d3full_PhysicalDamage_0150.png": {
+    "level": 1,
+    "sha256": "bf1b83d5a6ae91b541f0d09d52101e51b27eb6005a6668782b7e66c95904d261",
+    "fixture": false,
+    "completion": false
+  },
+  "d3full_PhysicalDamage_0160.png": {
+    "level": 2,
+    "sha256": "5595badbacdeea98612a21fb868c651d6525336914a8af7c46af8bdc1d2874d2",
+    "fixture": true,
+    "completion": false
+  },
+  "d3full_PhysicalDamage_0170.png": {
+    "level": 2,
+    "sha256": "f3e8c5f8b15dd6389a3e95ff8d4915b88721160e23befdff790f80def373ad0c",
+    "fixture": false,
+    "completion": false
+  },
+  "d3full_PhysicalDamage_0180.png": {
+    "level": 2,
+    "sha256": "6ba6676be3524c47a9dbc152da7157cd1a0773dc0d410c1ca84387a4f483bcdd",
+    "fixture": false,
+    "completion": false
+  },
+  "d3full_PhysicalDamage_0190.png": {
+    "level": 2,
+    "sha256": "fbec260706f2b9de75b7fe821392c7df4d3e34461107508369801ed084561ad7",
+    "fixture": false,
+    "completion": false
+  },
+  "d3full_PhysicalDamage_0200.png": {
+    "level": 2,
+    "sha256": "050627a034875f3b805f5f742f19140b006e0c78d01d57b14d1f387594fa9da3",
+    "fixture": false,
+    "completion": false
+  },
+  "d3full_PhysicalDamage_0210.png": {
+    "level": 2,
+    "sha256": "31fc38115b9a69cb7e087c9e25634986d24af65e0bcea5c0c2b3727eec21527d",
+    "fixture": false,
+    "completion": false
+  },
+  "d3full_PhysicalDamage_0220.png": {
+    "level": 2,
+    "sha256": "5ec46c231e1a22fe295dfda25df986f072c6c951621e5ccc4476f234b4a4bd42",
+    "fixture": false,
+    "completion": false
+  },
+  "d3full_PhysicalDamage_0230.png": {
+    "level": 2,
+    "sha256": "5a2785ceea38e4506fec91f531ce560a88f76671fc98969d124e3a38afee7e9c",
+    "fixture": false,
+    "completion": false
+  },
+  "d3full_PhysicalDamage_0240.png": {
+    "level": 3,
+    "sha256": "47dda0804126487466e9ca0059fbc8bfb02db97974de8fcae13d48270f623d1e",
+    "fixture": true,
+    "completion": false
+  },
+  "d3full_PhysicalDamage_0250.png": {
+    "level": 3,
+    "sha256": "d98025ee3b13976ab6e4cf3dbc898f4d4a0c4c34ba8d3ef34c0543ce2c9f414e",
+    "fixture": false,
+    "completion": false
+  },
+  "d3full_PhysicalDamage_0260.png": {
+    "level": null,
+    "sha256": "878244b4b758577f6eadf474155ef328bc4b9efa029217e4e8c48fcfdebeb7bb",
+    "fixture": false,
+    "completion": null
+  },
+  "d3full_PhysicalDamage_0270.png": {
+    "level": null,
+    "sha256": "2eb05aa5a7ee4c8869c675221a9eea68c9cd2223b6299094d568b22fc77f638b",
+    "fixture": false,
+    "completion": null
+  },
+  "d3full_PhysicalDamage_0280.png": {
+    "level": 3,
+    "sha256": "5b2da6c3946ed48e5394a4c416d6a527b16bd0a5ee730988d88af24a3261efb3",
+    "fixture": true,
+    "completion": false
+  },
+  "d3full_PhysicalDamage_0290.png": {
+    "level": 3,
+    "sha256": "ddf73fa000beff380628a0357265f9daca87cbab9e43a3b98c50d0437a32cc51",
+    "fixture": false,
+    "completion": false
+  },
+  "d3full_PhysicalDamage_0300.png": {
+    "level": 3,
+    "sha256": "4012219f3a9124ef4f9f73fc5808cfd8beee72c5bb0e357d945ff16d0abc51f2",
+    "fixture": false,
+    "completion": false
+  },
+  "d3full_PhysicalDamage_0310.png": {
+    "level": 3,
+    "sha256": "7ed76bf31ccd5384d1db74ed513cc20295d38fd2860fec55a3518f867664ff50",
+    "fixture": false,
+    "completion": false
+  },
+  "d3full_PhysicalDamage_0320.png": {
+    "level": 3,
+    "sha256": "a429417261d00c3deb20529fe56bded63046d40d7eaddf25409986bd993d966b",
+    "fixture": false,
+    "completion": false
+  },
+  "d3full_PhysicalDamage_0330.png": {
+    "level": 4,
+    "sha256": "923bd6a5ddb333caff60bc5b7fdc5c8ea99eba172f661d96219496ecfb11cdf6",
+    "fixture": true,
+    "completion": false
+  },
+  "d3full_PhysicalDamage_0340.png": {
+    "level": 4,
+    "sha256": "e0eb0eb5c67ebf0163efc2302218ec63bf877bcf7987b6aebac59e36b7786273",
+    "fixture": false,
+    "completion": false
+  },
+  "d3full_PhysicalDamage_0350.png": {
+    "level": 4,
+    "sha256": "5510ec6d87e3aed9dcc088493d1e08571bd08c7c3c3a4f91955aa34e78673aad",
+    "fixture": false,
+    "completion": false
+  },
+  "d3full_PhysicalDamage_0360.png": {
+    "level": 4,
+    "sha256": "7cdc1ad2dfdf71dd2dca3cfdfa5941d3f15450fc9b06f0d066c8b12cf0bb9301",
+    "fixture": false,
+    "completion": false
+  },
+  "d3full_PhysicalDamage_0370.png": {
+    "level": 4,
+    "sha256": "714e882df7a802f789e3c5a879629925768844d1ba3f8382b6cb8e5badbcfb1b",
+    "fixture": false,
+    "completion": false
+  },
+  "d3full_PhysicalDamage_0380.png": {
+    "level": 4,
+    "sha256": "f96e2f343c86fab1218ffbf57b4317351e00558577a1681b6a28a1c9e8f8620f",
+    "fixture": false,
+    "completion": false
+  },
+  "d3full_PhysicalDamage_0390.png": {
+    "level": 4,
+    "sha256": "953c1170ec83210f89b71d47ec50d0d128fb31856d2db0a30819a3c505d1a78e",
+    "fixture": false,
+    "completion": false
+  },
+  "d3full_PhysicalDamage_0400.png": {
+    "level": 4,
+    "sha256": "6ac38b5d96dc5f250dc3529cb1626481161d4589ebe77634b23984405855661b",
+    "fixture": false,
+    "completion": false
+  },
+  "d3full_PhysicalDamage_0410.png": {
+    "level": 5,
+    "sha256": "feb370d5b5c1e7ee04aaff75f3758d5c29622593900ede268b0d6b627ce24513",
+    "fixture": true,
+    "completion": false
+  },
+  "d3full_PhysicalDamage_0420.png": {
+    "level": null,
+    "sha256": "8895d16efbffa2b49d1c1f394ea3e995d07420a17f8e6e241bf041b829a89fdd",
+    "fixture": false,
+    "completion": null
+  },
+  "d3full_PhysicalDamage_0430.png": {
+    "level": 5,
+    "sha256": "1cc0660b9b80ffd19a7b66c3bf27f96880a2325537af27fb6b6e69e38432045f",
+    "fixture": true,
+    "completion": false
+  },
+  "d3full_PhysicalDamage_0440.png": {
+    "level": 5,
+    "sha256": "da3e4d17222c303e0ea8c5e97d09569137d4f67f066e58630484a36c499445a9",
+    "fixture": false,
+    "completion": false
+  },
+  "d3full_PhysicalDamage_0450.png": {
+    "level": 5,
+    "sha256": "6ec2b5b44d5d883dc673b293497e5edbb39e1c5814c1509c3e628d221fbb328e",
+    "fixture": false,
+    "completion": false
+  },
+  "d3full_PhysicalDamage_0460.png": {
+    "level": 5,
+    "sha256": "2ae6f391473f36295591dc0430db58e86928cc66fc7eb0e302ca0e66bd57c2e3",
+    "fixture": false,
+    "completion": false
+  },
+  "d3full_PhysicalDamage_0470.png": {
+    "level": 5,
+    "sha256": "f11adab8d383edc087188076898475bda205cafca7f4c06038c1c9ca7bfac5d8",
+    "fixture": false,
+    "completion": false
+  },
+  "d3full_PhysicalDamage_0480.png": {
+    "level": 6,
+    "sha256": "bee07a5254d6882b02e3a229066c8149357c325e6f1802d0caed11e195e9eac5",
+    "fixture": true,
+    "completion": false
+  },
+  "d3full_PhysicalDamage_0490.png": {
+    "level": 6,
+    "sha256": "cf0379eaf29e527f0810fe4783a1724ce77a0b5f892e8565d06c605ae1e39acc",
+    "fixture": false,
+    "completion": false
+  },
+  "d3full_PhysicalDamage_0500.png": {
+    "level": 6,
+    "sha256": "ef317979be279d63f81b54bb9e693d8cb516e95502fbc555562eb6babd69d019",
+    "fixture": false,
+    "completion": false
+  },
+  "d3full_PhysicalDamage_0510.png": {
+    "level": 6,
+    "sha256": "16848dc738e76dd60f1f7f744820461b036c859292e0ac57ab491d89ff8f127b",
+    "fixture": false,
+    "completion": false
+  },
+  "d3full_PhysicalDamage_0520.png": {
+    "level": 6,
+    "sha256": "d2ebb479e9936e8728f012666b56c89e688fcbca0ec0fa19e5fd24651a86569c",
+    "fixture": false,
+    "completion": false
+  },
+  "d3full_PhysicalDamage_0530.png": {
+    "level": null,
+    "sha256": "90ed9c91cb042fb25b17d925d17dcf04e9dd6da460e1f644d708e35f2cbbd1c2",
+    "fixture": true,
+    "completion": null
+  },
+  "d3full_PhysicalDamage_0540.png": {
+    "level": null,
+    "sha256": "2749eac479e859fa3b8ae7ec28119f04fd40a5e9628b0a07fffeccc9ac202d5a",
+    "fixture": true,
+    "completion": null
+  },
+  "d3full_PhysicalDamage_0550.png": {
+    "level": 6,
+    "sha256": "b16b8181f6f5c814113cdf3e97e73132716b3ee03552a887d17343fcb4c7b771",
+    "fixture": false,
+    "completion": false
+  },
+  "d3full_PhysicalDamage_0560.png": {
+    "level": 6,
+    "sha256": "d29684fc1bcde9bc32605c6b52ba33504517281f9eb000beb63159d6596793e3",
+    "fixture": false,
+    "completion": false
+  },
+  "d3full_PhysicalDamage_0570.png": {
+    "level": 6,
+    "sha256": "5f0245229a797c954cd97496db251149b6d250606941611f7da1e5d0f8241ae5",
+    "fixture": false,
+    "completion": false
+  },
+  "d3full_PhysicalDamage_final.png": {
+    "level": 7,
+    "sha256": "9a405a23e94aee9070440362dad3a8f156fb4a3b7ee719a4db955b504eda0dfd",
+    "fixture": true,
+    "completion": false
+  },
+  "d3h0g_Health_0000.png": {
+    "level": null,
+    "sha256": "3a794841c24cc328b6e8f9a4d7c1d506d6980d0c30a8644b4ce15fb6f533c017",
+    "fixture": false,
+    "completion": null
+  },
+  "d3h0g_Health_0010.png": {
+    "level": 0,
+    "sha256": "1519a9ad6bbe51beac8af4d28ac37989d453aa253f972aaed43059bb2cdec637",
+    "fixture": false,
+    "completion": false
+  },
+  "d3h0g_Health_0020.png": {
+    "level": 0,
+    "sha256": "d47075a35ed4d541395575b5900a5b9fc6fe0f115ee378a2c2b1e3569df29f62",
+    "fixture": false,
+    "completion": false
+  },
+  "d3h0g_Health_0030.png": {
+    "level": 0,
+    "sha256": "20f2a2eef7490519bacbf4094c2a0d687aa0cd67438596c6f31a5376228267ed",
+    "fixture": false,
+    "completion": false
+  },
+  "d3h0g_Health_0040.png": {
+    "level": 0,
+    "sha256": "b0753946140e709533fd55e6be09a22d4ceeefab41fcaee601665187813b39ed",
+    "fixture": false,
+    "completion": false
+  },
+  "d3h0g_Health_0050.png": {
+    "level": 0,
+    "sha256": "7664632f9a7edeea576ca3a6124345c3c76350d35ec15eeb1613697a26dc28e7",
+    "fixture": false,
+    "completion": false
+  },
+  "d3h0g_Health_0060.png": {
+    "level": 0,
+    "sha256": "e6ab7b94fc0c72ae78b2b889dab13540034fd2af277f2e9fc635d2ddc5c4108e",
+    "fixture": false,
+    "completion": false
+  },
+  "d3h0g_Health_0070.png": {
+    "level": 0,
+    "sha256": "4f9b5cd677f2f437c5817eb0e3196acdb103d78e042f6459b93017322eadb7bc",
+    "fixture": false,
+    "completion": false
+  },
+  "d3h0g_Health_0080.png": {
+    "level": 0,
+    "sha256": "42daeb4685de67cf73c913ec1ee153eb47c95b2bd3fe3e64e2291c50438a3d22",
+    "fixture": false,
+    "completion": false
+  },
+  "d3h0g_Health_0090.png": {
+    "level": 0,
+    "sha256": "8c1fbd27ead60506c964be8e666035bc5454af416651b1bd940a3ee4d68fcaaa",
+    "fixture": false,
+    "completion": false
+  },
+  "d3h0g_Health_final.png": {
+    "level": 0,
+    "sha256": "d8e0eb327d5199cdd4031f9d49583f694b613bd3213129dec6c7e514aeddd4c8",
+    "fixture": true,
+    "completion": false
+  }
+}

@@ -1,0 +1,1797 @@
+use std::fmt::Write as _;
+use std::fs;
+use std::path::PathBuf;
+use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
+
+use serde::{Deserialize, Serialize};
+use tauri::{
+    AppHandle, Emitter, LogicalSize, Manager, PhysicalPosition, PhysicalSize, Position, Size,
+};
+use tauri_plugin_updater::UpdaterExt;
+
+/// The bundled Python sidecar's executable name. Used to spawn the owned child
+/// and verify its installed file is unlocked before an updater replaces it.
+const SIDECAR_EXE: &str = "XynMacro-core.exe";
+const BACKEND_AUTH_HEADER: &str = "X-XynMacro-Token";
+
+struct PythonProcess(Mutex<Option<Child>>);
+struct BackendPort(Mutex<u16>);
+struct BackendStartError(Mutex<Option<String>>);
+struct BackendAuthToken(String);
+/// A downloaded-but-not-installed update: kept until the user restarts (or the
+/// window closes), so updating never interrupts a running session.
+struct PendingUpdate(Mutex<Option<(tauri_plugin_updater::Update, Vec<u8>)>>);
+#[derive(Default)]
+struct UpdateDownloadState {
+    active: AtomicBool,
+    generation: AtomicU64,
+}
+
+impl UpdateDownloadState {
+    fn can_store(&self, generation: u64, closing: bool) -> bool {
+        !closing && self.generation.load(Ordering::SeqCst) == generation
+    }
+}
+
+struct UpdateDownloadGuard<'a>(&'a AtomicBool);
+
+impl<'a> UpdateDownloadGuard<'a> {
+    fn acquire(active: &'a AtomicBool) -> Result<Self, String> {
+        if active.swap(true, Ordering::SeqCst) {
+            return Err("An update download is already in progress".into());
+        }
+        Ok(Self(active))
+    }
+}
+
+impl Drop for UpdateDownloadGuard<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
+}
+
+struct ShutdownState {
+    started: AtomicBool,
+    cleanup_complete: AtomicBool,
+    launcher_pid: u32,
+}
+
+impl ShutdownState {
+    fn begin(&self) -> bool {
+        !self.started.swap(true, Ordering::SeqCst)
+    }
+
+    fn can_exit(&self) -> bool {
+        self.cleanup_complete.load(Ordering::SeqCst)
+    }
+}
+/// Size of the expanded window the last time we entered compact (restored on uncompact).
+struct PreCompactSize(Mutex<Option<(f64, f64)>>);
+/// Size of the pill the last time we left compact (restored on next compact).
+struct LastCompactSize(Mutex<Option<(f64, f64)>>);
+/// Resize-animation bookkeeping. `gen` cancels superseded animation threads
+/// (rapid compact↔expand toggling used to leave two threads fighting over
+/// set_size). `target` is the in-flight animation's destination, so a toggle
+/// mid-animation can save the intended size instead of a half-animated one.
+struct WindowAnim {
+    gen: AtomicU64,
+    target: Mutex<Option<(f64, f64)>>,
+}
+
+struct WindowPrefsState {
+    compact_or_animating: AtomicBool,
+    save_generation: AtomicU64,
+}
+
+/// True only for the first frontend load after macro_config.json was deleted.
+/// This lets one visible config deletion reset WebView localStorage as well as
+/// the backend and native window bounds.
+struct ConfigResetState(AtomicBool);
+
+/// Default pill height when there's no remembered compact size yet.
+const DEFAULT_COMPACT_HEIGHT: f64 = 32.0;
+const DEFAULT_EXPANDED_WIDTH: f64 = 1100.0;
+const DEFAULT_EXPANDED_HEIGHT: f64 = 720.0;
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct SavedWindowBounds {
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+}
+
+#[derive(Default, Deserialize, Serialize)]
+struct AppPrefsFile {
+    window: Option<SavedWindowBounds>,
+}
+
+fn bounds_overlap(saved: &SavedWindowBounds, x: i32, y: i32, width: u32, height: u32) -> i64 {
+    let right = (i64::from(saved.x) + i64::from(saved.width)).min(i64::from(x) + i64::from(width));
+    let bottom = (i64::from(saved.y) + i64::from(saved.height)).min(i64::from(y) + i64::from(height));
+    let overlap_width = (right - i64::from(saved.x.max(x))).max(0);
+    let overlap_height = (bottom - i64::from(saved.y.max(y))).max(0);
+    overlap_width.saturating_mul(overlap_height)
+}
+
+fn app_prefs_path(app: &AppHandle) -> Result<PathBuf, String> {
+    app.path()
+        .app_config_dir()
+        .map(|dir| dir.join("app_prefs.json"))
+        .map_err(|error| error.to_string())
+}
+
+fn write_saved_window_bounds(app: &AppHandle, bounds: SavedWindowBounds) -> Result<(), String> {
+    let path = app_prefs_path(app)?;
+    let parent = path.parent().ok_or("App config directory is unavailable")?;
+    fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    let payload = serde_json::to_vec_pretty(&AppPrefsFile {
+        window: Some(bounds),
+    })
+    .map_err(|error| error.to_string())?;
+    fs::write(path, payload).map_err(|error| error.to_string())
+}
+
+fn capture_expanded_window_bounds(app: &AppHandle) -> Result<SavedWindowBounds, String> {
+    let win = app
+        .get_webview_window("main")
+        .ok_or("main window not found")?;
+    if win.is_maximized().unwrap_or(false) || win.is_minimized().unwrap_or(false) {
+        return Err("window is not in a restorable state".into());
+    }
+    let position = win.outer_position().map_err(|error| error.to_string())?;
+    let size = win.inner_size().map_err(|error| error.to_string())?;
+    if size.height < 200 || size.width < 400 {
+        return Err("compact window bounds are not persisted as expanded bounds".into());
+    }
+    Ok(SavedWindowBounds {
+        x: position.x,
+        y: position.y,
+        width: size.width,
+        height: size.height,
+    })
+}
+
+fn schedule_window_bounds_save(app: AppHandle) {
+    let Some(state) = app.try_state::<WindowPrefsState>() else {
+        return;
+    };
+    if state.compact_or_animating.load(Ordering::SeqCst) {
+        return;
+    }
+    let generation = state.save_generation.fetch_add(1, Ordering::SeqCst) + 1;
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(250));
+        let Some(state) = app.try_state::<WindowPrefsState>() else {
+            return;
+        };
+        if state.compact_or_animating.load(Ordering::SeqCst)
+            || state.save_generation.load(Ordering::SeqCst) != generation
+        {
+            return;
+        }
+        if let Ok(bounds) = capture_expanded_window_bounds(&app) {
+            let _ = write_saved_window_bounds(&app, bounds);
+        }
+    });
+}
+
+fn restore_saved_window_bounds(app: &AppHandle) {
+    let Ok(path) = app_prefs_path(app) else {
+        return;
+    };
+    let Ok(payload) = fs::read(path) else {
+        return;
+    };
+    let Ok(prefs) = serde_json::from_slice::<AppPrefsFile>(&payload) else {
+        return;
+    };
+    let Some(saved) = prefs.window else {
+        return;
+    };
+    let Some(win) = app.get_webview_window("main") else {
+        return;
+    };
+    let Ok(monitors) = win.available_monitors() else {
+        return;
+    };
+    if monitors.is_empty() {
+        return;
+    }
+
+    let monitor = monitors
+        .iter()
+        .max_by_key(|monitor| {
+            let position = monitor.position();
+            let size = monitor.size();
+            bounds_overlap(&saved, position.x, position.y, size.width, size.height)
+        })
+        .unwrap_or(&monitors[0]);
+    let monitor_position = monitor.position();
+    let monitor_size = monitor.size();
+    let width = saved.width.clamp(800, monitor_size.width.max(800));
+    let height = saved.height.clamp(480, monitor_size.height.max(480));
+    let max_x = monitor_position
+        .x
+        .saturating_add(monitor_size.width.saturating_sub(width) as i32);
+    let max_y = monitor_position
+        .y
+        .saturating_add(monitor_size.height.saturating_sub(height) as i32);
+    let x = saved.x.clamp(monitor_position.x, max_x);
+    let y = saved.y.clamp(monitor_position.y, max_y);
+    let _ = win.set_size(Size::Physical(PhysicalSize::new(width, height)));
+    let _ = win.set_position(Position::Physical(PhysicalPosition::new(x, y)));
+}
+
+#[tauri::command]
+fn factory_reset_app_prefs(app: AppHandle) -> Result<(), String> {
+    if let Some(anim) = app.try_state::<WindowAnim>() {
+        anim.gen.fetch_add(1, Ordering::SeqCst);
+        if let Ok(mut target) = anim.target.lock() {
+            *target = None;
+        }
+    }
+    if let Ok(path) = app_prefs_path(&app) {
+        if let Err(error) = fs::remove_file(path) {
+            if error.kind() != std::io::ErrorKind::NotFound {
+                return Err(error.to_string());
+            }
+        }
+    }
+    let win = app
+        .get_webview_window("main")
+        .ok_or("main window not found")?;
+    if let Some(state) = app.try_state::<WindowPrefsState>() {
+        state.compact_or_animating.store(false, Ordering::SeqCst);
+        state.save_generation.fetch_add(1, Ordering::SeqCst);
+    }
+    if let Some(state) = app.try_state::<PreCompactSize>() {
+        if let Ok(mut saved) = state.0.lock() {
+            *saved = None;
+        }
+    }
+    if let Some(state) = app.try_state::<LastCompactSize>() {
+        if let Ok(mut saved) = state.0.lock() {
+            *saved = None;
+        }
+    }
+    if win.is_maximized().unwrap_or(false) {
+        win.unmaximize().map_err(|error| error.to_string())?;
+    }
+    win.set_always_on_top(false)
+        .map_err(|error| error.to_string())?;
+    win.set_size(Size::Logical(LogicalSize::new(
+        DEFAULT_EXPANDED_WIDTH,
+        DEFAULT_EXPANDED_HEIGHT,
+    )))
+    .map_err(|error| error.to_string())?;
+    win.center().map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn take_config_reset_flag(app: AppHandle) -> bool {
+    app.try_state::<ConfigResetState>()
+        .map(|state| state.0.swap(false, Ordering::SeqCst))
+        .unwrap_or(false)
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateInfo {
+    current_version: String,
+    version: String,
+    date: Option<String>,
+    body: Option<String>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateDownloadProgress {
+    chunk_length: usize,
+    downloaded: u64,
+    total: Option<u64>,
+}
+
+#[tauri::command]
+async fn check_update(app: AppHandle) -> Result<Option<UpdateInfo>, String> {
+    let update = app
+        .updater_builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|error| error.to_string())?
+        .check()
+        .await
+        .map_err(|error| error.to_string())?;
+
+    Ok(update.map(|update| UpdateInfo {
+        current_version: update.current_version.clone(),
+        version: update.version.clone(),
+        date: update.date.as_ref().map(ToString::to_string),
+        body: update.body.clone(),
+    }))
+}
+
+/// Downloads the available update and parks it in PendingUpdate; nothing is
+/// installed yet. Returns the downloaded version, or None if no update exists.
+#[tauri::command]
+async fn download_update(app: AppHandle) -> Result<Option<String>, String> {
+    if shutdown_started(&app) {
+        return Err("XynMacro is closing".into());
+    }
+    let download_state = app.state::<UpdateDownloadState>();
+    let _download_guard = UpdateDownloadGuard::acquire(&download_state.active)?;
+    let generation = download_state.generation.load(Ordering::SeqCst);
+    let Some(mut update) = app
+        .updater_builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|error| error.to_string())?
+        .check()
+        .await
+        .map_err(|error| error.to_string())?
+    else {
+        return Ok(None);
+    };
+
+    // Metadata checks should be quick; the installer needs time on slower links.
+    update.timeout = Some(Duration::from_secs(600));
+    let progress_app = app.clone();
+    let finished_app = app.clone();
+    let mut downloaded = 0_u64;
+    let bytes = update
+        .download(
+            move |chunk_length, total| {
+                downloaded = downloaded.saturating_add(chunk_length as u64);
+                let _ = progress_app.emit(
+                    "update-download-progress",
+                    UpdateDownloadProgress {
+                        chunk_length,
+                        downloaded,
+                        total,
+                    },
+                );
+            },
+            move || {
+                let _ = finished_app.emit("update-download-finished", ());
+            },
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+
+    let version = update.version.clone();
+    let state = app.state::<PendingUpdate>();
+    let mut guard = state.0.lock().map_err(|error| error.to_string())?;
+    if !download_state.can_store(generation, shutdown_started(&app)) {
+        return Err("Update download was cancelled".into());
+    }
+    *guard = Some((update, bytes));
+    Ok(Some(version))
+}
+
+fn claim_shutdown_update<T>(
+    shutdown: &ShutdownState,
+    pending: &mut Option<T>,
+    require_update: bool,
+) -> Result<Option<T>, ()> {
+    if (require_update && pending.is_none()) || !shutdown.begin() {
+        return Err(());
+    }
+    Ok(pending.take())
+}
+
+fn discard_update<T>(shutdown: &ShutdownState, pending: &mut Option<T>) -> bool {
+    if shutdown.started.load(Ordering::SeqCst) {
+        return false;
+    }
+    pending.take().is_some()
+}
+
+/// Claim the downloaded update before shutdown can race with a discard.
+#[tauri::command]
+fn install_pending_update(app: AppHandle) -> bool {
+    request_shutdown_inner(app, true, true)
+}
+
+/// One shared keep-alive client for all proxy traffic. The UI polls /state and
+/// /logs several times a second; a fresh Client per call meant a fresh TCP
+/// connection each time.
+fn http_client() -> &'static reqwest::blocking::Client {
+    static CLIENT: OnceLock<reqwest::blocking::Client> = OnceLock::new();
+    // Without a timeout a stalled sidecar leaves the WebView `await`ing forever, so a
+    // click looks like it did nothing instead of reporting an error.
+    CLIENT.get_or_init(|| {
+        reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(10))
+            .no_proxy()
+            // Every request carries the backend token in a custom header, and reqwest
+            // only strips the *standard* auth headers when a redirect crosses hosts —
+            // a custom one would be forwarded verbatim. The sidecar never redirects, so
+            // refusing to follow any redirect keeps the token on loopback.
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .expect("building the loopback HTTP client cannot fail")
+    })
+}
+
+/// Where the Python sidecar script + read-only assets live.
+/// Dev: sibling `python/` next to the cargo manifest.
+/// Prod: bundled under the Tauri resource dir.
+#[allow(dead_code)] // used only by the dev (debug) data_dir / spawn_sidecar branches
+fn python_dir(app: &AppHandle) -> PathBuf {
+    #[cfg(debug_assertions)]
+    {
+        let _ = app;
+        let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        manifest
+            .parent()
+            .map(|p| p.join("python"))
+            .unwrap_or_else(|| PathBuf::from("python"))
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        app.path()
+            .resource_dir()
+            .map(|p| p.join("python"))
+            .unwrap_or_else(|_| PathBuf::from("python"))
+    }
+}
+
+/// Writable runtime dir for port file, config, saved logs.
+/// Dev: same as python_dir (so the existing flow Just Works).
+/// Prod: app-data dir (e.g. %LOCALAPPDATA%/com.htcgc.xyn/). Created on demand.
+fn data_dir(app: &AppHandle) -> PathBuf {
+    #[cfg(debug_assertions)]
+    {
+        python_dir(app)
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        let dir = app
+            .path()
+            .app_data_dir()
+            .unwrap_or_else(|_| PathBuf::from("."));
+        let _ = fs::create_dir_all(&dir);
+        dir
+    }
+}
+
+fn port_file_path(app: &AppHandle, launcher_pid: u32) -> PathBuf {
+    data_dir(app).join(format!("port_{launcher_pid}.json"))
+}
+
+fn update_error_path(app: &AppHandle) -> PathBuf {
+    data_dir(app).join("update_install_error.txt")
+}
+
+/// The sidecar's launch arguments.
+///
+/// The auth token is deliberately NOT here: a command line is readable by any
+/// same-user process on Windows (`Win32_Process.CommandLine`), which would hand
+/// out the credential for an API that injects raw mouse and keyboard input. It
+/// goes over the stdin pipe in `spawn_sidecar` instead, where it never lands
+/// anywhere queryable.
+fn sidecar_runtime_args(
+    launcher_pid: u32,
+    data_dir: &std::path::Path,
+    app_version: &str,
+) -> Vec<std::ffi::OsString> {
+    vec![
+        "--sidecar".into(),
+        "--pid".into(),
+        launcher_pid.to_string().into(),
+        "--data-dir".into(),
+        data_dir.as_os_str().to_owned(),
+        "--app-version".into(),
+        app_version.into(),
+        "--auth-token-stdin".into(),
+    ]
+}
+
+fn runtime_app_version() -> &'static str {
+    // Cargo.toml is the release version source of truth. The generated Tauri
+    // package context can remain stale across same-version local rebuilds.
+    env!("CARGO_PKG_VERSION")
+}
+
+fn generate_backend_auth_token() -> Result<String, String> {
+    let mut bytes = [0_u8; 32];
+    getrandom::fill(&mut bytes).map_err(|error| format!("secure random failed: {error}"))?;
+    let mut token = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        write!(&mut token, "{byte:02x}").expect("writing to a String cannot fail");
+    }
+    Ok(token)
+}
+
+fn backend_auth_token(app: &AppHandle) -> Result<String, String> {
+    app.try_state::<BackendAuthToken>()
+        .map(|token| token.0.clone())
+        .ok_or_else(|| "Backend authentication is unavailable".to_string())
+}
+
+#[tauri::command]
+fn discard_pending_update(app: AppHandle) -> bool {
+    let state = app.state::<PendingUpdate>();
+    let Ok(mut guard) = state.0.lock() else { return false };
+    let shutdown = app.state::<ShutdownState>();
+    if shutdown.started.load(Ordering::SeqCst) {
+        return false;
+    }
+    app.state::<UpdateDownloadState>().generation.fetch_add(1, Ordering::SeqCst);
+    discard_update(&shutdown, &mut guard)
+}
+
+#[tauri::command]
+fn take_update_install_error(app: AppHandle) -> Option<String> {
+    let path = update_error_path(&app);
+    let message = fs::read_to_string(&path).ok();
+    let _ = fs::remove_file(path);
+    message
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn spawn_sidecar(
+    app: &AppHandle,
+    launcher_pid: u32,
+    app_version: &str,
+    auth_token: &str,
+) -> Result<Child, String> {
+    let ddir = data_dir(app);
+    // Best-effort: kill any leftover port file from a previous run with the same launcher PID.
+    let _ = fs::remove_file(port_file_path(app, launcher_pid));
+
+    // Dev: run the .py with the system `py` launcher so script edits are live.
+    // Release: run the bundled, self-contained PyInstaller exe sitting next to the
+    // app exe — the user needs no Python or pip packages installed.
+    #[cfg(debug_assertions)]
+    let mut cmd = {
+        let dir = python_dir(app);
+        let script = dir.join("xynmacro_core.py");
+        if !script.exists() {
+            return Err(format!("Sidecar script not found at {:?}", script));
+        }
+        let python_cmd = if cfg!(target_os = "windows") {
+            "py"
+        } else {
+            "python3"
+        };
+        println!("[tauri] (dev) Spawning sidecar: {python_cmd} {:?}", script);
+        let mut c = Command::new(python_cmd);
+        c.arg(&script).current_dir(&dir);
+        c
+    };
+
+    #[cfg(not(debug_assertions))]
+    let mut cmd = {
+        let exe = std::env::current_exe().map_err(|e| format!("current_exe failed: {e}"))?;
+        let sidecar = exe
+            .parent()
+            .map(|d| d.join(SIDECAR_EXE))
+            .ok_or_else(|| "could not resolve sidecar directory".to_string())?;
+        if !sidecar.exists() {
+            return Err(format!("Sidecar exe not found at {:?}", sidecar));
+        }
+        println!("[tauri] Spawning bundled sidecar: {:?}", sidecar);
+        Command::new(sidecar)
+    };
+
+    cmd.args(sidecar_runtime_args(launcher_pid, &ddir, app_version))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit());
+
+    // On Windows, suppress the console window the `py` launcher pops up for child python.exe.
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("Failed to spawn sidecar: {e}"))?;
+
+    // Hand over the token and close the pipe immediately: the sidecar blocks on this
+    // one line before it serves anything, and dropping the writer is what ends its
+    // read. On any failure kill the child rather than leaving it waiting forever.
+    let handed_over = match child.stdin.take() {
+        Some(mut stdin) => {
+            use std::io::Write as _;
+            writeln!(stdin, "{auth_token}").and_then(|()| stdin.flush())
+            // `stdin` drops here, closing the pipe.
+        }
+        None => Err(std::io::Error::other("sidecar stdin was not captured")),
+    };
+    if let Err(error) = handed_over {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(format!("Failed to send the backend token: {error}"));
+    }
+    Ok(child)
+}
+
+#[derive(Debug, Deserialize, PartialEq)]
+struct BackendEndpoint {
+    port: u16,
+    pid: u32,
+}
+
+fn parse_backend_endpoint(text: &str) -> Option<BackendEndpoint> {
+    let endpoint: BackendEndpoint = serde_json::from_str(text).ok()?;
+    (endpoint.port != 0 && endpoint.pid != 0).then_some(endpoint)
+}
+
+fn shutdown_started(app: &AppHandle) -> bool {
+    app.try_state::<ShutdownState>()
+        .is_some_and(|state| state.started.load(Ordering::SeqCst))
+}
+
+fn backend_child_exited(app: &AppHandle) -> bool {
+    app.try_state::<PythonProcess>()
+        .and_then(|process| {
+            process.0.lock().ok().map(|mut child| {
+                child.as_mut().is_none_or(|child| matches!(child.try_wait(), Ok(Some(_))))
+            })
+        })
+        .unwrap_or(true)
+}
+
+fn read_backend_port(app: &AppHandle, launcher_pid: u32) -> Result<BackendEndpoint, String> {
+    let path = port_file_path(app, launcher_pid);
+    for attempt in 1..=60 {
+        if shutdown_started(app) || backend_child_exited(app) {
+            return Err("XynMacro's engine exited before it became ready. Restart XynMacro and check antivirus quarantine.".into());
+        }
+        if let Ok(text) = fs::read_to_string(&path) {
+            if let Some(endpoint) = parse_backend_endpoint(&text) {
+                println!("[tauri] Found port {} on attempt {attempt}", endpoint.port);
+                return Ok(endpoint);
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+    Err("XynMacro's engine never started. Antivirus may have blocked or removed it.".into())
+}
+
+fn backend_health_matches(body: &serde_json::Value, endpoint: &BackendEndpoint) -> bool {
+    body.get("ok").and_then(|value| value.as_bool()) == Some(true)
+        && body.get("pid").and_then(|value| value.as_u64()) == Some(u64::from(endpoint.pid))
+        && body.get("version").and_then(|value| value.as_str()) == Some(runtime_app_version())
+}
+
+fn wait_for_backend(app: &AppHandle, endpoint: &BackendEndpoint, auth_token: &str) -> bool {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(2))
+        .no_proxy()
+        // Same reasoning as http_client(): this probe sends the token too.
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .ok();
+    let Some(client) = client else { return false };
+    for i in 0..40 {
+        if shutdown_started(app) || backend_child_exited(app) {
+            return false;
+        }
+        let healthy = client
+            .get(loopback_url(endpoint.port, "/health"))
+            .header(BACKEND_AUTH_HEADER, auth_token)
+            .send()
+            .ok()
+            .filter(|response| response.status().is_success())
+            .and_then(|response| response.json::<serde_json::Value>().ok())
+            .is_some_and(|body| backend_health_matches(&body, endpoint));
+        if healthy {
+            println!("[tauri] Backend healthy after {} attempts", i + 1);
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+    false
+}
+
+#[cfg(target_os = "windows")]
+fn run_taskkill_bounded(args: &[&str], timeout: Duration) {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+    let Ok(mut taskkill) = Command::new("taskkill")
+        .args(args)
+        .creation_flags(CREATE_NO_WINDOW)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    else {
+        return;
+    };
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if matches!(taskkill.try_wait(), Ok(Some(_))) {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let _ = taskkill.kill();
+    let _ = taskkill.try_wait();
+}
+
+/// Tell the sidecar this shutdown was deliberate, before it is killed.
+///
+/// The sidecar records each session as unclean and only flips it on the way out, so the
+/// next launch can tell a crash from an ordinary close. Its own parent watchdog cannot
+/// do that here: this app kills it with `taskkill /F`, which lands long before the
+/// watchdog's next 250ms poll. Without this call every single close would look like a
+/// crash. Best-effort and short — a shutdown must not hang waiting on it.
+fn mark_sidecar_shutdown_clean(app: &AppHandle) {
+    let mut port = get_backend_port(app.clone());
+    // Hotkeys are registered as soon as Python publishes the port. A close can
+    // beat the discovery thread, so input cleanup must also cover that interval.
+    if port == 0 {
+        if let Some(state) = app.try_state::<ShutdownState>() {
+            port = fs::read_to_string(port_file_path(app, state.launcher_pid))
+                .ok()
+                .and_then(|text| parse_backend_endpoint(&text))
+                .map(|endpoint| endpoint.port)
+                .unwrap_or(0);
+        }
+    }
+    if port == 0 {
+        return;
+    }
+    let Ok(auth_token) = backend_auth_token(app) else {
+        return;
+    };
+    let Ok(client) = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_millis(400))
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+    else {
+        return;
+    };
+    let _ = client
+        .post(loopback_url(port, "/command"))
+        .header(BACKEND_AUTH_HEADER, auth_token)
+        .json(&serde_json::json!({ "action": "session_shutdown_clean" }))
+        .send();
+}
+
+fn terminate_tracked_child(app: &AppHandle, timeout: Duration) {
+    let child = app
+        .try_state::<PythonProcess>()
+        .and_then(|process| process.0.lock().ok().and_then(|mut guard| guard.take()));
+    let Some(mut child) = child else { return };
+    let pid = child.id();
+    println!("[tauri] Terminating sidecar PID {pid}");
+    let deadline = Instant::now() + timeout;
+
+    if matches!(child.try_wait(), Ok(Some(_))) {
+        return;
+    }
+
+    #[cfg(target_os = "windows")]
+    run_taskkill_bounded(
+        &["/F", "/T", "/PID", &pid.to_string()],
+        Duration::from_millis(300),
+    );
+    #[cfg(not(target_os = "windows"))]
+    let _ = child.kill();
+
+    while Instant::now() < deadline {
+        if matches!(child.try_wait(), Ok(Some(_))) {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let _ = child.kill();
+    for _ in 0..10 {
+        if matches!(child.try_wait(), Ok(Some(_))) {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn sidecar_executable_path() -> Result<PathBuf, String> {
+    let exe = std::env::current_exe().map_err(|error| format!("current_exe failed: {error}"))?;
+    exe.parent()
+        .map(|dir| dir.join(SIDECAR_EXE))
+        .ok_or_else(|| "could not resolve sidecar directory".to_string())
+}
+
+#[cfg(target_os = "windows")]
+fn wait_for_sidecar_unlock() -> Result<(), String> {
+    use std::os::windows::fs::OpenOptionsExt;
+
+    let sidecar = sidecar_executable_path()?;
+    if !sidecar.exists() {
+        return Ok(());
+    }
+    let deadline = Instant::now() + Duration::from_millis(900);
+    while Instant::now() < deadline {
+        if fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(&sidecar)
+            .is_ok()
+        {
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    Err("XynMacro didn't close in time. The update will be offered again.".into())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn wait_for_sidecar_unlock() -> Result<(), String> {
+    Ok(())
+}
+
+fn restart_with_update_error(app: &AppHandle, message: &str) {
+    eprintln!("[tauri] Update install cancelled: {message}");
+    let _ = fs::write(update_error_path(app), message);
+    app.state::<ShutdownState>().cleanup_complete.store(true, Ordering::SeqCst);
+    app.request_restart();
+}
+
+fn request_shutdown(app: AppHandle, hide_window: bool) -> bool {
+    request_shutdown_inner(app, hide_window, false)
+}
+
+fn request_shutdown_inner(app: AppHandle, hide_window: bool, require_update: bool) -> bool {
+    let Some(state) = app.try_state::<ShutdownState>() else {
+        return false;
+    };
+    let pending_update = {
+        let Some(pending) = app.try_state::<PendingUpdate>() else { return false };
+        let Ok(mut guard) = pending.0.lock() else { return false };
+        // Download storage and discard use this same mutex. Once shutdown wins,
+        // the installer bytes belong only to its worker.
+        let Ok(update) = claim_shutdown_update(&state, &mut guard, require_update) else {
+            return false;
+        };
+        update
+    };
+    if hide_window {
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = window.hide();
+        }
+    }
+    let launcher_pid = state.launcher_pid;
+    std::thread::spawn(move || {
+        mark_sidecar_shutdown_clean(&app);
+        terminate_tracked_child(&app, Duration::from_millis(650));
+        cleanup_port_file(&app, launcher_pid);
+        if let Some((update, bytes)) = pending_update {
+            if let Err(error) = wait_for_sidecar_unlock() {
+                restart_with_update_error(&app, &error);
+                return;
+            }
+            println!("[tauri] Installing downloaded update after cleanup");
+            if let Err(error) = update.install(bytes) {
+                eprintln!("[tauri] Update install failed: {error}");
+                let message = error.to_string();
+                // The backend has already been stopped and the window hidden.
+                // Relaunch cleanly, surface the failure, and let the next
+                // update check offer the version again.
+                restart_with_update_error(&app, &message);
+                return;
+            }
+            // Windows normally exits inside install(); if it returns on any
+            // platform, restart through Tauri after cleanup instead of leaving
+            // a visible shell with no backend.
+            app.state::<ShutdownState>().cleanup_complete.store(true, Ordering::SeqCst);
+            app.request_restart();
+            return;
+        }
+        app.state::<ShutdownState>().cleanup_complete.store(true, Ordering::SeqCst);
+        app.exit(0);
+    });
+    true
+}
+
+fn cleanup_port_file(app: &AppHandle, launcher_pid: u32) {
+    let _ = fs::remove_file(port_file_path(app, launcher_pid));
+}
+
+/// Surface a fatal sidecar-startup problem to the UI. Without this the splash just
+/// times out and the user is left with a fully-loaded window where nothing works and
+/// no error is shown (the real cause only went to stderr, which a GUI user never sees).
+fn notify_backend_error(app: &AppHandle, msg: &str) {
+    if let Some(state) = app.try_state::<BackendStartError>() {
+        if let Ok(mut message) = state.0.lock() {
+            *message = Some(msg.into());
+        }
+    }
+    if let Some(win) = app.get_webview_window("main") {
+        let safe = serde_json::to_string(msg).expect("serializing a string cannot fail");
+        let _ = win.eval(format!(
+            "window.dispatchEvent(new CustomEvent('backend-error', {{ detail: {{ message: {safe} }} }}));"
+        ));
+    }
+}
+
+fn backend_start_failed(app: &AppHandle, launcher_pid: u32, message: &str) {
+    if shutdown_started(app) {
+        return;
+    }
+    terminate_tracked_child(app, Duration::from_millis(650));
+    cleanup_port_file(app, launcher_pid);
+    notify_backend_error(app, message);
+}
+
+#[tauri::command]
+fn get_backend_port(app: AppHandle) -> u16 {
+    app.try_state::<BackendPort>()
+        .and_then(|p| p.0.lock().ok().map(|g| *g))
+        .unwrap_or(0)
+}
+
+#[tauri::command]
+fn get_backend_error(app: AppHandle) -> Option<String> {
+    app.try_state::<BackendStartError>()
+        .and_then(|state| state.0.lock().ok().and_then(|message| message.clone()))
+}
+
+/// Build `http://127.0.0.1:{port}{path}`, tolerating a path with or without the
+/// leading slash.
+fn loopback_url(port: u16, path: &str) -> String {
+    if path.starts_with('/') {
+        format!("http://127.0.0.1:{port}{path}")
+    } else {
+        format!("http://127.0.0.1:{port}/{path}")
+    }
+}
+
+/// Run one blocking loopback request off the main thread.
+///
+/// These commands must be `async` and hand the blocking reqwest call to
+/// `spawn_blocking`: a synchronous `#[tauri::command]` runs on the event-loop
+/// thread, so a single stalled request serialises every other `invoke` behind it.
+/// The UI polls /state and /logs ~4x a second, so once service time exceeded the
+/// poll interval the invoke queue never drained and every button went dead
+/// (silently — the renderer keeps animating in its own process).
+async fn run_blocking_request<F>(request: F) -> Result<serde_json::Value, String>
+where
+    F: FnOnce() -> Result<serde_json::Value, String> + Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(request)
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn send_to_python(
+    app: AppHandle,
+    action: String,
+    value: Option<serde_json::Value>,
+) -> Result<serde_json::Value, String> {
+    let port = get_backend_port(app.clone());
+    if port == 0 {
+        return Err("Backend not ready".into());
+    }
+    let body = serde_json::json!({ "action": action, "value": value });
+    let auth_token = backend_auth_token(&app)?;
+    let url = loopback_url(port, "/command");
+    run_blocking_request(move || {
+        if shutdown_started(&app) {
+            return Err("XynMacro is closing".into());
+        }
+        http_client()
+            .post(url)
+            .header(BACKEND_AUTH_HEADER, auth_token)
+            .json(&body)
+            .send()
+            .map_err(|e| e.to_string())?
+            .json::<serde_json::Value>()
+            .map_err(|e| e.to_string())
+    })
+    .await
+}
+
+#[tauri::command]
+async fn proxy_get(app: AppHandle, path: String) -> Result<serde_json::Value, String> {
+    let port = get_backend_port(app.clone());
+    if port == 0 {
+        return Err("Backend not ready".into());
+    }
+    let url = loopback_url(port, &path);
+    let auth_token = backend_auth_token(&app)?;
+    run_blocking_request(move || {
+        if shutdown_started(&app) {
+            return Err("XynMacro is closing".into());
+        }
+        http_client()
+            .get(url)
+            .header(BACKEND_AUTH_HEADER, auth_token)
+            .send()
+            .map_err(|e| e.to_string())?
+            .json::<serde_json::Value>()
+            .map_err(|e| e.to_string())
+    })
+    .await
+}
+
+fn proxy_post_request(port: u16, path: &str, auth_token: &str) -> reqwest::blocking::RequestBuilder {
+    let request = http_client()
+        .post(loopback_url(port, path))
+        .header(BACKEND_AUTH_HEADER, auth_token);
+    if path.trim_start_matches('/') == "pick_save_dir" {
+        // Folder selection waits for the user, rather than for sidecar work.
+        request.timeout(Duration::from_secs(600))
+    } else {
+        request
+    }
+}
+
+#[tauri::command]
+async fn proxy_post(
+    app: AppHandle,
+    path: String,
+    body: Option<serde_json::Value>,
+) -> Result<serde_json::Value, String> {
+    let port = get_backend_port(app.clone());
+    if port == 0 {
+        return Err("Backend not ready".into());
+    }
+    let auth_token = backend_auth_token(&app)?;
+    run_blocking_request(move || {
+        if shutdown_started(&app) {
+            return Err("XynMacro is closing".into());
+        }
+        let mut req = proxy_post_request(port, &path, &auth_token);
+        if let Some(b) = body {
+            req = req.json(&b);
+        }
+        req.send()
+            .map_err(|e| e.to_string())?
+            .json::<serde_json::Value>()
+            .map_err(|e| e.to_string())
+    })
+    .await
+}
+
+/// Let Win11 round the window corners (~8px) so the native drop shadow follows the rounded
+/// shape and bleeds off the edges like a normal app. CSS --window-radius is a hair smaller
+/// (6px) so the opaque frame fills under DWM's clip — no transparent crescent at the corners.
+#[cfg(target_os = "windows")]
+fn round_window_corners(win: &tauri::WebviewWindow) {
+    use windows_sys::Win32::Graphics::Dwm::{
+        DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND,
+    };
+    let Ok(handle) = win.hwnd() else { return };
+    let pref: i32 = DWMWCP_ROUND;
+    unsafe {
+        let _ = DwmSetWindowAttribute(
+            handle.0 as _,
+            DWMWA_WINDOW_CORNER_PREFERENCE as u32,
+            &pref as *const _ as *const _,
+            std::mem::size_of::<i32>() as u32,
+        );
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn round_window_corners(_win: &tauri::WebviewWindow) {}
+
+/// The debug HUD lives in its own transparent, always-on-top window.
+///
+/// Two modes, and they want opposite things from the OS: `docked` is pinned over
+/// Roblox's client and must be click-through so it never eats a click meant for the
+/// game, while `window` is a normal draggable panel you can park on another monitor.
+const HUD_LABEL: &str = "hud";
+
+#[cfg(target_os = "windows")]
+fn set_click_through(win: &tauri::WebviewWindow, on: bool) {
+    // Tauri's ignore_cursor_events covers clicks. WS_EX_NOACTIVATE is the other half:
+    // without it the HUD can still take focus from the game when it is shown or raised.
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GetWindowLongPtrW, SetWindowLongPtrW, GWL_EXSTYLE, WS_EX_NOACTIVATE,
+    };
+    let _ = win.set_ignore_cursor_events(on);
+    let Ok(handle) = win.hwnd() else { return };
+    unsafe {
+        let current = GetWindowLongPtrW(handle.0 as _, GWL_EXSTYLE);
+        let updated = if on {
+            current | WS_EX_NOACTIVATE as isize
+        } else {
+            current & !(WS_EX_NOACTIVATE as isize)
+        };
+        SetWindowLongPtrW(handle.0 as _, GWL_EXSTYLE, updated);
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn set_click_through(win: &tauri::WebviewWindow, on: bool) {
+    let _ = win.set_ignore_cursor_events(on);
+}
+
+#[tauri::command]
+async fn hud(
+    app: AppHandle,
+    action: String,
+    value: Option<serde_json::Value>,
+) -> Result<serde_json::Value, String> {
+    let existing = app.get_webview_window(HUD_LABEL);
+    match action.as_str() {
+        "state" => Ok(serde_json::json!({ "open": existing.is_some() })),
+        "close" => {
+            if let Some(win) = existing {
+                win.destroy().map_err(|e| e.to_string())?;
+            }
+            Ok(serde_json::json!({ "open": false }))
+        }
+        "hide" => {
+            if let Some(win) = existing {
+                if win.url().map_err(|e| e.to_string())?.query() != Some("mode=window") {
+                    win.hide().map_err(|e| e.to_string())?;
+                }
+                Ok(serde_json::json!({ "open": true }))
+            } else {
+                Ok(serde_json::json!({ "open": false }))
+            }
+        }
+        "open" => {
+            let docked = value
+                .as_ref()
+                .and_then(|v| v.get("docked"))
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true);
+            // The page reads its mode from the query string.
+            let url = if docked {
+                "hud.html"
+            } else {
+                "hud.html?mode=window"
+            };
+            let win = match existing {
+                Some(win) => {
+                    let mut target = win.url().map_err(|e| e.to_string())?;
+                    let query = if docked { None } else { Some("mode=window") };
+                    if target.query() != query {
+                        target.set_query(query);
+                        win.navigate(target).map_err(|e| e.to_string())?;
+                    }
+                    win
+                },
+                None => tauri::WebviewWindowBuilder::new(
+                    &app,
+                    HUD_LABEL,
+                    tauri::WebviewUrl::App(url.into()),
+                )
+                .title("XynMacro debug HUD")
+                .inner_size(360.0, 460.0)
+                .decorations(false)
+                .transparent(true)
+                .always_on_top(true)
+                .skip_taskbar(true)
+                .shadow(false)
+                .resizable(false)
+                .focused(false)
+                // Created hidden: docked mode has to reach Roblox's client rect before
+                // it is seen, or it flashes on whichever monitor Tauri defaulted to.
+                // The page calls the "show" action once it has placed itself.
+                .visible(false)
+                .build()
+                .map_err(|e| e.to_string())?,
+            };
+            set_click_through(&win, docked);
+            Ok(serde_json::json!({ "open": true, "docked": docked }))
+        }
+        // The HUD page drives its own geometry: it knows Roblox's client rect from
+        // /state, and in docked mode it covers the whole client so it can draw the
+        // region boxes in the right place.
+        "place" => {
+            let Some(win) = existing else {
+                return Err("HUD is not open".into());
+            };
+            let get = |key: &str| -> Option<i32> {
+                value
+                    .as_ref()
+                    .and_then(|v| v.get(key))
+                    .and_then(|v| v.as_i64())
+                    .and_then(|n| i32::try_from(n).ok())
+            };
+            let (Some(x), Some(y), Some(width), Some(height)) =
+                (get("x"), get("y"), get("width"), get("height"))
+            else {
+                return Err("place needs x, y, width and height".into());
+            };
+            if width <= 0 || height <= 0 {
+                return Err("place needs a positive size".into());
+            }
+            win.set_size(Size::Physical(PhysicalSize {
+                width: width as u32,
+                height: height as u32,
+            }))
+            .map_err(|e| e.to_string())?;
+            win.set_position(Position::Physical(PhysicalPosition { x, y }))
+                .map_err(|e| e.to_string())?;
+            Ok(serde_json::json!({ "open": true }))
+        }
+        "show" => {
+            let Some(win) = existing else {
+                return Err("HUD is not open".into());
+            };
+            win.show().map_err(|e| e.to_string())?;
+            Ok(serde_json::json!({ "open": true }))
+        }
+        // Where the window actually is, which is not the same as where the page last
+        // put it: popped out, the user can drag it anywhere, including back over the
+        // game. The page needs the real rect to detect that.
+        "rect" => {
+            let Some(win) = existing else {
+                return Err("HUD is not open".into());
+            };
+            let position = win.outer_position().map_err(|e| e.to_string())?;
+            let size = win.outer_size().map_err(|e| e.to_string())?;
+            Ok(serde_json::json!({
+                "x": position.x,
+                "y": position.y,
+                "width": size.width,
+                "height": size.height,
+            }))
+        }
+        "docked" => {
+            let Some(win) = existing else {
+                return Err("HUD is not open".into());
+            };
+            let on = value
+                .as_ref()
+                .and_then(|v| v.as_bool())
+                .ok_or("docked needs a boolean")?;
+            set_click_through(&win, on);
+            win.set_resizable(!on).map_err(|e| e.to_string())?;
+            Ok(serde_json::json!({ "open": true, "docked": on }))
+        }
+        "drag" => {
+            let Some(win) = existing else {
+                return Err("HUD is not open".into());
+            };
+            win.start_dragging().map_err(|e| e.to_string())?;
+            Ok(serde_json::json!({ "open": true }))
+        }
+        other => Err(format!("unknown hud action: {other}")),
+    }
+}
+
+#[tauri::command]
+fn wc(app: AppHandle, action: String, value: Option<serde_json::Value>) -> Result<(), String> {
+    let Some(win) = app.get_webview_window("main") else {
+        return Err("main window not found".into());
+    };
+    match action.as_str() {
+        "minimize" => win.minimize().map_err(|e| e.to_string()),
+        "maximize" => {
+            let is_max = win.is_maximized().unwrap_or(false);
+            if is_max {
+                win.unmaximize()
+            } else {
+                win.maximize()
+            }
+            .map_err(|e| e.to_string())
+        }
+        "close" => win.close().map_err(|e| e.to_string()),
+        "ontop" => {
+            let on = value.as_ref().and_then(|v| v.as_bool()).unwrap_or(false);
+            win.set_always_on_top(on).map_err(|e| e.to_string())
+        }
+        "drag" => win.start_dragging().map_err(|e| e.to_string()),
+        "show" => win.show().map_err(|e| e.to_string()),
+        "compact" => {
+            if let Some(state) = app.try_state::<WindowPrefsState>() {
+                state.compact_or_animating.store(true, Ordering::SeqCst);
+            }
+            if let Ok(bounds) = capture_expanded_window_bounds(&app) {
+                let _ = write_saved_window_bounds(&app, bounds);
+            }
+            // Save the current expanded size so we can restore it on uncompact.
+            // Target size = last remembered compact size, or fall back to current_width × default_height.
+            let scale = win.scale_factor().unwrap_or(1.0);
+            let cur = win.inner_size().map_err(|e| e.to_string())?;
+            let cur_w = cur.width as f64 / scale;
+            let cur_h = cur.height as f64 / scale;
+            let anim = app.state::<WindowAnim>();
+            let my_gen = anim.gen.fetch_add(1, Ordering::SeqCst) + 1;
+            // If an uncompact animation is still in flight, its target is the true
+            // expanded size — saving the half-animated current size would make the
+            // next uncompact restore a shrunken window.
+            let in_flight = anim.target.lock().ok().and_then(|mut g| g.take());
+            let (lw, lh) = in_flight.unwrap_or((cur_w, cur_h));
+            if let Some(state) = app.try_state::<PreCompactSize>() {
+                if let Ok(mut g) = state.0.lock() {
+                    *g = Some((lw, lh));
+                }
+            }
+            let last_compact = app
+                .try_state::<LastCompactSize>()
+                .and_then(|s| s.0.lock().ok().and_then(|g| *g));
+            let (target_w, target_h) = last_compact.unwrap_or((lw, DEFAULT_COMPACT_HEIGHT));
+            if let Ok(mut g) = anim.target.lock() {
+                *g = Some((target_w, target_h));
+            }
+            let win2 = win.clone();
+            let app2 = app.clone();
+            // Animate width and height together so a saved narrower pill smoothly slides in.
+            std::thread::spawn(move || {
+                let anim = app2.state::<WindowAnim>();
+                let steps: u32 = 14;
+                for i in 1..=steps {
+                    if anim.gen.load(Ordering::SeqCst) != my_gen {
+                        return;
+                    }
+                    let t = i as f64 / steps as f64;
+                    let eased = 1.0 - (1.0 - t).powi(3);
+                    let w = cur_w + (target_w - cur_w) * eased;
+                    let h = cur_h + (target_h - cur_h) * eased;
+                    let _ = win2.set_size(Size::Logical(LogicalSize::new(w, h)));
+                    std::thread::sleep(std::time::Duration::from_millis(16));
+                }
+                if anim.gen.load(Ordering::SeqCst) == my_gen {
+                    let _ = win2.set_size(Size::Logical(LogicalSize::new(target_w, target_h)));
+                    if let Ok(mut g) = anim.target.lock() {
+                        *g = None;
+                    }
+                }
+            });
+            Ok(())
+        }
+        "uncompact" => {
+            if let Some(state) = app.try_state::<WindowPrefsState>() {
+                state.compact_or_animating.store(true, Ordering::SeqCst);
+            }
+            // Save the current pill size so the next compact restores it.
+            // Target = pre-compact expanded size (defaults to 1100×720 first run).
+            let scale = win.scale_factor().unwrap_or(1.0);
+            let cur = win.inner_size().map_err(|e| e.to_string())?;
+            let cur_w = cur.width as f64 / scale;
+            let cur_h = cur.height as f64 / scale;
+            let anim = app.state::<WindowAnim>();
+            let my_gen = anim.gen.fetch_add(1, Ordering::SeqCst) + 1;
+            // Mirror of the compact arm: a mid-flight compact animation's target is
+            // the true pill size to remember.
+            let in_flight = anim.target.lock().ok().and_then(|mut g| g.take());
+            let (pill_w, pill_h) = in_flight.unwrap_or((cur_w, cur_h));
+            if let Some(state) = app.try_state::<LastCompactSize>() {
+                if let Ok(mut g) = state.0.lock() {
+                    *g = Some((pill_w, pill_h));
+                }
+            }
+            let pre = app
+                .try_state::<PreCompactSize>()
+                .and_then(|s| s.0.lock().ok().and_then(|g| *g));
+            let (target_w, target_h) =
+                pre.unwrap_or((DEFAULT_EXPANDED_WIDTH, DEFAULT_EXPANDED_HEIGHT));
+            if let Ok(mut g) = anim.target.lock() {
+                *g = Some((target_w, target_h));
+            }
+            let win2 = win.clone();
+            let app2 = app.clone();
+            std::thread::spawn(move || {
+                let anim = app2.state::<WindowAnim>();
+                let steps: u32 = 14;
+                for i in 1..=steps {
+                    if anim.gen.load(Ordering::SeqCst) != my_gen {
+                        return;
+                    }
+                    let t = i as f64 / steps as f64;
+                    let eased = 1.0 - (1.0 - t).powi(3);
+                    let w = cur_w + (target_w - cur_w) * eased;
+                    let h = cur_h + (target_h - cur_h) * eased;
+                    let _ = win2.set_size(Size::Logical(LogicalSize::new(w, h)));
+                    std::thread::sleep(std::time::Duration::from_millis(16));
+                }
+                if anim.gen.load(Ordering::SeqCst) == my_gen {
+                    let _ = win2.set_size(Size::Logical(LogicalSize::new(target_w, target_h)));
+                    if let Ok(mut g) = anim.target.lock() {
+                        *g = None;
+                    }
+                    if let Some(state) = app2.try_state::<WindowPrefsState>() {
+                        state.compact_or_animating.store(false, Ordering::SeqCst);
+                    }
+                    schedule_window_bounds_save(app2.clone());
+                }
+            });
+            Ok(())
+        }
+        other => Err(format!("Unknown wc action: {other}")),
+    }
+}
+
+pub fn run() {
+    let launcher_pid = std::process::id();
+    let backend_auth_token =
+        generate_backend_auth_token().expect("failed to create backend authentication token");
+    let setup_auth_token = backend_auth_token.clone();
+
+    tauri::Builder::default()
+        // Must be first: a second shell must exit before setup can spawn a
+        // competing sidecar and register duplicate global hotkeys.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+            }
+        }))
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .manage(PythonProcess(Mutex::new(None)))
+        .manage(BackendPort(Mutex::new(0_u16)))
+        .manage(BackendStartError(Mutex::new(None)))
+        .manage(BackendAuthToken(backend_auth_token))
+        .manage(PreCompactSize(Mutex::new(None)))
+        .manage(LastCompactSize(Mutex::new(None)))
+        .manage(WindowAnim { gen: AtomicU64::new(0), target: Mutex::new(None) })
+        .manage(WindowPrefsState {
+            compact_or_animating: AtomicBool::new(false),
+            save_generation: AtomicU64::new(0),
+        })
+        .manage(ConfigResetState(AtomicBool::new(false)))
+        .manage(PendingUpdate(Mutex::new(None)))
+        .manage(UpdateDownloadState::default())
+        .manage(ShutdownState {
+            started: AtomicBool::new(false),
+            cleanup_complete: AtomicBool::new(false),
+            launcher_pid,
+        })
+        .setup(move |app| {
+            println!("[tauri] Launcher PID: {launcher_pid}");
+
+            // macro_config.json is the user-visible reset anchor. Check before
+            // the sidecar recreates it, then discard the native bounds and tell
+            // the frontend to clear its active preferences once.
+            let macro_config = data_dir(app.handle()).join("json").join("macro_config.json");
+            let config_was_deleted = !macro_config.exists();
+            if let Some(state) = app.try_state::<ConfigResetState>() {
+                state.0.store(config_was_deleted, Ordering::SeqCst);
+            }
+            if config_was_deleted {
+                if let Ok(path) = app_prefs_path(app.handle()) {
+                    let _ = fs::remove_file(path);
+                }
+                // macro_config.json is the documented full-reset anchor. Clear
+                // the remaining runtime preferences before Python seeds the
+                // shipped calibration files for this launch. Logs and exports
+                // are preserved deliberately.
+                let root = data_dir(app.handle());
+                for path in [
+                    root.join("json").join("button_calibration.json"),
+                    root.join("json").join("region_calibration.json"),
+                    root.join("json").join("pixel_calibration.json"),
+                    root.join("save_dir.txt"),
+                ] {
+                    let _ = fs::remove_file(path);
+                }
+            }
+
+            if let Some(win) = app.get_webview_window("main") {
+                // Round corners via DWM + keep the native drop shadow so the window has depth
+                // on the desktop like a normal app, with the shadow bleeding off the edges
+                // (no transparent gutter). CSS --window-radius (6px) sits just inside DWM's
+                // ~8px so the opaque frame fills under DWM's clip and there's no crescent.
+                round_window_corners(&win);
+                let _ = win.set_shadow(true);
+                if config_was_deleted {
+                    let _ = win.set_always_on_top(false);
+                }
+            }
+            if !config_was_deleted {
+                restore_saved_window_bounds(app.handle());
+            }
+
+            let app_handle = app.handle().clone();
+            let app_version = runtime_app_version();
+            let spawned = match spawn_sidecar(
+                &app_handle,
+                launcher_pid,
+                app_version,
+                &setup_auth_token,
+            ) {
+                Ok(child) => {
+                    if let Some(proc) = app.try_state::<PythonProcess>() {
+                        if let Ok(mut g) = proc.0.lock() {
+                            *g = Some(child);
+                        }
+                    }
+                    true
+                }
+                Err(e) => {
+                    eprintln!("[tauri] {e}");
+                    let message = "XynMacro's engine could not start. Check the installation and antivirus quarantine, then restart XynMacro.";
+                    notify_backend_error(app.handle(), message);
+                    false
+                }
+            };
+
+            // Port discovery + health check off the main thread so the window can show.
+            let handle = app.handle().clone();
+            let health_auth_token = setup_auth_token.clone();
+            if spawned {
+                std::thread::spawn(move || {
+                let endpoint = match read_backend_port(&handle, launcher_pid) {
+                    Ok(endpoint) => endpoint,
+                    Err(message) => {
+                        backend_start_failed(&handle, launcher_pid, &message);
+                        return;
+                    }
+                };
+                if !wait_for_backend(&handle, &endpoint, &health_auth_token) {
+                    backend_start_failed(&handle, launcher_pid, "XynMacro's engine started but never responded correctly. Restart XynMacro; if this continues, reinstall it and check antivirus quarantine.");
+                    return;
+                }
+                let port = endpoint.port;
+                if let Some(p) = handle.try_state::<BackendPort>() {
+                    if let Ok(mut g) = p.0.lock() {
+                        if shutdown_started(&handle) {
+                            return;
+                        }
+                        *g = port;
+                    }
+                }
+                println!("[tauri] Sidecar ready on port {port}");
+                if let Some(win) = handle.get_webview_window("main") {
+                    let _ = win.eval(format!(
+                        "window.__BACKEND_PORT__ = {port}; window.dispatchEvent(new CustomEvent('backend-ready', {{ detail: {{ port: {port} }} }}));"
+                    ));
+                }
+                });
+            }
+
+            // Reveal the window once it should be painted. The frontend also calls
+            // wc:show as soon as it paints; whichever fires first wins. Starting hidden
+            // avoids the blank/transparent frame before the splash renders.
+            let show_handle = app.handle().clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(1200));
+                if shutdown_started(&show_handle) {
+                    return;
+                }
+                if let Some(win) = show_handle.get_webview_window("main") {
+                    let _ = win.show();
+                }
+            });
+
+            Ok(())
+        })
+        .on_window_event(move |window, event| {
+            if window.label() == "main"
+                && matches!(event, tauri::WindowEvent::Moved(_) | tauri::WindowEvent::Resized(_))
+            {
+                schedule_window_bounds_save(window.app_handle().clone());
+            }
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() == "main" {
+                    api.prevent_close();
+                    let app_handle = window.app_handle().clone();
+                    // The HUD is always-on-top and has no taskbar entry, so it would
+                    // hang over the desktop for the whole shutdown with no way to
+                    // dismiss it. Take it down first.
+                    if let Some(hud) = app_handle.get_webview_window(HUD_LABEL) {
+                        let _ = hud.close();
+                    }
+                    request_shutdown(app_handle, true);
+                }
+            }
+        })
+        .invoke_handler(tauri::generate_handler![
+            check_update,
+            download_update,
+            discard_pending_update,
+            take_update_install_error,
+            install_pending_update,
+            factory_reset_app_prefs,
+            take_config_reset_flag,
+            get_backend_port,
+            get_backend_error,
+            send_to_python,
+            proxy_get,
+            proxy_post,
+            wc,
+            hud,
+        ])
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            if let tauri::RunEvent::ExitRequested { api, .. } = event {
+                let cleanup_complete = app
+                    .try_state::<ShutdownState>()
+                    .map(|state| state.can_exit())
+                    .unwrap_or(false);
+                if !cleanup_complete {
+                    api.prevent_exit();
+                    request_shutdown(app.clone(), true);
+                }
+            }
+        });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        generate_backend_auth_token, loopback_url, proxy_post_request, runtime_app_version,
+        sidecar_runtime_args, claim_shutdown_update, discard_update, BACKEND_AUTH_HEADER,
+    };
+    use super::{backend_health_matches, bounds_overlap, parse_backend_endpoint, BackendEndpoint,
+        SavedWindowBounds, ShutdownState, UpdateDownloadGuard, UpdateDownloadState};
+    use std::path::Path;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Mutex;
+
+    #[test]
+    fn install_claim_prevents_discard_or_a_second_shutdown() {
+        let shutdown = ShutdownState {
+            started: AtomicBool::new(false), cleanup_complete: AtomicBool::new(false), launcher_pid: 1,
+        };
+        let pending = Mutex::new(Some(vec![1, 2, 3]));
+        let claimed = claim_shutdown_update(&shutdown, &mut pending.lock().unwrap(), true).unwrap();
+        assert_eq!(claimed, Some(vec![1, 2, 3]));
+        assert!(!discard_update(&shutdown, &mut pending.lock().unwrap()));
+        assert!(claim_shutdown_update(&shutdown, &mut pending.lock().unwrap(), false).is_err());
+        assert!(!shutdown.can_exit());
+    }
+
+    #[test]
+    fn discard_before_install_never_starts_shutdown_without_an_update() {
+        let shutdown = ShutdownState {
+            started: AtomicBool::new(false), cleanup_complete: AtomicBool::new(false), launcher_pid: 1,
+        };
+        let pending = Mutex::new(Some(vec![1, 2, 3]));
+        assert!(discard_update(&shutdown, &mut pending.lock().unwrap()));
+        assert!(claim_shutdown_update(&shutdown, &mut pending.lock().unwrap(), true).is_err());
+        assert!(!shutdown.started.load(Ordering::SeqCst));
+        assert_eq!(claim_shutdown_update(&shutdown, &mut pending.lock().unwrap(), false), Ok(None));
+    }
+
+    #[test]
+    fn backend_endpoints_reject_zero_wrapped_and_incomplete_port_files() {
+        for text in [r#"{"port":0,"pid":42}"#, r#"{"port":65536,"pid":42}"#,
+            r#"{"port":-1,"pid":42}"#, r#"{"port":8765,"pid":0}"#,
+            r#"{"port":8765,"pid":4294967296}"#, r#"{"port":8765}"#, r#"{"port":8"#] {
+            assert!(parse_backend_endpoint(text).is_none(), "accepted {text}");
+        }
+        assert_eq!(parse_backend_endpoint(r#"{"port":65535,"pid":42}"#),
+            Some(BackendEndpoint { port: 65535, pid: 42 }));
+    }
+
+    #[test]
+    fn health_requires_the_published_process_and_current_version() {
+        let endpoint = BackendEndpoint { port: 8765, pid: 42 };
+        let good = serde_json::json!({"ok":true,"pid":42,"version":runtime_app_version()});
+        assert!(backend_health_matches(&good, &endpoint));
+        for bad in [serde_json::json!({"ok":false,"pid":42,"version":runtime_app_version()}),
+            serde_json::json!({"ok":true,"pid":43,"version":runtime_app_version()}),
+            serde_json::json!({"ok":true,"pid":42,"version":"0.0.0-stale"}),
+            serde_json::json!({"ok":true,"pid":42})] {
+            assert!(!backend_health_matches(&bad, &endpoint));
+        }
+    }
+
+    #[test]
+    fn repeated_exit_requests_wait_for_cleanup_completion() {
+        let state = ShutdownState { started: AtomicBool::new(false),
+            cleanup_complete: AtomicBool::new(false), launcher_pid: 42 };
+        assert!(!state.can_exit());
+        assert!(state.begin());
+        assert!(!state.can_exit());
+        assert!(!state.begin());
+        assert!(!state.can_exit());
+        state.cleanup_complete.store(true, Ordering::SeqCst);
+        assert!(state.can_exit());
+    }
+
+    #[test]
+    fn overlapping_downloads_are_rejected_and_the_guard_releases_on_failure() {
+        let state = UpdateDownloadState::default();
+        let first = UpdateDownloadGuard::acquire(&state.active).unwrap();
+        assert!(UpdateDownloadGuard::acquire(&state.active).is_err());
+        drop(first);
+        assert!(UpdateDownloadGuard::acquire(&state.active).is_ok());
+    }
+
+    #[test]
+    fn discarded_or_closing_downloads_cannot_become_pending() {
+        let state = UpdateDownloadState::default();
+        let generation = state.generation.load(Ordering::SeqCst);
+        assert!(state.can_store(generation, false));
+        assert!(!state.can_store(generation, true));
+        state.generation.fetch_add(1, Ordering::SeqCst);
+        assert!(!state.can_store(generation, false));
+        assert!(state.can_store(generation + 1, false));
+    }
+
+    #[test]
+    fn corrupted_saved_bounds_do_not_overflow_and_normal_overlap_is_preserved() {
+        let saved = SavedWindowBounds { x: i32::MIN, y: i32::MIN,
+            width: u32::MAX, height: u32::MAX };
+        assert_eq!(bounds_overlap(&saved, 0, 0, 1920, 1080), 1920 * 1080);
+        let off_screen = SavedWindowBounds { x: i32::MAX, y: i32::MAX, width: 1100, height: 720 };
+        assert_eq!(bounds_overlap(&off_screen, -1920, 0, 1920, 1080), 0);
+        let partial = SavedWindowBounds { x: -100, y: 0, width: 1100, height: 720 };
+        assert_eq!(bounds_overlap(&partial, 0, 0, 1920, 1080), 1000 * 720);
+    }
+
+    #[test]
+    fn caller_paths_cannot_replace_the_loopback_authority() {
+        for path in ["//example.invalid/state", "http://example.invalid/", "@example.invalid/",
+            "\\\\example.invalid\\", "/../state", "/%2f%2fexample.invalid/"] {
+            let request = proxy_post_request(8765, path, "synthetic-auth").build().unwrap();
+            assert_eq!(request.url().host_str(), Some("127.0.0.1"));
+            assert_eq!(request.url().port(), Some(8765));
+        }
+    }
+
+    #[test]
+    fn sidecar_receives_tauri_package_version() {
+        let args = sidecar_runtime_args(4242, Path::new(r"C:\runtime"), "1.7.3");
+        let args: Vec<_> = args.iter().map(|arg| arg.to_string_lossy()).collect();
+
+        assert_eq!(
+            args,
+            [
+                "--sidecar",
+                "--pid",
+                "4242",
+                "--data-dir",
+                r"C:\runtime",
+                "--app-version",
+                "1.7.3",
+                "--auth-token-stdin",
+            ]
+        );
+    }
+
+    /// The command line of a running process is readable by any same-user process,
+    /// so the token must never be passed as an argument.
+    #[test]
+    fn sidecar_arguments_never_carry_the_auth_token() {
+        let args = sidecar_runtime_args(4242, Path::new(r"C:\runtime"), "1.7.3");
+
+        assert!(args.iter().all(|arg| arg != "--auth-token"));
+        let token = generate_backend_auth_token().unwrap();
+        assert!(args
+            .iter()
+            .all(|arg| !arg.to_string_lossy().contains(&token)));
+    }
+
+    #[test]
+    fn runtime_version_comes_from_the_cargo_package() {
+        assert_eq!(runtime_app_version(), env!("CARGO_PKG_VERSION"));
+    }
+
+    #[test]
+    fn backend_auth_tokens_are_random_256_bit_hex_values() {
+        let first = generate_backend_auth_token().unwrap();
+        let second = generate_backend_auth_token().unwrap();
+
+        assert_eq!(first.len(), 64);
+        assert!(first.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn loopback_urls_keep_exactly_one_slash_before_the_path() {
+        assert_eq!(loopback_url(8765, "/state"), "http://127.0.0.1:8765/state");
+        assert_eq!(loopback_url(8765, "state"), "http://127.0.0.1:8765/state");
+        assert_eq!(
+            loopback_url(8765, "/logs?since=12"),
+            "http://127.0.0.1:8765/logs?since=12"
+        );
+    }
+
+    #[test]
+    fn folder_picker_has_a_human_timeout_without_changing_other_proxy_requests() {
+        for path in ["/pick_save_dir", "pick_save_dir"] {
+            let request = proxy_post_request(8765, path, "synthetic-auth").build().unwrap();
+            assert_eq!(request.timeout(), Some(&std::time::Duration::from_secs(600)));
+            assert_eq!(request.url().as_str(), "http://127.0.0.1:8765/pick_save_dir");
+            assert_eq!(request.headers()[BACKEND_AUTH_HEADER], "synthetic-auth");
+        }
+        let request = proxy_post_request(8765, "/save", "synthetic-auth").build().unwrap();
+        assert_eq!(request.timeout(), None); // Keep the shared client's 10 s default.
+    }
+}

@@ -1,0 +1,3664 @@
+const XYNMACRO_PREFERENCE_PREFIX = 'xynmacro-';
+
+/* Migrate pre-1.1 preference keys locally, remove the legacy copies, then apply
+   saved appearance before first paint. No preference data leaves the WebView. */
+(function(){
+  const legacyPrefix = ['x', 'macro-'].join('');
+  const suffixes = ['ui-style', 'auto-update', 'update-ignored-version', 'changelog-seen', 'announcement-seen', 'welcome-seen', 'wspain-seen'];
+  XynMacroPreferenceMigration.migratePreferences(
+    localStorage, legacyPrefix, XYNMACRO_PREFERENCE_PREFIX, suffixes
+  );
+  var u=localStorage.getItem(XYNMACRO_PREFERENCE_PREFIX+'ui-style')||'classic';if(u==='aero')document.documentElement.setAttribute('data-ui','aero');var t=localStorage.getItem('dbog-theme');if(t&&t!=='graphite'&&t!=='custom'&&t.indexOf('p:')!==0)document.documentElement.setAttribute('data-theme',t);var b=localStorage.getItem('dbog-bg')||'flow';if(b!=='none')document.documentElement.setAttribute('data-bg',b)
+})();
+
+/* Splash: stays until Python sidecar reports healthy (Rust fires `backend-ready`)
+   OR a hard cap (8s) — whichever comes first. Minimum hold of 900ms so the splash
+   doesn't blink past on a hot reload. */
+window.addEventListener('DOMContentLoaded', () => {
+  const splash = document.getElementById('splash');
+  if (!splash) return;
+  // Step the caption through the load stages while the bundled engine unpacks and the
+  // backend starts. Real granular progress isn't available (the frozen engine doesn't
+  // report it), so the stages advance on a timer and stop the moment the backend is ready.
+  const hint = document.getElementById('splashHint');
+  const stages = ['Starting up…', 'Unpacking engine…', 'Starting engine…', 'Loading settings…'];
+  let si = 0;
+  if (hint) { hint.textContent = stages[0]; hint.style.opacity = '1'; }
+  const stageTimer = setInterval(() => {
+    si = Math.min(si + 1, stages.length - 1);
+    if (hint) hint.textContent = stages[si];
+  }, 1400);
+  const startedAt = Date.now();
+  let hidden = false;
+  function hide() {
+    if (hidden) return;
+    hidden = true;
+    clearInterval(stageTimer);
+    const held = Date.now() - startedAt;
+    const wait = Math.max(0, 900 - held);
+    setTimeout(() => {
+      splash.classList.add('hide');
+      setTimeout(() => { splash.remove(); }, 500);
+    }, wait);
+  }
+  window.addEventListener('backend-ready', hide, { once: true });
+  window.__TAURI__?.core.invoke('get_backend_port').then((port) => {
+    if (Number(port) > 0) hide();
+  }).catch(() => {});
+  // Hard cap so a stuck sidecar doesn't lock the UI forever.
+  setTimeout(hide, 8000);
+});
+
+const launchCelebration = XynMacroLaunchCelebration.create({
+  document, window, storage: localStorage, preferencePrefix: XYNMACRO_PREFERENCE_PREFIX,
+});
+window.celebrateWSpain = launchCelebration.celebrateWSpain;
+window.spawnLaunchConfetti = launchCelebration.spawnLaunchConfetti;
+
+/* Hard failure from the Rust shell: the sidecar never came up. Replace the silent
+   "loaded but dead" state (every poll fails quietly) with a visible, explained bar. */
+window.addEventListener('backend-error', (e) => {
+  const msg = (e.detail && e.detail.message) || 'XynMacro\'s engine failed to start.';
+  const splash = document.getElementById('splash');
+  if (splash) { splash.classList.add('hide'); setTimeout(() => splash.remove(), 500); }
+  if (document.getElementById('backendErrorBar')) return;
+  const bar = document.createElement('div');
+  bar.id = 'backendErrorBar';
+  if (e.detail?.backendLost) bar.dataset.backendLost = 'true';
+  bar.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:9999;padding:10px 16px;' +
+    'background:#3a0d12;border-top:1px solid #b9344a;color:#ffd9df;font-size:12.5px;' +
+    'font-family:Inter,system-ui,sans-serif;line-height:1.5';
+  const label = document.createElement('strong');
+  label.textContent = "XynMacro's engine is not running.";
+  bar.append(label, ` ${msg}  If Windows still blocks hotkeys or game input, try Run as administrator.`);
+  document.body.appendChild(bar);
+});
+window.addEventListener('DOMContentLoaded', () => {
+  window.__TAURI__?.core.invoke('get_backend_error').then((message) => {
+    if (message) window.dispatchEvent(new CustomEvent('backend-error', { detail: { message } }));
+  }).catch(() => {});
+});
+
+/* A throw inside an inline onclick handler is swallowed by the WebView, so a broken
+   control looks identical to one that simply did nothing. Surface it instead. The
+   toast helper lives further down, so fall back to the error bar until it exists. */
+/* Frontend errors never reach the sidecar log, so a bug report assembled only from
+   the backend can miss the actual failure entirely — exactly what happened when a
+   CSP change killed every button and the backend log looked perfectly healthy.
+   Keep a small ring of them for the report. */
+const UI_ERROR_RING = [];
+const UI_ERROR_RING_MAX = 20;
+
+function _reportUiError(what, error) {
+  const detail = (error && (error.stack || error.message)) || String(error);
+  UI_ERROR_RING.push(`${new Date().toISOString().slice(11, 19)} ${what}: ${detail}`.slice(0, 400));
+  if (UI_ERROR_RING.length > UI_ERROR_RING_MAX) UI_ERROR_RING.shift();
+  console.error(what, error);
+  const message = `${what}: ${(error && error.message) || error}`;
+  if (typeof window.showToast === 'function') window.showToast(message, 'err');
+  else window.dispatchEvent(new CustomEvent('backend-error', { detail: { message: detail } }));
+}
+window.addEventListener('error', (e) => _reportUiError('UI error', e.error || e.message));
+window.addEventListener('unhandledrejection', (e) => _reportUiError('UI error', e.reason));
+
+/* Inline-handler self-check. index.html wires its controls with inline onclick=,
+   and a WebView2 update once made CSP drop all of them — every button animated,
+   nothing happened, no error anywhere (1.3.1). Prove they fire at startup instead
+   of letting the user discover it. Cheap: one synthetic click on a hidden button.
+   Uses only addEventListener/DOM APIs, so the check itself cannot be the casualty. */
+window.__xynInlineProbeFired = false;
+(function checkInlineHandlers() {
+  let violation = '';
+  // CSP violation events are queued, not dispatched synchronously, so the reason
+  // arrives after the click returns — hence the listener stays on and the failure
+  // path waits a turn for it. Without it the report just says "did not run".
+  document.addEventListener('securitypolicyviolation', (e) => {
+    if (e.violatedDirective && e.violatedDirective.indexOf('script-src') === 0) {
+      violation = `${e.violatedDirective} blocked ${e.blockedURI || 'inline'}`;
+    }
+  });
+  try {
+    const probe = document.createElement('button');
+    probe.setAttribute('onclick', 'window.__xynInlineProbeFired = true');
+    probe.style.display = 'none';
+    document.body.appendChild(probe);
+    probe.click();
+    probe.remove();
+  } catch (e) {
+    _reportUiError('Inline handler self-check failed', e);
+  }
+  if (window.__xynInlineProbeFired) return;
+
+  // The normal UI is unusable in this state, so the banner is built from scratch
+  // and owns its own listeners rather than relying on anything below this point.
+  window.addEventListener('DOMContentLoaded', () => setTimeout(() => {
+    const detail = violation || 'inline onclick did not run';
+    UI_ERROR_RING.push(`00:00:00 Inline handlers dead: ${detail}`);
+    console.error('Inline handler self-check failed:', detail);
+    const bar = document.createElement('div');
+    bar.className = 'csp-dead-banner';
+    const text = document.createElement('span');
+    text.textContent = 'Buttons in this build are disabled by your browser engine '
+      + '(' + detail + '). Update Microsoft Edge WebView2, or reinstall XynMacro '
+      + 'from GitHub releases.';
+    const copy = document.createElement('button');
+    copy.type = 'button';
+    copy.textContent = 'Copy details';
+    copy.addEventListener('click', () => {
+      navigator.clipboard.writeText(`XynMacro inline handler failure: ${detail}\nUA: ${navigator.userAgent}`);
+      copy.textContent = 'Copied';
+    });
+    bar.appendChild(text);
+    bar.appendChild(copy);
+    document.body.prepend(bar);
+  }, 0));
+})();
+
+const { invoke } = window.__TAURI__.core;
+
+const ZOOM_STEPS = [0.8, 0.9, 1, 1.1, 1.25];
+let interfaceZoom = 1;
+function applyInterfaceZoom(value, persist = true) {
+  window.dispatchEvent(new Event('xyn-zoom-changed'));
+  const requested = Number(value);
+  interfaceZoom = Number.isFinite(requested) && requested >= 0.8 && requested <= 1.25
+    ? ZOOM_STEPS.reduce((best, step) => Math.abs(step - requested) < Math.abs(best - requested) ? step : best, 1)
+    : 1;
+  document.documentElement.style.setProperty('--ui-zoom', String(interfaceZoom));
+  document.getElementById('zoomValue').textContent = `${Math.round(interfaceZoom * 100)}%`;
+  document.getElementById('zoomOut').disabled = interfaceZoom === ZOOM_STEPS[0];
+  document.getElementById('zoomIn').disabled = interfaceZoom === ZOOM_STEPS.at(-1);
+  if (persist) localStorage.setItem('xynmacro-ui-zoom', String(interfaceZoom));
+  window.dispatchEvent(new Event('resize'));
+}
+function stepInterfaceZoom(direction) {
+  applyInterfaceZoom(ZOOM_STEPS[Math.max(0, Math.min(ZOOM_STEPS.length - 1, ZOOM_STEPS.indexOf(interfaceZoom) + direction))]);
+}
+applyInterfaceZoom(localStorage.getItem('xynmacro-ui-zoom') || 1, false);
+document.getElementById('zoomOut').addEventListener('click', () => stepInterfaceZoom(-1));
+document.getElementById('zoomIn').addEventListener('click', () => stepInterfaceZoom(1));
+document.getElementById('zoomReset').addEventListener('click', () => applyInterfaceZoom(1));
+window.addEventListener('keydown', event => {
+  if (!event.ctrlKey || event.altKey || !['+', '=', '-', '_', '0'].includes(event.key)) return;
+  event.preventDefault();
+  if (event.key === '0') applyInterfaceZoom(1);
+  else stepInterfaceZoom(['+', '='].includes(event.key) ? 1 : -1);
+}, true);
+window.addEventListener('wheel', event => {
+  // Keep native WebView zoom from scaling the title bar on top of workspace zoom.
+  if (event.ctrlKey) event.preventDefault();
+}, { passive: false });
+
+const ACTIVE_PREFERENCE_KEYS = [
+  'dbog-theme',
+  'dbog-bg',
+  'dbog-bg-speed',
+  'xynmacro-reduce-run-effects',
+  'xynmacro-ui-style',
+  'xynmacro-ui-zoom',
+  'dbog-sidebar-width',
+  'xynmacro-auto-update',
+  'xynmacro-update-ignored-version',
+  'xynmacro-changelog-seen',
+  'xynmacro-announcement-seen',
+  'xynmacro-welcome-seen',
+  'xynmacro-wspain-seen',
+  'xynmacro-wspain-tag',
+];
+
+// Deleting the visible macro_config.json is a complete reset on next launch.
+// Rust checks for it before the sidecar recreates the file and exposes this
+// one-shot flag so WebView preferences cannot survive a manual config reset.
+invoke('take_config_reset_flag').then((reset) => {
+  if (!reset) return;
+  ACTIVE_PREFERENCE_KEYS.forEach((key) => localStorage.removeItem(key));
+  window.location.reload();
+}).catch(() => {});
+
+/* Reveal the window only once the first frames have painted (the splash is up by
+   then), so there's no blank/transparent frame on open. Rust shows it after 1.2s
+   as a fallback if this never runs. */
+requestAnimationFrame(() => requestAnimationFrame(() => { invoke('wc', { action: 'show' }).catch(() => {}); }));
+
+/* When maximized, drop the gutter/shadow/rounding so it's full-bleed like a normal
+   maximized window. Toggles a `maximized` class on <html> on every resize. */
+(function () {
+  try {
+    const win = window.__TAURI__.window.getCurrentWindow();
+    const sync = async () => {
+      try { document.documentElement.classList.toggle('maximized', await win.isMaximized()); } catch (e) {}
+    };
+    win.onResized(sync);
+    sync();
+  } catch (e) {}
+})();
+
+/* Custom drag handler — data-tauri-drag-region wasn't catching, and
+   window.__TAURI__.window may not be loaded with withGlobalTauri. Use invoke
+   to call the Rust `wc` command which calls start_dragging() directly. */
+window.addEventListener('DOMContentLoaded', () => {
+  // Start countdown and resolution warning cover the title bar but keep it draggable.
+  document.querySelectorAll('.overlay-drag').forEach((strip) => {
+    strip.addEventListener('mousedown', (e) => {
+      if (e.button === 0) invoke('wc', { action: 'drag' }).catch(() => {});
+    });
+  });
+  // W spain tag: hovering or clicking throws confetti. Bursts are spaced and capped
+  // so it can be spammed for fun without flooding the window. It sits over the
+  // title bar, so it also starts a window drag.
+  const wspainTag = document.getElementById('wspainTag');
+  if (wspainTag) {
+    let lastBurst = 0;
+    const burst = () => {
+      const now = performance.now();
+      if (now - lastBurst < 250 || document.querySelectorAll('.confetti-layer').length >= 6) return;
+      lastBurst = now;
+      launchCelebration.spawnLaunchConfetti(20);
+    };
+    wspainTag.addEventListener('mouseenter', burst);
+    wspainTag.addEventListener('mousedown', (e) => {
+      if (e.button !== 0) return;
+      burst();
+      invoke('wc', { action: 'drag' }).catch(() => {});
+    });
+  }
+  const dragZone = document.querySelector('.titlebar-drag');
+  if (!dragZone) return;
+  dragZone.addEventListener('mousedown', (e) => {
+    if (e.button !== 0) return;
+    if (e.target.closest('button, input, select, textarea, a')) return;
+    invoke('wc', { action: 'drag' }).catch(() => {});
+  });
+});
+
+/* Window control buttons (custom title bar) */
+function _wcSend(action, value) {
+  // Never swallow these: a silently failing minimize/close looks identical to a
+  // dead UI, which is exactly how the CSP breakage hid for so long.
+  invoke('wc', value !== undefined ? { action, value } : { action })
+    .catch((e) => _reportUiError('Window control failed', e));
+}
+window.wcMinimize = () => _wcSend('minimize');
+window.wcMaximize = () => _wcSend('maximize');
+window.wcClose    = () => _wcSend('close');
+
+let _isOnTop = false;
+window.wcOnTop = () => {
+  _isOnTop = !_isOnTop;
+  _wcSend('ontop', _isOnTop);
+  document.getElementById('btnOnTop')?.classList.toggle('active', _isOnTop);
+};
+
+let _isCompact = false;
+window.wcCompact = () => {
+  const frame = document.querySelector('.window-frame');
+  const compactButton = document.getElementById('btnCompact');
+  _isCompact = !_isCompact;
+  if (_isCompact) {
+    frame.classList.add('compact');
+    compactButton?.classList.add('active');
+    if (compactButton) {
+      compactButton.title = 'Expand';
+      compactButton.setAttribute('aria-label', 'Expand');
+    }
+    _wcSend('compact');
+  } else {
+    frame.classList.remove('compact');
+    compactButton?.classList.remove('active');
+    if (compactButton) {
+      compactButton.title = 'Roll up';
+      compactButton.setAttribute('aria-label', 'Roll up');
+    }
+    _wcSend('uncompact');
+  }
+};
+
+(() => {
+  let pollTimer = null;
+
+  let statOrder = [];
+  let availableStats = [];
+  let lastOrderSig = '';
+  let lastStatsSig = '';
+  let previousOrderTops = new Map();
+
+  // Theme presets, the custom-colour editor and the animated background live in
+  // appearance-controls.js. showToast is looked up lazily through the wrapper because
+  // window.showToast is only defined further down this file.
+  const appearance = XynMacroAppearanceControls.create({
+    document,
+    window,
+    storage: localStorage,
+    showToast: (message, type) => window.showToast(message, type),
+  });
+
+  function applyUiStyle(style, resetScroll = true) {
+    const selected = style === 'aero' ? 'aero' : 'classic';
+    document.documentElement.toggleAttribute('data-ui', selected === 'aero');
+    if (selected === 'aero') document.documentElement.setAttribute('data-ui', 'aero');
+    localStorage.setItem('xynmacro-ui-style', selected);
+    document.querySelectorAll('[data-ui-style]').forEach((button) => {
+      button.classList.toggle('active', button.dataset.uiStyle === selected);
+      button.setAttribute('aria-pressed', button.dataset.uiStyle === selected ? 'true' : 'false');
+    });
+    if (resetScroll) _resetScroll();
+  }
+  const uiStyle = localStorage.getItem('xynmacro-ui-style') === 'aero' ? 'aero' : 'classic';
+  document.querySelectorAll('[data-ui-style]').forEach((button) => {
+    button.addEventListener('click', () => applyUiStyle(button.dataset.uiStyle));
+  });
+  applyUiStyle(uiStyle, false);
+  appearance.applySavedPreset();
+
+  /* Navigation */
+  const navBtns = document.querySelectorAll('.nav-btn[data-view]');
+  const views   = document.querySelectorAll('.view');
+
+  function switchView(target) {
+    navBtns.forEach(b => {
+      b.classList.toggle('active', b.dataset.view === target);
+    });
+    views.forEach(v => {
+      v.classList.toggle('active', v.id === target);
+    });
+  }
+
+  function openView(target) {
+    // Leaving a view abandons any live preview loop it owns — the toggle is the only
+    // other thing that stops them, so without this they poll /preview forever.
+    if (document.querySelector('.view.active')?.id !== target) calibration.stopAllPreviews();
+    switchView(target);
+    _resetScroll();
+  }
+
+  const _modalReturnFocus = new WeakMap();
+  const _modalOverlayIds = [
+    'paletteBackdrop',
+    'shortcutsBackdrop',
+    'startWarnOverlay',
+    'resConfirmOverlay',
+    'welcomeOverlay',
+    'changelogOverlay',
+    'announcementOverlay',
+    'bugReportOverlay',
+    'bugConfirmOverlay',
+  ];
+
+  function _focusModal(overlay, preferredTarget = null) {
+    if (!overlay) return;
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && !overlay.contains(active)) {
+      _modalReturnFocus.set(overlay, active);
+    }
+    const dialog = overlay.querySelector('[role="dialog"]');
+    const preferred = typeof preferredTarget === 'string'
+      ? overlay.querySelector(preferredTarget)
+      : preferredTarget;
+    requestAnimationFrame(() => (preferred || dialog)?.focus());
+  }
+
+  function _restoreModalFocus(overlay) {
+    const target = overlay && _modalReturnFocus.get(overlay);
+    if (overlay) _modalReturnFocus.delete(overlay);
+    if (target?.isConnected) requestAnimationFrame(() => target.focus());
+  }
+
+  function _topOpenModalOverlay() {
+    for (const id of _modalOverlayIds) {
+      const overlay = document.getElementById(id);
+      if (overlay?.classList.contains('open')) return overlay;
+    }
+    return null;
+  }
+
+  function _trapModalFocus(event) {
+    const overlay = _topOpenModalOverlay();
+    const dialog = overlay?.querySelector('[role="dialog"]');
+    if (!dialog) return false;
+    const focusable = [...dialog.querySelectorAll(
+      'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    )].filter((element) => !element.hidden && element.getAttribute('aria-hidden') !== 'true');
+    if (!focusable.length) {
+      event.preventDefault();
+      dialog.focus();
+      return true;
+    }
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (!dialog.contains(document.activeElement)) {
+      event.preventDefault();
+      (event.shiftKey ? last : first).focus();
+    } else if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+    return true;
+  }
+
+  navBtns.forEach(btn => {
+    btn.addEventListener('click', () => openView(btn.dataset.view));
+  });
+
+  /* Smooth scroll via translate3d on .main-inner */
+  const _scroller = document.querySelector('.main');
+  const _inner = document.querySelector('.main-inner');
+  let _scrollTarget = 0, _scrollCur = 0, _scrollRaf = 0;
+
+  function _scrollMax() {
+    if (!_scroller || !_inner) return 0;
+    return Math.max(0, _inner.scrollHeight - _scroller.clientHeight);
+  }
+  function _applyTransform(y) {
+    _inner.style.transform = 'translate3d(0,' + (-Math.round(y)) + 'px,0)';
+  }
+  function _scrollStep() {
+    const diff = _scrollTarget - _scrollCur;
+    if (Math.abs(diff) < 0.5 || Math.round(_scrollCur) === Math.round(_scrollTarget)) {
+      _scrollCur = _scrollTarget;
+      _applyTransform(_scrollCur);
+      _scrollRaf = 0;
+      _inner.style.pointerEvents = '';
+      return;
+    }
+    _scrollCur += diff * 0.12;
+    _applyTransform(_scrollCur);
+    _scrollRaf = requestAnimationFrame(_scrollStep);
+  }
+  function _resetScroll() {
+    _scrollTarget = 0; _scrollCur = 0;
+    if (_inner) { _applyTransform(0); _inner.style.pointerEvents = ''; }
+    if (_scrollRaf) { cancelAnimationFrame(_scrollRaf); _scrollRaf = 0; }
+  }
+  if (_scroller && _inner) {
+    _scroller.addEventListener('wheel', (e) => {
+      if (e.ctrlKey) return;
+      // Scrollable children (log viewer) keep their own native wheel scroll.
+      if (e.target.closest && e.target.closest('.log-viewer')) return;
+      const max = _scrollMax();
+      if (max <= 0) return;
+      e.preventDefault();
+      _scrollTarget = Math.max(0, Math.min(max, _scrollTarget + e.deltaY * 0.55));
+      _inner.style.pointerEvents = 'none';
+      if (!_scrollRaf) _scrollRaf = requestAnimationFrame(_scrollStep);
+    }, { passive: false });
+    // Focus and scrollIntoView (Ctrl+K jumping to a setting) scroll .main natively.
+    // Fold that into the transform scroll, or the two offsets stack and the page
+    // can no longer be scrolled back to the top.
+    _scroller.addEventListener('scroll', () => {
+      const native = _scroller.scrollTop;
+      if (!native) return;
+      _scroller.scrollTop = 0;
+      _scrollTarget = _scrollCur = Math.max(0, Math.min(_scrollMax(), _scrollCur + native));
+      _applyTransform(_scrollCur);
+    });
+    window.addEventListener('resize', () => {
+      const max = _scrollMax();
+      if (_scrollTarget > max) _scrollTarget = max;
+      if (_scrollCur > max) { _scrollCur = max; _applyTransform(_scrollCur); }
+    });
+  }
+
+  /* Toast */
+  let toastTimeout = null;
+  let toastHideTimeout = null;
+  let _macroRunning = false;
+  let _gameWindowFound = false;
+  let _gameWindowMinimized = false;
+  let _macroUiAction = '';
+  let _macroActionSeq = 0;
+  let _startTask = null;
+  let _stopTask = null;
+  let _compactAlert = '';
+
+  function _renderMacroControls() {
+    const starting = _macroUiAction === 'starting';
+    const stopping = _macroUiAction === 'stopping';
+    const start = document.getElementById('btnStart');
+    const stop = document.getElementById('btnStop');
+    // Minimized counts as available — the backend restores the window on start.
+    const gameReady = _gameWindowFound || _gameWindowMinimized;
+    // Single source of truth for "why can't I press Start", used by the button
+    // tooltip, the visible hint under the action bar, and the compact HUD.
+    const blockedReason = starting ? 'Start already in progress.'
+      : stopping ? 'Waiting for the current run to stop.'
+      : _macroRunning ? 'The macro is already running — press STOP first.'
+      : !gameReady ? 'Roblox is not open. Launch the game, then press Start.'
+      : _gameWindowMinimized ? ''
+      : '';
+    if (start) {
+      start.disabled = starting || stopping || _macroRunning || !gameReady;
+      start.textContent = starting ? 'STARTING…'
+        : gameReady ? 'START MACRO'
+        : 'OPEN ROBLOX';
+      start.title = blockedReason;
+      start.classList.toggle('running', _macroRunning && !stopping);
+    }
+    const reason = document.getElementById('startReason');
+    if (reason) {
+      // Minimized isn't blocking any more, but say so — otherwise a Start that
+      // suddenly un-minimizes the game looks like the macro grabbed the window.
+      const note = blockedReason
+        || (_gameWindowMinimized ? 'Roblox is minimized. Start will restore it first.' : '');
+      reason.textContent = note;
+      reason.hidden = !note;
+      reason.classList.toggle('is-blocking', !!blockedReason);
+    }
+    if (stop) {
+      stop.disabled = stopping || (!_macroRunning && !starting);
+      stop.textContent = stopping ? 'STOPPING…' : (starting ? 'CANCEL START' : 'STOP');
+    }
+    const hudToggle = document.getElementById('hudMacroToggle');
+    if (hudToggle) {
+      hudToggle.classList.toggle('error', !!_compactAlert);
+      hudToggle.disabled = stopping || (!_macroRunning && !starting && !gameReady);
+      if (blockedReason) {
+        hudToggle.title = blockedReason;
+        hudToggle.setAttribute('aria-label', hudToggle.title);
+      }
+    }
+  }
+
+  function _setMacroUiAction(action) {
+    _macroUiAction = action;
+    _renderMacroControls();
+    const currentState = document.getElementById('currentState');
+    if (currentState) {
+      currentState.textContent = action === 'starting' ? 'Starting'
+        : action === 'stopping' ? 'Stopping'
+        : (_macroRunning ? 'Active' : 'Idle');
+    }
+    const hudState = document.getElementById('hudState');
+    if (hudState && !_compactAlert) {
+      hudState.textContent = action === 'starting' ? 'Starting'
+        : action === 'stopping' ? 'Stopping'
+        : (_macroRunning ? 'Active' : 'Idle');
+    }
+  }
+
+  function _setCompactAlert(message) {
+    _compactAlert = String(message || 'Macro stopped on an error');
+    _renderMacroControls();
+    if (!_isCompact) return;
+    const hudState = document.getElementById('hudState');
+    const hudTime = document.getElementById('hudTime');
+    const hudStat = document.getElementById('hudStat');
+    const hudSep = document.getElementById('hudSep');
+    const hudToggle = document.getElementById('hudMacroToggle');
+    if (hudState) hudState.textContent = 'Error';
+    if (hudTime) hudTime.textContent = 'Click to expand';
+    if (hudStat) hudStat.textContent = '';
+    if (hudSep) hudSep.style.display = 'none';
+    if (hudToggle) {
+      hudToggle.title = _compactAlert;
+      hudToggle.setAttribute('aria-label', _compactAlert);
+    }
+  }
+
+  window.showToast = (msg, type = 'ok') => {
+    if (_isCompact) {
+      if (type === 'err') _setCompactAlert(msg);
+      return;
+    }
+    const el = document.getElementById('toast');
+    // Never render an empty pill — an empty message left a blank green box stuck
+    // in the corner. Strip whitespace plus Unicode format/control chars (zero-width
+    // space, word joiner, soft hyphen, BOM, etc.) that survive .trim() and would
+    // otherwise render a textless green pill. If nothing's left, hide instead.
+    if (msg == null || String(msg).replace(/[\s\p{Cf}\p{Cc}]+/gu, '') === '') {
+      clearTimeout(toastTimeout);
+      clearTimeout(toastHideTimeout);
+      el.style.display = 'none';
+      el.classList.remove('hiding');
+      return;
+    }
+    clearTimeout(toastTimeout);
+    clearTimeout(toastHideTimeout);
+    el.classList.remove('hiding');
+    el.textContent = msg;
+    el.className = 'notif-toast ' + type;
+    el.style.display = 'block';
+    toastTimeout = setTimeout(() => {
+      el.classList.add('hiding');
+      toastHideTimeout = setTimeout(() => {
+        el.style.display = 'none';
+        el.classList.remove('hiding');
+      }, 260);
+    }, 2200);
+  };
+
+  /* API helpers — all routed through Tauri to the Python sidecar. */
+
+  /* A command that never settles makes a click look like it did nothing. Bound the
+     wait so the UI always gets an answer it can show. */
+  function _withTimeout(promise, ms, label) {
+    let timer;
+    return Promise.race([
+      promise.finally(() => clearTimeout(timer)),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`That took too long (${ms / 1000}s). Try again.`)), ms);
+      }),
+    ]);
+  }
+
+  async function sendCommand(action, value) {
+    try {
+      return await _withTimeout(
+        invoke('send_to_python', { action, value: value ?? null }),
+        12000,
+        action,
+      );
+    } catch (e) {
+      console.error('command failed:', e);
+      return { ok: false, msg: String(e && e.message ? e.message : e) };
+    }
+  }
+
+  const shutdownControls = XynMacroShutdownControls.create({ document, sendCommand, showToast });
+  const notificationControls = XynMacroNotificationControls.create({ document, sendCommand, showToast });
+  const settingControls = XynMacroSettingControls.create({ document });
+  window.cancelShutdown = shutdownControls.cancel;
+
+  /* Display resolution switch (Setup checklist) */
+  const _btnRes1080 = document.getElementById('btnRes1080');
+  if (_btnRes1080) _btnRes1080.addEventListener('click', async () => {
+    const r = await sendCommand('display_set_1080');
+    showToast(r.msg || 'Display change requested', r.ok ? 'ok' : 'err');
+    if (r.ok && r.confirm?.pending) _openResConfirm(r.confirm);
+  });
+  // Sizing the window on demand is how you check the scan boxes still line up
+  // without having to start a run first.
+  window.setGameWindowed = async () => {
+    const r = await sendCommand('game_window_windowed');
+    showToast(r.msg || 'Window resize requested', r.ok ? 'ok' : 'err');
+  };
+
+  /* Debug HUD. The window itself is owned by Rust (it has to be transparent,
+     always-on-top and click-through), so this only asks for open/close and paints
+     the buttons from what Rust reports. */
+  let _hudDocked = true;
+
+  async function _hud(action, value) {
+    try {
+      const r = await _withTimeout(invoke('hud', { action, value }), 12000, 'HUD');
+      _renderHudButtons(r?.open === true);
+      return r;
+    } catch (e) {
+      showToast(String(e), 'err');
+      return null;
+    }
+  }
+
+  window.toggleDebugHud = async () => {
+    const state = await _hud('state');
+    if (state?.open) {
+      await _hud('close');
+      return;
+    }
+    _hudDocked = true;
+    await _hud('open', { docked: true });
+  };
+
+  // Rust navigates the existing HUD so its mode changes without a close/open race.
+  window.popOutDebugHud = async () => {
+    _hudDocked = false;
+    await _hud('open', { docked: false });
+  };
+
+  function _renderHudButtons(open) {
+    const btn = document.getElementById('btnDebugHud');
+    if (btn) {
+      btn.classList.toggle('active', open);
+      btn.setAttribute('aria-pressed', open ? 'true' : 'false');
+      btn.textContent = open ? 'Hide HUD' : 'Debug HUD';
+    }
+    const pop = document.getElementById('btnDebugHudPop');
+    if (pop) pop.classList.toggle('active', open && !_hudDocked);
+  }
+
+  const _btnResRevert = document.getElementById('btnResRevert');
+  if (_btnResRevert) _btnResRevert.addEventListener('click', async () => {
+    const r = await sendCommand('display_revert');
+    showToast(r.msg || 'Revert requested', r.ok ? 'ok' : 'err');
+  });
+
+  /* Resolution confirm. The countdown shown here only mirrors the backend timer —
+     the backend is what actually reverts, so an unreadable screen recovers even
+     if this dialog never paints. Closing it without an answer changes nothing;
+     the revert still happens on schedule. */
+  let _resConfirmTimer = null;
+  function _closeResConfirm() {
+    const ov = document.getElementById('resConfirmOverlay');
+    if (_resConfirmTimer) { clearInterval(_resConfirmTimer); _resConfirmTimer = null; }
+    if (!ov || !ov.classList.contains('open')) return;
+    ov.classList.remove('open');
+    ov.classList.add('closing');
+    _restoreModalFocus(ov);
+    setTimeout(() => ov.classList.remove('closing'), 500);
+  }
+
+  function _openResConfirm(confirm) {
+    const ov = document.getElementById('resConfirmOverlay');
+    const keep = document.getElementById('resConfirmKeep');
+    const revert = document.getElementById('resConfirmRevert');
+    if (!ov || !keep || !revert || ov.classList.contains('open')) return;
+    let remaining = Math.ceil(confirm?.seconds_remaining || confirm?.timeout_sec || 10);
+    keep.textContent = `Keep (${remaining})`;
+    ov.classList.add('open');
+    _focusModal(ov, keep);
+    keep.onclick = async () => {
+      _closeResConfirm();
+      const r = await sendCommand('display_keep');
+      showToast(r.msg || 'Resolution kept', r.ok !== false ? 'ok' : 'err');
+    };
+    revert.onclick = async () => {
+      _closeResConfirm();
+      const r = await sendCommand('display_revert');
+      showToast(r.msg || 'Reverted', r.ok !== false ? 'ok' : 'err');
+    };
+    _resConfirmTimer = setInterval(() => {
+      remaining -= 1;
+      if (remaining <= 0) {
+        _closeResConfirm();
+        showToast('No confirmation — resolution reverted', 'err');
+      } else {
+        keep.textContent = `Keep (${remaining})`;
+      }
+    }, 1000);
+  }
+
+  async function getState() {
+    try {
+      return await invoke('proxy_get', { path: '/state' });
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function _sig(arr) {
+    return (Array.isArray(arr) ? arr : []).join('|');
+  }
+
+  function _sanitizeOrder(order) {
+    const seen = new Set();
+    const valid = [];
+    for (const name of (order || [])) {
+      const s = String(name);
+      if (!availableStats.includes(s)) continue;
+      if (seen.has(s)) continue;
+      seen.add(s);
+      valid.push(s);
+    }
+    return valid;
+  }
+
+  let _liveDrag = null;
+
+  function renderTrainingOrder() {
+    const queueEl = document.getElementById('statOrderList');
+    const poolEl = document.getElementById('statPoolList');
+    if (!queueEl || !poolEl) return;
+    if (_liveDrag) return;
+
+    previousOrderTops = new Map();
+    queueEl.querySelectorAll('.stat-item[data-name]').forEach((el) => {
+      previousOrderTops.set(el.dataset.name, el.getBoundingClientRect().top);
+    });
+
+    queueEl.innerHTML = '';
+    poolEl.innerHTML = '';
+
+    const queue = _sanitizeOrder(statOrder);
+    statOrder = queue;
+
+    // Actual row heights are measured below; wrapped labels must not skew drag targets.
+
+    function _startDrag(row, idx, startY) {
+      if (_liveDrag || _trainingOrderBusy) return;
+      const rows = Array.from(queueEl.querySelectorAll('.stat-item[data-idx]'));
+      const rects = rows.map(r => r.getBoundingClientRect());
+      const listTop = queueEl.getBoundingClientRect().top;
+
+      _liveDrag = { fromIdx: idx, curIdx: idx, startY, rows, rects, listTop };
+      row.classList.add('lifting');
+      document.body.style.userSelect = 'none';
+      document.body.style.cursor = 'grabbing';
+    }
+
+    function _moveDrag(clientY) {
+      if (!_liveDrag) return;
+      const d = _liveDrag;
+      const listRect = queueEl.getBoundingClientRect();
+      const rowRect = d.rects[d.fromIdx];
+      const OVERFLOW = 28;
+      const minY = listRect.top - rowRect.top - OVERFLOW;
+      const maxY = listRect.bottom - rowRect.bottom + OVERFLOW;
+      const dy = Math.max(minY, Math.min(maxY, clientY - d.startY));
+      const draggedRow = d.rows[d.fromIdx];
+      if (!draggedRow) return;
+
+      draggedRow.style.transition = 'none';
+      draggedRow.style.transform = `translateY(${dy / interfaceZoom}px) scale(1.03)`;
+
+      const draggedCenter = d.rects[d.fromIdx].top + d.rects[d.fromIdx].height / 2 + dy;
+      let newIdx = d.fromIdx;
+
+      for (let i = 0; i < d.rows.length; i++) {
+        if (i === d.fromIdx) continue;
+        const mid = d.rects[i].top + d.rects[i].height / 2;
+        if (d.fromIdx < i && draggedCenter > mid) newIdx = i;
+        if (d.fromIdx > i && draggedCenter < mid) newIdx = Math.min(newIdx, i);
+      }
+
+      if (newIdx !== d.curIdx) d.curIdx = newIdx;
+
+      for (let i = 0; i < d.rows.length; i++) {
+        if (i === d.fromIdx) continue;
+        let shift = 0;
+        if (d.fromIdx < d.curIdx) {
+          if (i > d.fromIdx && i <= d.curIdx) shift = -(rowRect.height + 6 * interfaceZoom);
+        } else if (d.fromIdx > d.curIdx) {
+          if (i >= d.curIdx && i < d.fromIdx) shift = rowRect.height + 6 * interfaceZoom;
+        }
+        d.rows[i].style.transition = 'transform .22s cubic-bezier(.2,.8,.2,1)';
+        d.rows[i].style.transform = shift ? `translateY(${shift / interfaceZoom}px)` : '';
+        d.rows[i].classList.toggle('shifting', !!shift);
+      }
+    }
+
+    async function _endDrag() {
+      if (!_liveDrag) return;
+      const d = _liveDrag;
+      _liveDrag = null;
+      document.body.style.userSelect = '';
+      document.body.style.cursor = '';
+
+      d.rows.forEach(r => {
+        r.classList.remove('lifting', 'shifting');
+        r.style.transition = '';
+        r.style.transform = '';
+      });
+
+      if (d.fromIdx !== d.curIdx && d.fromIdx >= 0 && d.curIdx >= 0 && d.curIdx < statOrder.length) {
+        const next = [...statOrder];
+        const [moved] = next.splice(d.fromIdx, 1);
+        next.splice(d.curIdx, 0, moved);
+        await saveTrainingOrder(next, `${moved} moved`);
+      }
+    }
+
+    queue.forEach((name, idx) => {
+      const row = document.createElement('div');
+      row.className = 'stat-item stat-item-draggable';
+      row.dataset.idx = String(idx);
+      row.dataset.name = name;
+
+      const left = document.createElement('div');
+      left.className = 'stat-item-left';
+
+      const handle = document.createElement('span');
+      handle.className = 'stat-drag-handle';
+      handle.textContent = '⋮⋮';
+      handle.title = 'Drag to reorder';
+      handle.tabIndex = 0;
+      handle.setAttribute('role', 'button');
+      handle.setAttribute('aria-label', `Move ${name} in training order`);
+
+      const label = document.createElement('span');
+      label.className = 'stat-item-label';
+      label.textContent = `${idx + 1}. ${name}`;
+      label.title = name;
+      left.append(handle, label);
+
+      const ctrls = document.createElement('div');
+      ctrls.className = 'stat-item-controls';
+
+      const rem = document.createElement('button');
+      rem.className = 'btn-mini danger';
+      rem.textContent = 'Remove';
+      rem.addEventListener('click', async () => {
+        const next = statOrder.filter(v => v !== name);
+        await saveTrainingOrder(next, `${name} removed from order`);
+      });
+
+      handle.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        _startDrag(row, idx, e.clientY);
+        const onMove = (ev) => _moveDrag(ev.clientY);
+        const onUp = () => {
+          window.removeEventListener('pointermove', onMove);
+          window.removeEventListener('pointerup', onUp);
+          window.removeEventListener('pointercancel', onCancel);
+          window.removeEventListener('blur', onCancel);
+          window.removeEventListener('xyn-zoom-changed', onCancel);
+          _endDrag();
+        };
+        const onCancel = () => {
+          if (_liveDrag) _liveDrag.curIdx = _liveDrag.fromIdx;
+          onUp();
+        };
+        window.addEventListener('pointercancel', onCancel);
+        window.addEventListener('blur', onCancel);
+        window.addEventListener('xyn-zoom-changed', onCancel);
+        window.addEventListener('pointermove', onMove);
+        window.addEventListener('pointerup', onUp);
+      });
+      handle.addEventListener('keydown', async (event) => {
+        if (!['ArrowUp', 'ArrowDown'].includes(event.key)) return;
+        event.preventDefault();
+        const direction = event.key === 'ArrowUp' ? -1 : 1;
+        const targetIndex = idx + direction;
+        if (targetIndex < 0 || targetIndex >= statOrder.length) return;
+        const next = [...statOrder];
+        const [moved] = next.splice(idx, 1);
+        next.splice(targetIndex, 0, moved);
+        await saveTrainingOrder(next, `${moved} moved`);
+        requestAnimationFrame(() => {
+          document.querySelector(`.stat-item[data-name="${CSS.escape(name)}"] .stat-drag-handle`)?.focus();
+        });
+      });
+
+      ctrls.append(rem);
+      row.append(left, ctrls);
+      queueEl.appendChild(row);
+    });
+
+    queueEl.querySelectorAll('.stat-item[data-name]').forEach((el) => {
+      const name = el.dataset.name;
+      const oldTop = previousOrderTops.get(name);
+      if (oldTop == null) return;
+      const newTop = el.getBoundingClientRect().top;
+      const dy = oldTop - newTop;
+      if (Math.abs(dy) < 1) return;
+      el.animate(
+        [{ transform: `translateY(${dy / interfaceZoom}px)` }, { transform: 'translateY(0px)' }],
+        { duration: 220, easing: 'cubic-bezier(.2,.8,.2,1)' }
+      );
+    });
+
+    const inQueue = new Set(queue);
+    availableStats.filter(v => !inQueue.has(v)).forEach((name) => {
+      const row = document.createElement('div');
+      row.className = 'stat-item';
+      const label = document.createElement('span');
+      label.className = 'stat-item-label';
+      label.textContent = name;
+      label.title = name;
+      const ctrls = document.createElement('div');
+      ctrls.className = 'stat-item-controls';
+
+      const add = document.createElement('button');
+      add.className = 'btn-mini';
+      add.textContent = 'Add';
+      add.addEventListener('click', async () => {
+        const next = [...statOrder, name];
+        await saveTrainingOrder(next, `${name} added to order`);
+      });
+
+      ctrls.append(add);
+      row.append(label, ctrls);
+      poolEl.appendChild(row);
+    });
+    for (const button of [...queueEl.querySelectorAll('button'), ...poolEl.querySelectorAll('button')]) {
+      button.disabled = _trainingOrderBusy;
+    }
+  }
+
+  let _trainingOrderBusy = false;
+  async function saveTrainingOrder(nextOrder, okMsg = 'Training order saved') {
+    if (_trainingOrderBusy) return;
+    _trainingOrderBusy = true;
+    renderTrainingOrder();
+    const sanitized = _sanitizeOrder(nextOrder);
+    try {
+      const r = await sendCommand('set', { key: 'training_order', value: sanitized });
+      if (r.ok !== false) {
+        statOrder = sanitized;
+        lastOrderSig = _sig(statOrder);
+        showToast(okMsg, 'ok');
+      } else {
+        showToast(r.msg || 'Could not save Training Order', 'err');
+      }
+    } finally {
+      _trainingOrderBusy = false;
+      renderTrainingOrder();
+    }
+  }
+
+  /* Visible countdown overlay tied to start_delay_sec. Mirrors Python's
+     safe_sleep(START_DELAY) so the user has a clear "switch to Roblox now" cue. */
+  let _countdownTimer = null;
+  let _startCountdownRemaining = null;
+  function _hideStartCountdown() {
+    const ov = document.getElementById('countdownOverlay');
+    if (ov) ov.classList.remove('open');
+    if (_countdownTimer) { clearTimeout(_countdownTimer); _countdownTimer = null; }
+    _startCountdownRemaining = null;
+  }
+  function _showStartCountdown(secs) {
+    const ov = document.getElementById('countdownOverlay');
+    const num = document.getElementById('countdownNumber');
+    if (!ov || !num) return;
+    _hideStartCountdown();
+    const seconds = Number(secs);
+    const durationMs = Number.isFinite(seconds) ? Math.max(0, seconds * 1000) : 0;
+    if (durationMs === 0) return;
+    const endsAt = performance.now() + durationMs;
+    const showTenths = Math.abs(seconds - Math.round(seconds)) > 0.0001;
+    let displayed = null;
+    let pulseSecond = null;
+    if (!_isCompact) ov.classList.add('open');
+
+    function tick() {
+      const remainingMs = endsAt - performance.now();
+      if (remainingMs <= 0) {
+        _hideStartCountdown();
+        return;
+      }
+      const remaining = showTenths
+        ? Math.ceil(remainingMs / 100) / 10
+        : Math.ceil(remainingMs / 1000);
+      const remainingText = Number.isInteger(remaining) ? String(remaining) : remaining.toFixed(1);
+      _startCountdownRemaining = remainingText;
+      if (_isCompact) {
+        const hudState = document.getElementById('hudState');
+        const hudTime = document.getElementById('hudTime');
+        if (hudState) hudState.textContent = 'Starting';
+        if (hudTime) hudTime.textContent = remainingText;
+      }
+      if (remaining !== displayed) {
+        displayed = remaining;
+        num.textContent = remainingText;
+        const nextPulseSecond = Math.ceil(remainingMs / 1000);
+        if (nextPulseSecond !== pulseSecond) {
+          pulseSecond = nextPulseSecond;
+          num.classList.remove('pulse');
+          void num.offsetWidth;
+          num.classList.add('pulse');
+        }
+      }
+      const quantumMs = showTenths ? 100 : 1000;
+      const untilNextNumber = remainingMs - ((Math.ceil(remainingMs / quantumMs) - 1) * quantumMs);
+      _countdownTimer = setTimeout(
+        tick,
+        Math.max(16, Math.min(remainingMs, untilNextNumber))
+      );
+    }
+    tick();
+  }
+
+  /* Actions */
+  let _startCommandPending = false;
+  async function _sendStartCommand(value) {
+    _startCommandPending = true;
+    try {
+      return await sendCommand('start', value);
+    } finally {
+      _startCommandPending = false;
+    }
+  }
+  let _cancelStartWarning = null;
+  // First Start of the session on a non-1080p display. The 5s countdown is a
+  // read-the-warning delay, not a timer to launch on: at 0 Continue simply
+  // becomes clickable. Starting by itself would launch the macro at a moment the
+  // user never picked. The macro still runs at any resolution — this is only a
+  // heads-up, so Cancel backs out.
+  function _confirmStartWarning(text) {
+    if (_isCompact) window.wcCompact();
+    return new Promise((resolve) => {
+      const ov = document.getElementById('startWarnOverlay');
+      const msg = document.getElementById('warnResMsg');
+      const yes = document.getElementById('warnYes');
+      const cancel = document.getElementById('warnCancel');
+      if (!ov || !yes || !cancel) { resolve(true); return; }
+      if (msg) msg.textContent = text;
+      let remaining = 5;
+      yes.disabled = true;
+      yes.style.animation = '';          // let the faded entrance animation replay
+      yes.textContent = `Continue (${remaining})`;
+      ov.classList.add('open');
+      _focusModal(ov, cancel);
+      let timer = null;
+      let settled = false;
+      const done = (ok) => {
+        if (settled) return;
+        settled = true;
+        if (timer) clearInterval(timer);
+        _cancelStartWarning = null;
+        yes.onclick = null; cancel.onclick = null;
+        // Matched fade-out (entrance played back), then resolve once it's gone.
+        yes.style.animation = '';        // clear the inline 'none' so the exit animation runs
+        ov.classList.remove('open');
+        ov.classList.add('closing');
+        _restoreModalFocus(ov);
+        setTimeout(() => { ov.classList.remove('closing'); resolve(ok); }, 500);
+      };
+      _cancelStartWarning = () => done(false);
+      cancel.onclick = () => done(false);
+      yes.onclick = () => { if (!yes.disabled) done(true); };
+      timer = setInterval(() => {
+        remaining -= 1;
+        if (remaining <= 0) {
+          clearInterval(timer); timer = null;
+          // The entrance animation ends at opacity .42 with fill-mode `both`, so it
+          // pins the button dim no matter what `disabled` says. Drop the animation
+          // and #warnYes's opacity transition fades it up to full.
+          yes.style.animation = 'none';
+          yes.disabled = false;
+          yes.textContent = 'Continue';
+          yes.focus();
+        } else {
+          yes.textContent = `Continue (${remaining})`;
+        }
+      }, 1000);
+    });
+  }
+
+  window.startMacro = () => {
+    if (_startTask || _stopTask || _macroRunning) return _startTask || _stopTask;
+    if (!_gameWindowFound && !_gameWindowMinimized) {
+      showToast('Roblox is not open — launch the game, then Start', 'err');
+      return Promise.resolve();
+    }
+    const actionSeq = ++_macroActionSeq;
+    _compactAlert = '';
+    _setMacroUiAction('starting');
+
+    const task = (async () => {
+      // Non-1080p heads-up. Continue = accept for this session (don't warn again);
+      // Cancel = not accepted, so it reappears on the next Start.
+      while (XynMacroScreenState.needsResolutionWarning(_screenRes, _acceptedDisplaySignature)) {
+        const warnedScreen = _screenRes;
+        const ok = await _confirmStartWarning(
+          `Your display is ${warnedScreen.w}×${warnedScreen.h}, not 1920×1080. `
+          + 'The macro will still run, but clicks and detection may be less accurate.'
+        );
+        if (!ok || actionSeq !== _macroActionSeq) return;
+        if (_screenRes?.signature === warnedScreen.signature) {
+          _acceptedDisplaySignature = warnedScreen.signature;
+        }
+      }
+
+      // Display scaling is tracked separately from resolution: a 1920×1080 display
+      // at 125% passes the check above and still puts every click in the wrong place.
+      while (XynMacroScreenState.needsDpiWarning(_screenRes, _acceptedDpiSignature)) {
+        const warnedScreen = _screenRes;
+        const percent = Math.round(warnedScreen.scale * 100);
+        const ok = await _confirmStartWarning(
+          `Windows display scaling is ${percent}%, not 100%. XynMacro reads screen `
+          + 'pixels directly, so clicks will land off-target. Set Scale to 100% in '
+          + 'Windows Display settings, then reopen Roblox.'
+        );
+        if (!ok || actionSeq !== _macroActionSeq) return;
+        if (_screenRes?.dpiSignature === warnedScreen.dpiSignature) {
+          _acceptedDpiSignature = warnedScreen.dpiSignature;
+        }
+      }
+
+      const delayEl = document.getElementById('startDelay');
+      const parsedDelay = delayEl ? parseFloat(delayEl.value) : 5;
+      const delay = Number.isFinite(parsedDelay) ? Math.max(0, Math.min(30, parsedDelay)) : 5;
+      // Persist before Start so typing a decimal and immediately clicking Start
+      // cannot race the backend and launch with the previous countdown value.
+      const setDelay = await sendCommand('set', { key: 'start_delay_sec', value: delay });
+      if (actionSeq !== _macroActionSeq) return;
+      if (!setDelay || setDelay.ok === false) {
+        showToast(setDelay?.msg || 'Could not save Start Countdown', 'err');
+        return;
+      }
+      if (delayEl) {
+        delayEl.value = String(delay);
+        delayEl._prevValue = delay;
+      }
+
+      const hudState = await _hud('state');
+      if (actionSeq !== _macroActionSeq) return;
+      if (hudState?.open) await _hud('hide');
+      if (actionSeq !== _macroActionSeq) return;
+      _showStartCountdown(delay);
+      let r = await _sendStartCommand();
+      if ((!r || r.ok === false) && hudState?.open) await _hud('show');
+      if (actionSeq !== _macroActionSeq) return;
+      // Windowed Mode on a display too small for a 1920×1080 window. The backend
+      // can only find this out after taking Roblox out of fullscreen, so it comes
+      // back as a refusal rather than something checkable up front. Same warning
+      // shape as the resolution one: read it, then Continue runs undersized.
+      if (r && r.ok === false && r.code === 'windowed_too_small') {
+        _hideStartCountdown();
+        const ok = await _confirmStartWarning(
+          `${r.msg} Continue anyway and Roblox will be sized as large as this display `
+          + 'allows — every scan region gets scaled, and detection may fail outright.'
+        );
+        if (!ok || actionSeq !== _macroActionSeq) return;
+        _showStartCountdown(delay);
+        if (hudState?.open) await _hud('hide');
+        if (actionSeq !== _macroActionSeq) return;
+        r = await _sendStartCommand({ allow_windowed_fallback: true });
+        if ((!r || r.ok === false) && hudState?.open) await _hud('show');
+        if (actionSeq !== _macroActionSeq) return;
+      }
+      if (!r || r.ok === false) {
+        _hideStartCountdown();
+        showToast(r?.msg || 'Macro did not start', 'err');
+        return;
+      }
+      _macroRunning = true;
+      showToast(r.msg || 'Macro started', 'ok');
+    })().finally(() => {
+      if (_startTask === task) _startTask = null;
+      if (actionSeq === _macroActionSeq && _macroUiAction === 'starting') {
+        _setMacroUiAction('');
+      }
+    });
+    _startTask = task;
+    return task;
+  };
+
+  window.stopMacro = () => {
+    if (_stopTask) return _stopTask;
+    _hideStartCountdown();
+    _cancelStartWarning?.();
+    if (!_macroRunning && !_startTask) return Promise.resolve();
+    const actionSeq = ++_macroActionSeq;
+    const pendingStart = _startTask;
+    const pendingBackendStart = _startCommandPending;
+    let stopAccepted = false;
+    _setMacroUiAction('stopping');
+
+    const task = (async () => {
+      let r = await sendCommand('stop');
+      if (pendingStart) await pendingStart;
+      // Cancel native setup immediately, then also cover a Start request that
+      // was already sent but reached the backend after the first Stop.
+      if (pendingBackendStart) r = await sendCommand('stop');
+      if (!r || r.ok === false) {
+        showToast(r?.msg || 'Macro did not stop', 'err');
+        return;
+      }
+      stopAccepted = true;
+      showToast(r.msg || 'Stop requested', 'ok');
+      const state = await getState();
+      if (state) {
+        _lastStateHash = '';
+        applyState(state);
+        _updateFooter(state);
+      }
+    })().finally(() => {
+      if (_stopTask === task) _stopTask = null;
+      // A successful stop remains visibly pending until /state confirms idle.
+      // Failed/idle requests clear here so controls cannot get stuck.
+      if (actionSeq === _macroActionSeq && (!stopAccepted || !_macroRunning)) _setMacroUiAction('');
+    });
+    _stopTask = task;
+    return task;
+  };
+
+  window.toggleMacroFromHud = () => {
+    if (_compactAlert) {
+      const message = _compactAlert;
+      _compactAlert = '';
+      _renderMacroControls();
+      if (_isCompact) window.wcCompact();
+      setTimeout(() => showToast(message, 'err'), 180);
+      return;
+    }
+    if (_macroUiAction === 'stopping') return;
+    return (_macroRunning || _macroUiAction === 'starting' || _startCountdownRemaining != null)
+      ? window.stopMacro()
+      : window.startMacro();
+  };
+
+  // === Undo stack (used by auto-save + keybind capture) ===
+  const _undoStack = [];
+  const _UNDO_MAX = 10;
+  let _undoBusy = false;
+
+  function _pushUndo(key, oldValue, newValue) {
+    if (oldValue === newValue) return;
+    _undoStack.push({ key, oldValue, newValue });
+    if (_undoStack.length > _UNDO_MAX) _undoStack.shift();
+    _renderUndoButton();
+  }
+
+  function _undoSettingLabel(key) {
+    const specialLabels = {
+      training_order: 'Training Order',
+      agility_mode: 'Input Strategy',
+      health_mode: 'Health Mode',
+      ki_v8_mode: 'Ki Mode',
+    };
+    const el = document.getElementById(entryMap[key] || toggleMap[key])
+      || document.querySelector(`.keybind-btn[data-setting-key="${key}"]`);
+    const label = el?.closest?.('.row-item')?.querySelector('.row-label')?.textContent.trim()
+      || specialLabels[key] || 'Setting';
+    return el?.dataset?.settingKey === key ? `${label} hotkey` : label;
+  }
+
+  function _renderUndoButton() {
+    const btn = document.getElementById('undoButton');
+    if (!btn) return;
+    btn.disabled = _undoBusy || _undoStack.length === 0;
+    const tip = _undoStack.length === 0
+      ? 'Nothing to undo'
+      : `Undo: ${_undoSettingLabel(_undoStack[_undoStack.length - 1].key)}`;
+    btn.title = tip;
+    btn.textContent = _undoStack.length === 0
+      ? '↶ Undo'
+      : `↶ Undo (${_undoStack.length})`;
+  }
+
+  window.undoLastChange = async () => {
+    if (_undoBusy || _undoStack.length === 0) return;
+    _undoBusy = true;
+    _renderUndoButton();
+    try {
+      const selected = _undoStack[_undoStack.length - 1];
+      const el = document.getElementById(entryMap[selected.key] || toggleMap[selected.key]);
+      const sequence = el?._saveSequence || 0;
+      const revert = async () => {
+        // Earlier writes to this field settle first, so undo its newest saved
+        // change. Later edits queue behind the revert and retain their history.
+        const last = el
+          ? _undoStack.slice().reverse().find(entry => entry.key === selected.key)
+          : selected;
+        if (!last) return;
+        const response = await sendCommand('set', { key: last.key, value: last.oldValue });
+        if (!response || response.ok === false) {
+          showToast(response?.msg || `Could not undo ${_undoSettingLabel(last.key)}`, 'err');
+          return;
+        }
+        const savedValue = Object.hasOwn(response, 'value') ? response.value : last.oldValue;
+        const entryIndex = _undoStack.indexOf(last);
+        if (entryIndex >= 0) _undoStack.splice(entryIndex, 1);
+        _renderUndoButton();
+        if (el) {
+          el._prevValue = savedValue;
+          if (sequence === (el._saveSequence || 0)) {
+            if (toggleMap[last.key]) {
+              el.classList.toggle('active', !!savedValue);
+              el.setAttribute('aria-checked', savedValue ? 'true' : 'false');
+            } else {
+              el.value = savedValue == null ? '' : savedValue;
+            }
+          }
+        }
+        const kbBtn = document.querySelector(`.keybind-btn[data-setting-key="${last.key}"]`);
+        if (kbBtn) {
+          kbBtn.textContent = String(savedValue || '').toUpperCase() || '?';
+          kbBtn.dataset.value = String(savedValue || '');
+        }
+        if (last.key === 'agility_mode') _syncAgilityModeSeg(savedValue);
+        if (last.key === 'health_mode') _syncHealthModeSeg(savedValue);
+        if (last.key === 'ki_v8_mode') _syncKiV8ModeSeg(savedValue);
+        _syncAfterRunControls();
+        settingControls.sync();
+        showToast(`Undone ${_undoSettingLabel(last.key)}`);
+      };
+      await (el ? _queueFieldSave(el, revert) : revert());
+    } finally {
+      _undoBusy = false;
+      _renderUndoButton();
+    }
+  };
+
+  window.toggleSetting = async (key, el) => {
+    if (el.disabled) return;
+    const active = el.classList.contains('active');
+    if (!el._saveTask) el._prevValue = active;
+    const next = !active;
+    const sequence = el._saveSequence = (el._saveSequence || 0) + 1;
+    const label = el.closest?.('.row-item')?.querySelector('.row-label')?.textContent.trim() || 'Setting';
+    // Record each click before awaiting a save. Polls leave pending toggles alone.
+    el.classList.toggle('active', next);
+    el.setAttribute('aria-checked', next ? 'true' : 'false');
+    _syncAfterRunControls();
+    settingControls.sync();
+    await _queueFieldSave(el, async () => {
+      const previous = el._prevValue;
+      const response = await sendCommand('set', { key, value: next });
+      const ok = !!response && response.ok !== false;
+      const saved = ok && Object.hasOwn(response, 'value') ? !!response.value : next;
+      if (ok) {
+        el._prevValue = saved;
+        _pushUndo(key, previous, saved);
+      }
+      if (sequence === el._saveSequence) {
+        const value = ok ? saved : previous;
+        el.classList.toggle('active', value);
+        el.setAttribute('aria-checked', value ? 'true' : 'false');
+        _syncAfterRunControls();
+        settingControls.sync();
+      }
+      showToast(ok ? `${label} ${saved ? 'on' : 'off'}`
+        : response?.msg || `Could not change ${label}`, ok ? 'ok' : 'err');
+    });
+  };
+
+  function _syncAfterRunControls() {
+    const failureToggle = document.getElementById('toggleAfterRunFailure');
+    const failureRow = document.getElementById('afterRunFailureRow');
+    const failureHint = document.getElementById('afterRunFailureHint');
+    const gameAction = document.getElementById('afterRunGameAction')?.value || 'none';
+    const shutdownEnabled = document.getElementById('toggleShutdownFinished')?.classList.contains('active');
+    const disabled = gameAction === 'none' && !shutdownEnabled;
+    if (failureToggle) disabled ? failureToggle.setAttribute('disabled', '') : failureToggle.removeAttribute('disabled');
+    failureRow?.classList.toggle('is-disabled', disabled);
+    failureHint?.classList.toggle('is-disabled', disabled);
+  }
+
+  function _readInputValue(el) {
+    if (!el) return null;
+    if (el.type === 'checkbox') return el.checked;
+    if (el.type === 'number' || el.type === 'range') {
+      // Preserve null for blank radius-style fields that accept null.
+      if (el.value.trim() === '') return null;
+      const v = parseFloat(el.value);
+      return isNaN(v) ? null : v;
+    }
+    return el.value;
+  }
+
+  function _renderGravityValue(value) {
+    const badge = document.getElementById('gcGravityValue');
+    if (!badge) return;
+    const gravity = Number(value) || 0;
+    badge.textContent = gravity === 0 ? 'Off' : `${gravity}G`;
+  }
+
+  function _setupGravitySlider() {
+    const slider = document.getElementById('gcGravityTarget');
+    if (!slider) return;
+    slider.addEventListener('input', () => _renderGravityValue(slider.value));
+    _renderGravityValue(slider.value);
+  }
+
+  function _queueFieldSave(el, save) {
+    const task = (el._saveTask || Promise.resolve()).then(save, save).finally(() => {
+      if (el._saveTask === task) el._saveTask = null;
+    });
+    el._saveTask = task;
+    return task;
+  }
+
+  function _setupAutoSave() {
+    for (const [key, id] of Object.entries(entryMap)) {
+      const el = document.getElementById(id);
+      if (!el) continue;
+      el._prevValue = _readInputValue(el);
+      el.addEventListener('input', () => {
+        el._saveSequence = (el._saveSequence || 0) + 1;
+      });
+      el.addEventListener('change', async () => {
+        const nv = _readInputValue(el);
+        if (nv === el._prevValue && !el._saveTask) return;
+        const sequence = el._saveSequence = (el._saveSequence || 0) + 1;
+        _syncAfterRunControls();
+        settingControls.sync();
+        await _queueFieldSave(el, async () => {
+          const ov = el._prevValue;
+          const r = await sendCommand('set', { key, value: nv });
+          if (r.ok === false) {
+            if (sequence === el._saveSequence) {
+              el.value = ov == null ? '' : ov;
+              _syncAfterRunControls();
+              settingControls.sync();
+            }
+            const label = el.closest?.('.row-item')?.querySelector('.row-label')?.textContent.trim() || 'Setting';
+            showToast(r.msg || `Could not save ${label}`, 'err');
+          } else {
+            const savedValue = Object.hasOwn(r, 'value') ? r.value : nv;
+            el._prevValue = savedValue;
+            if (savedValue !== ov) _pushUndo(key, ov, savedValue);
+            if (sequence === el._saveSequence) {
+              el.value = savedValue == null ? '' : savedValue;
+              _syncAfterRunControls();
+              settingControls.sync();
+              el.classList.add('saved-flash');
+              setTimeout(() => el.classList.remove('saved-flash'), 450);
+            }
+          }
+        });
+      });
+    }
+  }
+
+  // === Keybind capture ===
+  function _setupKeybindCapture() {
+    document.querySelectorAll('.keybind-btn').forEach(btn => {
+      btn.addEventListener('click', () => _enterKeybindCapture(btn));
+      btn.addEventListener('blur', () => _exitKeybindCapture(btn, false));
+    });
+  }
+
+  function _enterKeybindCapture(btn) {
+    if (btn.classList.contains('capturing') || btn._committing) return;
+    btn._captureOriginalText = btn.textContent;
+    btn._captureOriginalValue = btn.dataset.value || '';
+    btn.classList.add('capturing');
+    btn.textContent = '…';
+    btn.focus();
+
+    const handler = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.repeat) return;
+      if (e.key === 'Escape') {
+        _exitKeybindCapture(btn, false);
+        return;
+      }
+      const k = _normalizeKeyEvent(e);
+      if (!k) return;
+      _commitKeybind(btn, k);
+    };
+    btn._captureHandler = handler;
+    document.addEventListener('keydown', handler, true);
+  }
+
+  function _exitKeybindCapture(btn, committed) {
+    if (!btn.classList.contains('capturing')) return;
+    btn.classList.remove('capturing');
+    if (!committed) {
+      btn.textContent = btn._captureOriginalText;
+    }
+    if (btn._captureHandler) {
+      document.removeEventListener('keydown', btn._captureHandler, true);
+      btn._captureHandler = null;
+    }
+  }
+
+  function _normalizeKeyEvent(e) {
+    // Skip modifier-only presses; the `keyboard` lib also doesn't bind those alone.
+    const skip = ['Shift', 'Control', 'Alt', 'Meta', 'Tab', 'CapsLock', 'OS', 'ContextMenu'];
+    if (skip.includes(e.key)) return null;
+    if (!e.key) return null;
+    if (e.key === ' ') return 'space';
+    return e.key.toLowerCase();
+  }
+
+  async function _commitKeybind(btn, keyName) {
+    if (btn._committing) return;
+    const settingKey = btn.dataset.settingKey;
+    const label = btn.closest?.('.row-item')?.querySelector('.row-label')?.textContent.trim() || 'Setting';
+    const oldValue = btn._captureOriginalValue;
+    btn._committing = true;
+    btn.disabled = true;
+    _exitKeybindCapture(btn, false);
+    try {
+      const r = await sendCommand('set', { key: settingKey, value: keyName });
+      if (r.ok === false) {
+        showToast(r.msg || `Could not save ${label} hotkey`, 'err');
+        return;
+      }
+      const savedKey = String(r.value ?? keyName);
+      _pushUndo(settingKey, oldValue, savedKey);
+      btn.dataset.value = savedKey;
+      btn.textContent = savedKey.toUpperCase();
+      showToast(`${label} hotkey set to ${savedKey.toUpperCase()}`);
+    } finally {
+      btn._committing = false;
+      btn.disabled = false;
+    }
+  }
+
+  // Init wired after DOMContentLoaded handler at the bottom of this IIFE.
+
+  window.resetMacroSettings = async () => {
+    if (_macroRunning || _macroUiAction) {
+      showToast('Stop the macro before resetting settings', 'err');
+      return;
+    }
+    if (!window.confirm('Reset macro controls and tuning to the shipped defaults? Calibration, appearance, window size, save location, presets, and logs will be kept.')) return;
+    const r = await sendCommand('reset_defaults');
+    if (r?.ok) {
+      _undoStack.length = 0;
+      _renderUndoButton();
+      _lastStateHash = '';
+      const state = await getState();
+      if (state) applyState(state);
+    }
+    showToast(r?.msg || 'Macro settings restored', r?.ok ? 'ok' : 'err');
+  };
+
+  // Backward-compatible alias for the command palette until every caller is migrated.
+  window.resetDefaults = window.resetMacroSettings;
+
+  window.factoryResetApp = async () => {
+    if (_macroRunning || _macroUiAction) {
+      showToast('Stop the macro before factory reset', 'err');
+      return;
+    }
+    const confirmed = window.confirm(
+      'Factory reset XynMacro? This restores macro settings, calibration, save location, appearance, update preferences, interface zoom, sidebar width, and window position/size. Removes your saved Discord webhook. Cancels a pending shutdown. Saved logs and custom theme presets are kept.'
+    );
+    if (!confirmed) return;
+    const backend = await sendCommand('factory_reset');
+    if (!backend?.ok) {
+      showToast(backend?.msg || 'Factory reset failed', 'err');
+      return;
+    }
+    ACTIVE_PREFERENCE_KEYS.forEach((key) => localStorage.removeItem(key));
+    try {
+      await invoke('factory_reset_app_prefs');
+    } catch (error) {
+      showToast(`Macro reset, but window reset failed: ${error}`, 'err');
+      return;
+    }
+    window.location.reload();
+  };
+
+  const calibration = XynMacroCalibrationControls.create({ document, invoke, sendCommand, showToast });
+  window.calibBtn = calibration.calibBtn;
+  window.calibRegion = calibration.calibRegion;
+  window.togglePreview = calibration.togglePreview;
+
+  window.copyDiagnostics = async () => {
+    try {
+      const report = await invoke('proxy_get', { path: '/diagnostics' });
+      if (!report || report.ok === false) {
+        showToast(report?.summary || 'Diagnostics unavailable', 'err');
+        return;
+      }
+      const lines = [
+        `XynMacro ${document.getElementById('appVer')?.textContent || ''}`.trim(),
+        report.summary,
+        `Monitor: ${JSON.stringify(report.monitor || {})}`,
+        `Mode: ${report.window_mode}; DPI: ${report.dpi}; foreground: ${report.foreground}; minimized: ${report.minimized}`,
+        `Template scores: ${JSON.stringify(report.template_scores || {})}`,
+        `Settings: ${JSON.stringify(report.settings || {})}`,
+        `Calibration: ${JSON.stringify(report.calibration || {})}`,
+        report.capture_note || '',
+        ...(report.issues || []).map(issue => `WARNING: ${issue}`),
+      ].filter(Boolean);
+      await navigator.clipboard.writeText(lines.join('\n'));
+      showToast('Diagnostic report copied', 'ok');
+    } catch (error) {
+      showToast(`Could not copy diagnostics: ${error}`, 'err');
+    }
+  };
+
+  function _selectedSegmentValue(segmentId) {
+    return document.querySelector(`#${segmentId} .seg-btn.active`)?.dataset.val || null;
+  }
+
+  window.setAgilityMode = async (mode) => {
+    const previous = _selectedSegmentValue('agilityModeSeg');
+    const r = await sendCommand('set', { key: 'agility_mode', value: mode });
+    if (r.ok === false) return showToast(r.msg || 'Agility mode change failed', 'err');
+    _syncAgilityModeSeg(mode);
+    if (previous !== null) _pushUndo('agility_mode', previous, mode);
+  };
+
+  function _syncAgilityModeSeg(mode) {
+    for (const id of ['wasdStabilize', 'wasdPostBurst']) document.getElementById(id).disabled = mode !== 'v1';
+    for (const id of ['wasdGreenObserve', 'wasdAfterGreenSettle', 'wasdInterStringWait']) document.getElementById(id).disabled = mode !== 'v2';
+    const seg = document.getElementById('agilityModeSeg');
+    if (!seg) return;
+    seg.querySelectorAll('.seg-btn').forEach(b => {
+      const selected = b.dataset.val === mode;
+      b.classList.toggle('active', selected);
+      b.setAttribute('aria-pressed', selected ? 'true' : 'false');
+    });
+  }
+
+  window.setHealthMode = async (mode) => {
+    const previous = _selectedSegmentValue('healthModeSeg');
+    const r = await sendCommand('set', { key: 'health_mode', value: mode });
+    if (r.ok === false) return showToast(r.msg || 'Health mode change failed', 'err');
+    _syncHealthModeSeg(mode);
+    if (previous !== null) _pushUndo('health_mode', previous, mode);
+  };
+
+  function _syncHealthModeSeg(mode) {
+    const seg = document.getElementById('healthModeSeg');
+    if (!seg) return;
+    seg.querySelectorAll('.seg-btn').forEach(b => {
+      const selected = b.dataset.val === mode;
+      b.classList.toggle('active', selected);
+      b.setAttribute('aria-pressed', selected ? 'true' : 'false');
+    });
+    const legacyOnly = mode !== 'v1_legacy';
+    document.querySelectorAll('[data-health-legacy-control]').forEach((control) => {
+      control.disabled = legacyOnly;
+      control.title = legacyOnly
+        ? 'Only used by Legacy v1 health detection.'
+        : '';
+    });
+  }
+
+  window.setKiV8Mode = async (mode) => {
+    const previous = _selectedSegmentValue('kiV8ModeSeg');
+    const r = await sendCommand('set', { key: 'ki_v8_mode', value: mode });
+    if (r.ok === false) return showToast(r.msg || 'Ki mode change failed', 'err');
+    _syncKiV8ModeSeg(mode);
+    if (previous !== null) _pushUndo('ki_v8_mode', previous, mode);
+  };
+
+  function _syncKiV8ModeSeg(mode) {
+    document.getElementById('kiV8ClickDelay').disabled = mode !== 'v1_time';
+    for (const id of ['kiV8V2TargetRFactor', 'kiLatencyComp', 'kiV8V2BrightnessThreshold', 'kiV8V2BrightCountThreshold']) document.getElementById(id).disabled = mode !== 'v2_ring';
+    const seg = document.getElementById('kiV8ModeSeg');
+    if (!seg) return;
+    seg.querySelectorAll('.seg-btn').forEach(b => {
+      const selected = b.dataset.val === mode;
+      b.classList.toggle('active', selected);
+      b.setAttribute('aria-pressed', selected ? 'true' : 'false');
+    });
+  }
+
+  /* Polling */
+  const toggleMap = {
+    restart_health_after_hit: 'toggleRestartHealth',
+    restart_ki_after_hit: 'toggleRestartKi',
+    senzu_enabled: 'toggleSenzu',
+    majin_regen_senzu_reserve: 'toggleMajinRegenReserve',
+    majin_regen_auto: 'toggleMajinRegenAuto',
+    senzu_zero_gravity_on_empty: 'toggleSenzuZeroGravity',
+    no_yellow_fallback_enabled: 'toggleNoYellowFallback',
+    prevent_sleep_while_running: 'togglePreventSleep',
+    switch_to_game_on_start: 'toggleSwitchToGame',
+    hide_roblox_chat_on_start: 'toggleHideChat',
+    stop_charging_after_ki_control: 'toggleStopChargeAfterKi',
+    restore_fullscreen_on_start: 'toggleRestoreFullscreen',
+    windowed_mode_on_start: 'toggleWindowedMode',
+    display_confirm_changes: 'toggleDisplayConfirm',
+    diagnostic_mode: 'toggleDiagnosticMode',
+    shutdown_pc_when_finished: 'toggleShutdownFinished',
+    after_run_on_failure: 'toggleAfterRunFailure',
+    auto_retry_on_failure: 'toggleAutoRetry',
+    auto_retry_walk_out: 'toggleAutoRetryWalkOut',
+    auto_retry_walk_fallback: 'toggleAutoRetryWalkFallback',
+    progression_stall_enabled: 'toggleProgressionStall',
+    trait_click_approach: 'toggleTraitClickApproach',
+  };
+
+  const entryMap = {
+    start_delay_sec:                 'startDelay',
+    after_run_game_action:           'afterRunGameAction',
+    auto_retry_max_attempts:         'autoRetryMaxAttempts',
+    auto_retry_recovery_mode:        'autoRetryRecoveryMode',
+    auto_retry_walk_seconds:         'autoRetryWalkSeconds',
+    respawn_settle_sec: 'respawnSettle',
+    mouse_click_button: 'mouseClickButton',
+    startup_window_mode: 'startupWindowMode',
+    restart_after_hit_delay_sec: 'restartHitDelay',
+    charge_hold_mode: 'chargeHoldMode',
+    ki_hp_check_mode: 'kiHpCheckMode',
+    scan_rate_limit_hz: 'scanRateLimit',
+    gc_gravity_target_g:             'gcGravityTarget',
+    no_yellow_timeout_sec:           'noYellowTimeout',
+    progression_stall_timeout_sec:   'progressionStallTimeout',
+    after_switch_wait_sec:           'afterSwitchWait',
+    wasd_key_press_delay_sec:        'wasdKeyPress',
+    wasd_stabilize_delay_sec:        'wasdStabilize',
+    wasd_post_burst_delay_sec:       'wasdPostBurst',
+    agility_green_observe_sec:       'wasdGreenObserve',
+    agility_after_green_settle_sec:  'wasdAfterGreenSettle',
+    agility_inter_string_wait_sec:   'wasdInterStringWait',
+    health_hit_cooldown_sec:         'healthHitCooldown',
+    ki_v8_click_delay_sec:           'kiV8ClickDelay',
+    ki_v8_v2_target_r_factor:        'kiV8V2TargetRFactor',
+    ki_v8_v2_brightness_threshold:   'kiV8V2BrightnessThreshold',
+    ki_v8_v2_bright_count_threshold: 'kiV8V2BrightCountThreshold',
+    ki_latency_comp_ms:              'kiLatencyComp',
+    senzu_slot:                      'senzuSlot',
+    heal_method:                     'healMethod',
+    majin_regen_slot:                 'majinRegenSlot',
+    senzu_delay_sec:                 'senzuDelay',
+    senzu_recovery_timeout_sec:      'senzuRecoveryTimeout',
+    senzu_preference_mode:           'senzuPreferenceMode',
+  };
+
+  // Keybind settings mapped to .keybind-btn elements by data-setting-key.
+  const keybindSettings = ['manual_next_key', 'start_stop_hotkey', 'pause_hotkey'];
+
+  let _lastStateHash = '';
+  let _screenRes = null;
+  let _lastErrCount = null;   // tracks state.error_count so we toast once per new error
+  let _acceptedDisplaySignature = null;
+  let _acceptedDpiSignature = null;
+  let _crashNoticeShown = false;
+  let _elapsedTimer = null;
+  let _startedAt = 0;
+  let _lastBackendRunning = null;
+  let _failedStatePolls = 0;
+  let _lastOperationalStop = '';
+  const _shortcutHotkeys = { startStop: 'F6', skip: 'L', pause: 'U' };
+
+  function _fmtElapsed(secs) {
+    if (secs < 0) secs = 0;
+    const h = Math.floor(secs / 3600);
+    const m = Math.floor((secs % 3600) / 60);
+    const s = secs % 60;
+    if (h > 0) return `${h}h ${String(m).padStart(2,'0')}m ${String(s).padStart(2,'0')}s`;
+    return `${m}m ${String(s).padStart(2,'0')}s`;
+  }
+
+  function _tickElapsed() {
+    if (!_startedAt) return;
+    const formatted = _fmtElapsed(Math.floor(Date.now() / 1000 - _startedAt));
+    const el = document.getElementById('elapsedTime');
+    if (el) el.textContent = formatted;
+    const hudTime = document.getElementById('hudTime');
+    if (hudTime) {
+      hudTime.textContent = _startCountdownRemaining != null
+        ? String(_startCountdownRemaining)
+        : formatted;
+    }
+  }
+
+  let _backendPort = 0;
+  async function _refreshBackendPort(attempt = 0) {
+    try {
+      _backendPort = Number(await invoke('get_backend_port')) || 0;
+      const badge = document.getElementById('backendPort');
+      if (badge) badge.textContent = _backendPort || '—';
+    } catch (_) {}
+    // The WebView normally loads before the frozen sidecar writes its port
+    // file. Retry only during startup so Settings cannot stay stuck at “—”.
+    if (!_backendPort && attempt < 20) {
+      setTimeout(() => _refreshBackendPort(attempt + 1), 250);
+    }
+  }
+  _refreshBackendPort();
+  window.addEventListener('backend-ready', () => _refreshBackendPort());
+
+  function _renderRunSummary(run) {
+    const el = document.getElementById('runSummary');
+    if (!el) return;
+    const tel = run?.telemetry || {};
+    const outcomeLabels = {
+      completed: 'Completed',
+      incomplete: 'Incomplete',
+      stopped: 'Stopped',
+      error: 'Error',
+    };
+    const parts = [
+      outcomeLabels[run?.outcome] || 'Ended',
+      `${tel.switches || 0} switches`,
+      `${tel.health_hits || 0} health hits`,
+      `${tel.ki_clicks || 0} Ki clicks`,
+      `${tel.wasd_greens || 0} WASD confirmed`,
+    ];
+    if (tel.wasd_unconfirmed || tel.wasd_reds) {
+      parts.push(`${tel.wasd_unconfirmed || 0} uncertain`, `${tel.wasd_reds || 0} failed`);
+    }
+    if (tel.senzu_eaten || tel.senzu_refills) {
+      parts.push(`${tel.senzu_eaten || 0} Senzu eaten`, `${tel.senzu_refills || 0} refills`);
+    }
+    if (tel.majin_regens || tel.majin_regen_failures) {
+      parts.push(`${tel.majin_regens || 0} Majin regens`, `${tel.majin_regen_failures || 0} regen failures`);
+    }
+    el.textContent = `Last run · ${parts.join(' · ')}`;
+    el.hidden = false;
+  }
+
+  function applyState(state) {
+    if (!state) return;
+    shutdownControls.render(state.shutdown);
+    notificationControls.render(state.notifications);
+
+    const hash = JSON.stringify(state);
+    const changed = hash !== _lastStateHash;
+    _lastStateHash = hash;
+
+    const cfg = state.config || {};
+    const running = !!state.running;
+    if (document.documentElement.classList.contains('macro-active') !== running) {
+      document.documentElement.classList.toggle('macro-active', running);
+      window.dispatchEvent(new Event('xyn-run-state'));
+    }
+    const performance = document.getElementById('scanPerformance');
+    const metric = state.loop_metrics;
+    if (performance) performance.textContent = running && metric?.loops_per_second > 0
+      ? `${metric.loops_per_second.toFixed(1)} minigame loops/s · ${metric.last_cycle_ms.toFixed(1)} ms per cycle (includes waits, not game FPS)`
+      : 'Start a run to measure the minigame loop rate.';
+    const clickLabel = document.getElementById('effectiveClickButton');
+    if (clickLabel) clickLabel.textContent = `Effective button: ${state.effective_click_button || 'left'}`;
+    _gameWindowFound = !!state.game_window?.found;
+    _gameWindowMinimized = !!state.game_window?.minimized;
+
+    // The previous run ended without shutting down cleanly. Say so once, and make
+    // that session's log available in the report — it is in a different file from
+    // the current one, so nothing else would ever include it.
+    if (!_crashNoticeShown) {
+      _crashNoticeShown = true;
+      const crashRow = document.getElementById('bugSecCrashRow');
+      const crashBox = document.getElementById('bugSecCrash');
+      if (crashRow) crashRow.hidden = !state.previous_crash;
+      // A hidden checkbox still reports .checked, which would ask the backend for a
+      // section that isn't on offer. Keep the two in step.
+      if (crashBox) crashBox.checked = !!state.previous_crash;
+      // Persistent card, not a toast: this fires during startup, and a notice that
+      // fades after a few seconds is reliably missed while the splash is lifting.
+      if (state.previous_crash) document.getElementById('crashToast')?.classList.add('show');
+    }
+    const backendActivity = state.stop_requested ? 'Stopping'
+      : state.controller_paused_for_senzu ? (state.controller_paused ? 'Paused' : settingControls.healingActivity(state))
+      : state.controller_paused ? 'Paused'
+      : state.training_menu_visible ? 'Training Menu'
+      : (running && !state.current_state) ? 'Starting'
+      : (running ? 'Active' : 'Idle');
+    const runStarted = _lastBackendRunning === false && running;
+    const runEnded = _lastBackendRunning === true && !running;
+    _lastBackendRunning = running;
+    _macroRunning = running;
+    if (!running && _startCountdownRemaining != null
+        && !_startTask && _macroUiAction !== 'starting') {
+      _hideStartCountdown();
+    }
+    if (runStarted) {
+      _compactAlert = '';
+      _lastOperationalStop = '';
+    }
+    if (_macroUiAction === 'stopping' && !running) _setMacroUiAction('');
+    _renderMacroControls();
+
+    // Toast once when a run ends on an error (the sidecar bumps error_count on a crash).
+    if (typeof state.error_count === 'number') {
+      if (_lastErrCount !== null && state.error_count > _lastErrCount) {
+        showToast(state.last_error ? `Macro stopped — ${state.last_error}. Check Diagnostics.`
+                                   : 'Macro stopped on an error — Check Diagnostics.', 'err');
+      }
+      _lastErrCount = state.error_count;
+    }
+    const operationalStop = ['error', 'empty'].includes(state.senzu_status)
+      ? state.senzu_status
+      : '';
+    if (operationalStop && operationalStop !== _lastOperationalStop) {
+      _lastOperationalStop = operationalStop;
+      showToast(
+        operationalStop === 'empty'
+          ? 'No allowed Senzu Bean stock left — Auto-Senzu is off for this run. Training continues.'
+          : 'Macro stopped during Senzu recovery. Check Diagnostics.',
+        operationalStop === 'empty' ? 'warn' : 'err'
+      );
+    }
+    const stats = Array.isArray(state.available_stats) ? state.available_stats : ['Health', 'Agility', 'Ki Control', 'Physical Damage', 'Ki Damage'];
+
+    if (running && state.started_at) {
+      _startedAt = state.started_at;
+      if (!_elapsedTimer) {
+        _elapsedTimer = setInterval(_tickElapsed, 1000);
+        _tickElapsed();
+      }
+    } else {
+      if (_elapsedTimer) { clearInterval(_elapsedTimer); _elapsedTimer = null; }
+      const el = document.getElementById('elapsedTime');
+      if (el) el.textContent = _startedAt ? _fmtElapsed(Math.floor(Date.now() / 1000 - _startedAt)) : '—';
+      const hudTime = document.getElementById('hudTime');
+      if (hudTime) hudTime.textContent = '';
+      _startedAt = 0;
+    }
+
+    if (_compactAlert) _setCompactAlert(_compactAlert);
+    if (!changed) return;
+
+    const dot  = document.getElementById('statusDot');
+    const text = document.getElementById('statusText');
+    const hDot = document.querySelector('#headerStatus .dot');
+    const hTxt = document.getElementById('headerStatusText');
+
+    dot.classList.toggle('active', running);
+    text.textContent = running ? 'Active' : 'Idle';
+    if (hDot) hDot.style.background = running ? 'var(--green)' : 'var(--text3)';
+    if (hTxt) hTxt.textContent = running ? 'Active' : 'Idle';
+
+    const curState = state.current_state || 'Ready';
+    document.getElementById('currentState').textContent = _macroUiAction === 'starting' ? 'Starting'
+      : _macroUiAction === 'stopping' ? 'Stopping'
+      : backendActivity;
+    const curStat = document.getElementById('currentStat');
+    if (curStat) {
+      const prog = state.progression;
+      const progTxt = (running && prog) ? ` · ${prog.x}/${prog.y}`
+                    : (running && state.progression_status === 'complete') ? ' · complete'
+                    : (running && state.progression_status === 'tracking') ? ' · tracking'
+                    : '';
+      const menuTxt = state.training_menu_visible ? ' · menu open' : '';
+      curStat.textContent = (running && state.current_state) ? state.current_state + progTxt + menuTxt : '—';
+    }
+    // Compact HUD: show current stat (and separator) only when actually running.
+    const hudStat = document.getElementById('hudStat');
+    const hudSep = document.getElementById('hudSep');
+    if (hudStat) {
+      hudStat.textContent = (running && state.current_state) ? state.current_state : '';
+      hudStat.title = hudStat.textContent;
+    }
+    if (hudSep) hudSep.style.display = (running && state.current_state) ? '' : 'none';
+    const hudDot = document.getElementById('hudStatusDot');
+    const hudState = document.getElementById('hudState');
+    const hudToggle = document.getElementById('hudMacroToggle');
+    if (hudDot) hudDot.classList.toggle('active', running);
+    if (hudState && !_compactAlert) {
+      hudState.textContent = _macroUiAction === 'stopping' ? 'Stopping'
+        : _startCountdownRemaining != null ? 'Starting'
+        : backendActivity;
+    }
+    if (_startCountdownRemaining != null) {
+      if (hudStat) hudStat.textContent = '';
+      if (hudSep) hudSep.style.display = 'none';
+      const hudTime = document.getElementById('hudTime');
+      if (hudTime) hudTime.textContent = String(_startCountdownRemaining);
+    }
+    if (hudToggle && !_compactAlert) {
+      hudToggle.title = (running || _macroUiAction === 'starting' || _startCountdownRemaining != null)
+        ? 'Stop macro'
+        : 'Start macro';
+      hudToggle.setAttribute('aria-label', hudToggle.title);
+    }
+    if (_compactAlert) _setCompactAlert(_compactAlert);
+
+    const formatHotkey = (value, fallback) => String(value || fallback).toUpperCase();
+    const hintStartStop = document.getElementById('hintStartStop');
+    const hintManualNext = document.getElementById('hintManualNext');
+    const hintPause = document.getElementById('hintPause');
+    if (hintStartStop) hintStartStop.textContent = formatHotkey(cfg.start_stop_hotkey, 'F6');
+    if (hintManualNext) hintManualNext.textContent = formatHotkey(cfg.manual_next_key, 'L');
+    if (hintPause) hintPause.textContent = formatHotkey(cfg.pause_hotkey, 'U');
+    _shortcutHotkeys.startStop = formatHotkey(cfg.start_stop_hotkey, 'F6');
+    _shortcutHotkeys.skip = formatHotkey(cfg.manual_next_key, 'L');
+    _shortcutHotkeys.pause = formatHotkey(cfg.pause_hotkey, 'U');
+
+    for (const [key, elId] of Object.entries(toggleMap)) {
+      const el = document.getElementById(elId);
+      if (el && !el._saveTask) {
+        const enabled = !!cfg[key];
+        el._prevValue = enabled;
+        el.classList.toggle('active', enabled);
+        el.setAttribute('aria-checked', enabled ? 'true' : 'false');
+      }
+    }
+    _syncAgilityModeSeg(cfg.agility_mode || 'v2');
+    _syncHealthModeSeg(cfg.health_mode || 'v2_track');
+    if (cfg.ki_v8_mode) _syncKiV8ModeSeg(cfg.ki_v8_mode);
+
+    for (const [key, elId] of Object.entries(entryMap)) {
+      const el = document.getElementById(elId);
+      if (el && !el._saveTask && document.activeElement !== el) {
+        const v = cfg[key];
+        el.value = v == null ? '' : v;
+        // Keep auto-save's reference value in sync so post-state edits diff correctly.
+        el._prevValue = v == null ? null
+          : ((el.type === 'number' || el.type === 'range') ? Number(v) : v);
+      }
+    }
+    _syncAfterRunControls();
+    settingControls.sync();
+    _renderGravityValue(cfg.gc_gravity_target_g);
+
+    // Keybind buttons: sync display only when not actively capturing.
+    for (const setting of keybindSettings) {
+      const btn = document.querySelector(`.keybind-btn[data-setting-key="${setting}"]`);
+      if (!btn || btn.classList.contains('capturing') || btn._committing) continue;
+      const v = cfg[setting];
+      if (v == null) continue;
+      btn.dataset.value = String(v);
+      btn.textContent = String(v).toUpperCase();
+    }
+
+    const ver = state.version || '';
+    document.getElementById('brandVer').textContent = ver;
+    document.getElementById('appVer').textContent = ver;
+    if (ver) window._maybeShowChangelog(ver);
+    document.getElementById('backendPort').textContent = _backendPort || '—';
+    const saveDirEl = document.getElementById('saveDir');
+    if (saveDirEl && state.save_dir) saveDirEl.textContent = state.save_dir;
+    const configDirEl = document.getElementById('configDir');
+    if (configDirEl && state.config_dir) configDirEl.textContent = state.config_dir;
+
+    const incomingOrder = Array.isArray(cfg.training_order) ? cfg.training_order : [];
+    const incomingOrderSig = _sig(incomingOrder);
+    const incomingStatsSig = _sig(stats);
+    if (incomingOrderSig !== lastOrderSig || incomingStatsSig !== lastStatsSig) {
+      availableStats = [...stats];
+      statOrder = incomingOrder.filter(v => availableStats.includes(v));
+      lastOrderSig = _sig(statOrder);
+      lastStatsSig = incomingStatsSig;
+      renderTrainingOrder();
+    }
+
+    const scr = state.screen || {};
+    const resIcon = document.getElementById('resIcon');
+    const resText = document.getElementById('resText');
+    const resPill = document.getElementById('resPill');
+    const setResolutionButton = document.getElementById('btnRes1080');
+    const revertResolutionButton = document.getElementById('btnResRevert');
+    if (resIcon && resText) {
+      const nextScreen = XynMacroScreenState.normalizeScreen(scr);
+      if (setResolutionButton) setResolutionButton.disabled = running || !nextScreen;
+      // Revert can still restore a display changed earlier when Roblox has
+      // temporarily disappeared, so only an active macro blocks it here.
+      if (revertResolutionButton) {
+        revertResolutionButton.disabled = running
+          || (!nextScreen && !state.display_restore_pending);
+        revertResolutionButton.title = state.display_restore_pending
+          ? 'Restore the display mode saved before Set 1080p'
+          : 'Restore the current Roblox display to its Windows setting';
+      }
+      if (!nextScreen) {
+        _screenRes = null;
+        _acceptedDisplaySignature = null;
+        _acceptedDpiSignature = null;
+        resIcon.className = 'res-icon res-warn';
+        resIcon.innerHTML = '&#10007;';
+        resText.textContent = 'Unavailable';
+        if (resPill) resPill.title = 'Open Roblox to detect its display';
+      } else {
+        const { w, h, hz } = nextScreen;
+        const scaled = Math.abs(nextScreen.scale - 1) > 0.01;
+        // Scaling counts as "not ok" here: 1920×1080 at 125% is as broken for a
+        // pixel-reading macro as the wrong resolution, and the pill is the only
+        // place the user would ever notice.
+        const ok = (w === 1920 && h === 1080) && !scaled;
+        if (_screenRes?.signature !== nextScreen.signature) {
+          _acceptedDisplaySignature = null;
+        }
+        if (_screenRes?.dpiSignature !== nextScreen.dpiSignature) {
+          _acceptedDpiSignature = null;
+        }
+        resIcon.className = 'res-icon ' + (ok ? 'res-ok' : 'res-warn');
+        resIcon.innerHTML = ok ? '&#10003;' : '&#10007;';
+        resText.textContent = ok ? '1080p'
+          : scaled ? `${Math.round(nextScreen.scale * 100)}% scale`
+          : `${w}×${h}`;
+        _screenRes = nextScreen;
+        if (resPill) {
+          let tip = `Resolution ${w}×${h}`;
+          if (hz) tip += ` @ ${hz}Hz`;
+          if (scaled) {
+            tip += ` — Windows scaling ${Math.round(nextScreen.scale * 100)}%, set it to 100%`;
+          } else if (!ok) {
+            tip += ' — macro designed for 1920×1080';
+          }
+          resPill.title = tip;
+        }
+      }
+    }
+
+    const gw = state.game_window || {};
+    const gameIcon = document.getElementById('gameIcon');
+    const gameText = document.getElementById('gameText');
+    if (gameIcon && gameText) {
+      if (gw.found) {
+        gameIcon.className = 'res-icon res-ok';
+        gameIcon.innerHTML = '&#10003;';
+        gameText.textContent = `${gw.width}×${gw.height} @ (${gw.x}, ${gw.y})`;
+      } else {
+        gameIcon.className = 'res-icon res-warn';
+        gameIcon.innerHTML = '&#10007;';
+        gameText.textContent = 'Not found — open Roblox first';
+      }
+    }
+
+    const bc = state.button_calibration || {};
+    const cur = bc.current || {};
+    const waiting = bc.waiting || '';
+    [
+      ['Health',          'btnPosHealth'],
+      ['Agility',         'btnPosAgility'],
+      ['Ki Control',      'btnPosKiControl'],
+      ['Physical Damage', 'btnPosPhysicalDamage'],
+      ['Ki Damage',       'btnPosKiDamage'],
+    ].forEach(([statName, elId]) => {
+      const el = document.getElementById(elId);
+      if (!el) return;
+      if (waiting === statName) {
+        el.textContent = 'Waiting for click…';
+      } else if (bc.error?.startsWith(`${statName}:`)) {
+        el.textContent = 'Save failed — Check Diagnostics';
+      } else {
+        const v = cur[statName];
+        el.textContent = (Array.isArray(v) && v.length === 2 && (v[0] || v[1])) ? `(${v[0]}, ${v[1]})` : '—';
+      }
+    });
+
+    const rc = state.region_calibration || {};
+    const rcCur = rc.current || {};
+    const rcWaiting = rc.waiting || '';
+    [['health_box','regionPosHealth'],['agility_box','regionPosAgility']].forEach(([key, elId]) => {
+      const el = document.getElementById(elId);
+      if (!el) return;
+      if (rcWaiting === key) {
+        el.textContent = 'Drag rectangle…';
+      } else if (rc.error?.startsWith(`${key}:`)) {
+        el.textContent = 'Save failed — Check Diagnostics';
+      } else {
+        const v = rcCur[key];
+        el.textContent = (v && v.width && v.height)
+          ? `(${v.left}, ${v.top}) ${v.width}×${v.height}`
+          : '—';
+      }
+    });
+
+    // Telemetry strip on Dashboard.
+    const tel = state.telemetry || {};
+    const wasdAttempts = (tel.wasd_greens || 0) + (tel.wasd_unconfirmed || 0) + (tel.wasd_reds || 0);
+    const adaptiveWasd = cfg.agility_mode !== 'v1';
+    const wasdRateEl = document.getElementById('telemWasdRate');
+    if (wasdRateEl) {
+      if (!adaptiveWasd || wasdAttempts === 0) {
+        wasdRateEl.textContent = '—';
+      } else {
+        const pct = (tel.wasd_greens / wasdAttempts) * 100;
+        wasdRateEl.textContent = pct.toFixed(0) + '%';
+      }
+    }
+    const wasdSubEl = document.getElementById('telemWasdBreakdown');
+    if (wasdSubEl) {
+      wasdSubEl.textContent = !adaptiveWasd
+        ? 'unavailable in Burst mode'
+        : wasdAttempts === 0
+        ? 'no data yet'
+        : `${tel.wasd_greens || 0}✓  ${tel.wasd_unconfirmed || 0}? ${tel.wasd_reds || 0}✗ (${tel.wasd_sequences || 0} seq)`;
+    }
+    const kiClicksEl = document.getElementById('telemKiClicks');
+    if (kiClicksEl) kiClicksEl.textContent = String(tel.ki_clicks || 0);
+    const kiSubEl = document.getElementById('telemKiBreakdown');
+    if (kiSubEl) {
+      kiSubEl.textContent = (tel.ki_dots_found || 0) === 0
+        ? 'no dots found'
+        : `${tel.ki_dots_found || 0} dots · ${tel.ki_timeouts || 0} timeouts`;
+    }
+    const healthHitsEl = document.getElementById('telemHealthHits');
+    if (healthHitsEl) healthHitsEl.textContent = String(tel.health_hits || 0);
+    const healthSubEl = document.getElementById('telemHealthBreakdown');
+    if (healthSubEl) healthSubEl.textContent = (tel.health_hits || 0) === 0 ? 'no hits yet' : 'F presses';
+    settingControls.renderHealingTelemetry(state);
+    const switchesEl = document.getElementById('telemSwitches');
+    if (switchesEl) switchesEl.textContent = String(tel.switches || 0);
+    const runSummary = document.getElementById('runSummary');
+    if (runStarted && runSummary) runSummary.hidden = true;
+    if (runEnded) {
+      _renderRunSummary(state.last_run);
+      if (state.last_run?.outcome === 'incomplete') {
+        showToast(state.last_run.reason || 'Training order ended with skipped stats', 'warn');
+      }
+    }
+
+  }
+
+  const logViewer = XynMacroLogViewer.create({ document, invoke, navigator, showToast });
+  window.clearLogs = logViewer.clearLogs;
+  window.copyLog = logViewer.copyLog;
+  window.saveLog = logViewer.saveLog;
+
+  let _saveDirPickerBusy = false;
+  window.pickSaveDir = async () => {
+    if (_saveDirPickerBusy) return;
+    _saveDirPickerBusy = true;
+    const button = document.getElementById('pickSaveDir');
+    button.disabled = true;
+    try {
+      const r = await invoke('proxy_post', { path: '/pick_save_dir', body: null });
+      if (r && r.ok) showToast('Save folder updated', 'ok');
+      else if (r && r.msg !== 'cancelled') showToast((r && r.msg) || 'Could not set folder', 'err');
+    } catch (e) { showToast('Could not open folder picker', 'err'); }
+    finally {
+      _saveDirPickerBusy = false;
+      button.disabled = false;
+    }
+  };
+  window.openSaveDir = async () => {
+    try {
+      const r = await invoke('proxy_post', { path: '/open_save_dir', body: null });
+      if (!r || r.ok === false) showToast((r && r.msg) || 'Could not open folder', 'err');
+    } catch (e) { showToast('Could not open folder', 'err'); }
+  };
+  window.openDiscord = async () => {
+    try {
+      const r = await invoke('proxy_post', { path: '/open_discord', body: null });
+      if (!r || r.ok === false) showToast('Could not open Discord. The invite is discord.gg/dbogen', 'err');
+    } catch (e) { showToast('Could not open Discord. The invite is discord.gg/dbogen', 'err'); }
+  };
+  window.openConfigDir = async () => {
+    try {
+      const r = await invoke('proxy_post', { path: '/open_config_dir', body: null });
+      if (!r || r.ok === false) showToast((r && r.msg) || 'Could not open folder', 'err');
+    } catch (e) { showToast('Could not open folder', 'err'); }
+  };
+
+  // Skip a tick while the previous /state is still in flight. Without this a slow
+  // backend lets 800ms ticks stack invokes faster than they complete, and the queue
+  // never drains — which is what left every button unresponsive.
+  let _pollBusy = false;
+  function _showBackendLost() {
+    if (_elapsedTimer) { clearInterval(_elapsedTimer); _elapsedTimer = null; }
+    _startedAt = 0;
+    _macroRunning = false;
+    _lastBackendRunning = false;
+    _macroUiAction = '';
+    _gameWindowFound = false;
+    _gameWindowMinimized = false;
+    _lastStateHash = '';
+    _renderMacroControls();
+    document.documentElement.classList.remove('macro-active');
+    const headerDot = document.querySelector('#headerStatus .dot');
+    if (headerDot) headerDot.style.background = 'var(--text3)';
+    for (const id of ['statusText', 'headerStatusText', 'currentState', 'hudState', 'sfState']) {
+      const el = document.getElementById(id);
+      if (el) el.textContent = "Lost connection to XynMacro's engine";
+    }
+    for (const id of ['elapsedTime', 'hudTime', 'sfTime']) {
+      const el = document.getElementById(id);
+      if (el) el.textContent = '—';
+    }
+    for (const id of ['statusDot', 'hudStatusDot', 'sfDot']) {
+      document.getElementById(id)?.classList.remove('active');
+    }
+    window.dispatchEvent(new CustomEvent('backend-error', {
+      detail: { message: 'XynMacro\'s engine stopped responding. Restart XynMacro.', backendLost: true }
+    }));
+  }
+  async function poll() {
+    if (_pollBusy) return;
+    _pollBusy = true;
+    try {
+      const state = await getState();
+      if (!state) {
+        if (_lastBackendRunning !== null) {
+          _failedStatePolls += 1;
+          if (_failedStatePolls === 3) _showBackendLost();
+        }
+        return;
+      }
+      _failedStatePolls = 0;
+      const backendErrorBar = document.getElementById('backendErrorBar');
+      if (backendErrorBar?.dataset.backendLost === 'true') backendErrorBar.remove();
+      applyState(state);
+      _updateFooter(state); // footer shares this poll — it used to run its own /state interval
+    } finally {
+      _pollBusy = false;
+    }
+  }
+
+  let _frontendRefreshTask = null;
+  window.refreshFrontend = () => {
+    if (_frontendRefreshTask) return _frontendRefreshTask;
+    const task = (async () => {
+      // Refresh rendered frontend data only. The sidecar and an active macro run
+      // stay untouched, and replacing the log DOM avoids duplicate lines.
+      _lastStateHash = '';
+      lastOrderSig = '';
+      lastStatsSig = '';
+      const [state] = await Promise.all([getState(), pollLogs(true)]);
+      if (!state) {
+        showToast('Could not refresh app data', 'err');
+        return;
+      }
+      applyState(state);
+      _updateFooter(state);
+      showToast('App data and session log refreshed', 'ok');
+    })().finally(() => {
+      if (_frontendRefreshTask === task) _frontendRefreshTask = null;
+    });
+    _frontendRefreshTask = task;
+    return task;
+  };
+
+  _setupGravitySlider();
+  _setupAutoSave();
+  _syncAfterRunControls();
+  settingControls.sync();
+  _setupKeybindCapture();
+  _renderUndoButton();
+
+  poll();
+  pollTimer = setInterval(poll, 800);
+  logViewer.start();
+
+  /* Command palette */
+  const COMMANDS = [
+    { id: 'start',       label: 'Start macro',                group: 'Actions',     hint: () => _shortcutHotkeys.startStop, run: () => window.startMacro() },
+    { id: 'stop',        label: 'Stop macro',                  group: 'Actions',     hint: () => _shortcutHotkeys.startStop, run: () => window.stopMacro() },
+    { id: 'compact',     label: 'Compact mode',                group: 'Actions',     hint: 'Ctrl+M', run: () => window.wcCompact() },
+    { id: 'ontop',       label: 'Toggle always on top',        group: 'Actions',                  run: () => window.wcOnTop() },
+    { id: 'savelog',     label: 'Save session log',            group: 'Actions',                  run: () => window.saveLog() },
+    { id: 'refresh',     label: 'Refresh app data',       group: 'Actions',     hint: 'Ctrl+R', run: () => window.refreshFrontend() },
+    { id: 'reset',       label: 'Reset macro settings',        group: 'Actions',                  run: () => window.resetMacroSettings() },
+    { id: 'nav-dash',    label: 'Open Dashboard',              group: 'Navigation', run: () => openView('dashboard') },
+    { id: 'nav-ctrl',    label: 'Open Training',               group: 'Navigation', run: () => openView('controls') },
+    { id: 'nav-tune',    label: 'Open Minigames',                 group: 'Navigation', run: () => openView('tuning') },
+    { id: 'nav-calib',   label: 'Open Calibration',            group: 'Navigation', run: () => openView('ki') },
+    { id: 'nav-input', label: 'Open Input & Display', group: 'Navigation', run: () => openView('input') },
+    { id: 'nav-logs',    label: 'Open Diagnostics',                   group: 'Navigation', run: () => openView('logs') },
+    { id: 'nav-set',     label: 'Open Settings',               group: 'Navigation', run: () => openView('settings') },
+  ];
+  for (const [key, t] of Object.entries(appearance.THEMES)) {
+    COMMANDS.push({ id: 'theme-' + key, label: 'Theme: ' + t.name, group: 'Themes', run: () => appearance.applyTheme(key) });
+  }
+
+  // Index the controls themselves so search can answer "where is this setting?".
+  const aliases = {
+    toggleSwitchToGame: 'bring front foreground focus roblox window top',
+    toggleHideChat: 'chat close hide roblox',
+    toggleStopChargeAfterKi: 'shift charge ki control stop',
+    kiHpCheckMode: 'hp health check timing drain senzu ki',
+    notificationScreenshots: 'discord webhook picture screenshot image',
+    mouseClickButton: 'left right click swap remap',
+    respawnSettle: 'respawn loading ping delay walk',
+    scanRateLimit: 'scan rate speed performance fps lag',
+    startupWindowMode: 'resize resolution fullscreen windowed',
+    toggleRestartKi: 'circle restart tab',
+    toggleRestartHealth: 'health f restart tab',
+    healMethod: 'majin regen heal senzu',
+    chargeHoldMode: 'shift charge ki',
+    progressionStallTimeout: 'stuck capped points left',
+    toggleAutoRetryWalkFallback: 'hold w walk blind boundary',
+  };
+  for (const control of document.querySelectorAll('.view .row-ctrl [id]')) {
+    const view = control.closest('.view');
+    const label = control.closest('.row-item')?.querySelector('.row-label')?.textContent.trim();
+    if (!view || !label) continue;
+    COMMANDS.push({ id: 'setting-' + control.id, label, keywords: aliases[control.id] || '', group: 'Settings', run: () => {
+      openView(view.id);
+      control.scrollIntoView({ block: 'center' });
+      control.focus();
+    } });
+  }
+
+  const paletteBackdrop = document.getElementById('paletteBackdrop');
+  const paletteInput    = document.getElementById('paletteInput');
+  const paletteResults  = document.getElementById('paletteResults');
+  let paletteOpen = false;
+  let paletteFiltered = [];
+  let paletteActiveIdx = 0;
+
+  function _matchScore(q, label) {
+    if (!q) return 1;
+    q = q.toLowerCase();
+    label = label.toLowerCase();
+    if (label.startsWith(q)) return 3;
+    if (label.includes(q)) return 2;
+    // Every typed word must start a word in the label ("ki con", "chat"). Scattered
+    // letters used to match too: "fron" listed "Stop Charging After Ki Control".
+    const words = label.split(/[^a-z0-9]+/).filter(Boolean);
+    return q.split(/\s+/).every(part => words.some(word => word.startsWith(part))) ? 1 : 0;
+  }
+
+  function renderPalette() {
+    const q = paletteInput.value.trim();
+    paletteFiltered = COMMANDS
+      .map(c => ({ c, s: _matchScore(q, c.label + ' ' + (c.keywords || '')) }))
+      .filter(x => x.s > 0)
+      .sort((a, b) => b.s - a.s)
+      .map(x => x.c);
+    if (paletteActiveIdx >= paletteFiltered.length) paletteActiveIdx = 0;
+
+    paletteResults.innerHTML = '';
+    if (paletteFiltered.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'palette-empty';
+      empty.textContent = 'No matches';
+      paletteResults.appendChild(empty);
+      return;
+    }
+    let lastGroup = null;
+    paletteFiltered.forEach((cmd, i) => {
+      if (cmd.group !== lastGroup) {
+        const g = document.createElement('div');
+        g.className = 'palette-group';
+        g.textContent = cmd.group;
+        paletteResults.appendChild(g);
+        lastGroup = cmd.group;
+      }
+      const item = document.createElement('div');
+      item.className = 'palette-item' + (i === paletteActiveIdx ? ' active' : '');
+      item.dataset.idx = i;
+      const lbl = document.createElement('span');
+      lbl.className = 'palette-item-label';
+      lbl.textContent = cmd.label;
+      item.appendChild(lbl);
+      const hint = typeof cmd.hint === 'function' ? cmd.hint() : cmd.hint;
+      if (hint) {
+        const k = document.createElement('span');
+        k.className = 'palette-kbd';
+        k.textContent = hint;
+        item.appendChild(k);
+      }
+      item.addEventListener('click', () => { paletteActiveIdx = i; runActivePalette(); });
+      item.addEventListener('mouseenter', () => {
+        if (paletteActiveIdx === i) return;
+        paletteActiveIdx = i;
+        paletteResults.querySelectorAll('.palette-item').forEach((el, idx) => {
+          el.classList.toggle('active', idx === paletteActiveIdx);
+        });
+      });
+      paletteResults.appendChild(item);
+    });
+  }
+
+  function openPalette() {
+    if (_isCompact) {
+      window.wcCompact();
+      setTimeout(openPalette, 260);
+      return;
+    }
+    paletteOpen = true;
+    paletteInput.value = '';
+    paletteActiveIdx = 0;
+    paletteBackdrop.classList.add('open');
+    renderPalette();
+    _focusModal(paletteBackdrop, paletteInput);
+  }
+  function closePalette() {
+    paletteOpen = false;
+    paletteBackdrop.classList.remove('open');
+    _restoreModalFocus(paletteBackdrop);
+  }
+  function runActivePalette() {
+    const cmd = paletteFiltered[paletteActiveIdx];
+    if (!cmd) return;
+    closePalette();
+    setTimeout(() => cmd.run(), 40);
+  }
+
+  paletteInput.addEventListener('input', renderPalette);
+  paletteInput.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      paletteActiveIdx = Math.min(paletteFiltered.length - 1, paletteActiveIdx + 1);
+      renderPalette();
+      const el = paletteResults.querySelector('.palette-item.active');
+      if (el) el.scrollIntoView({ block: 'nearest' });
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      paletteActiveIdx = Math.max(0, paletteActiveIdx - 1);
+      renderPalette();
+      const el = paletteResults.querySelector('.palette-item.active');
+      if (el) el.scrollIntoView({ block: 'nearest' });
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      runActivePalette();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      closePalette();
+    }
+  });
+  paletteBackdrop.addEventListener('click', (e) => {
+    if (e.target === paletteBackdrop) closePalette();
+  });
+
+  /* Shortcuts overlay */
+  const shortcutSections = () => [
+    { group: 'Global',  items: [
+      [_shortcutHotkeys.startStop, 'Start / stop macro (configurable)'],
+      [_shortcutHotkeys.skip,      'Skip current stat (configurable)'],
+      [_shortcutHotkeys.pause,     'Pause / resume (configurable)'],
+    ]},
+    { group: 'App',     items: [
+      ['Ctrl+K', 'Command palette'],
+      ['Ctrl+R', 'Refresh app data, stats and the session log'],
+      ['Ctrl+M', 'Compact mode'],
+      ['?',      'This menu'],
+      ['Esc',    'Close overlays'],
+    ]},
+    { group: 'Window',  items: [
+      ['Drag title bar',  'Move window'],
+      ['Drag any edge',  'Resize window'],
+      ['Drag sidebar',   'Resize sidebar'],
+    ]},
+  ];
+  const shortcutsBackdrop = document.getElementById('shortcutsBackdrop');
+  const shortcutsContent  = document.getElementById('shortcutsContent');
+  let shortcutsOpen = false;
+  function renderShortcuts() {
+    shortcutsContent.innerHTML = '';
+    for (const sec of shortcutSections()) {
+      const g = document.createElement('div');
+      g.className = 'palette-group';
+      g.textContent = sec.group;
+      shortcutsContent.appendChild(g);
+      for (const [k, lbl] of sec.items) {
+        const it = document.createElement('div');
+        it.className = 'palette-item';
+        const l = document.createElement('span');
+        l.className = 'palette-item-label';
+        l.textContent = lbl;
+        const kb = document.createElement('span');
+        kb.className = 'palette-kbd';
+        kb.textContent = k;
+        it.append(l, kb);
+        shortcutsContent.appendChild(it);
+      }
+    }
+  }
+  function openShortcuts() {
+    if (_isCompact) {
+      window.wcCompact();
+      setTimeout(openShortcuts, 260);
+      return;
+    }
+    shortcutsOpen = true;
+    shortcutsBackdrop.classList.add('open');
+    renderShortcuts();
+    _focusModal(shortcutsBackdrop);
+  }
+  function closeShortcuts() {
+    shortcutsOpen = false;
+    shortcutsBackdrop.classList.remove('open');
+    _restoreModalFocus(shortcutsBackdrop);
+  }
+  shortcutsBackdrop.addEventListener('click', (e) => {
+    if (e.target === shortcutsBackdrop) closeShortcuts();
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Tab' && _trapModalFocus(e)) return;
+    const inInput = ['INPUT','TEXTAREA'].includes(document.activeElement?.tagName);
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'r') {
+      e.preventDefault();
+      window.refreshFrontend();
+      return;
+    }
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+      e.preventDefault();
+      if (paletteOpen) closePalette(); else openPalette();
+      return;
+    }
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'm') {
+      e.preventDefault();
+      window.wcCompact();
+      return;
+    }
+    if (e.key === '?' && !inInput) {
+      e.preventDefault();
+      if (shortcutsOpen) closeShortcuts(); else openShortcuts();
+      return;
+    }
+    if (e.key === 'Escape') {
+      if (paletteOpen) { e.preventDefault(); closePalette(); return; }
+      if (shortcutsOpen) { e.preventDefault(); closeShortcuts(); return; }
+      if (_cancelStartWarning) { e.preventDefault(); _cancelStartWarning(); return; }
+      // Innermost first: the confirmation sits on top of the report card.
+      if (document.getElementById('bugConfirmOverlay')?.classList.contains('open')) {
+        e.preventDefault(); window.closeBugConfirm(); return;
+      }
+      if (document.getElementById('bugReportOverlay')?.classList.contains('open')) {
+        e.preventDefault(); window.closeBugReport(); return;
+      }
+      if (document.getElementById('welcomeOverlay')?.classList.contains('open')) {
+        e.preventDefault(); dismissWelcome(); return;
+      }
+      if (document.getElementById('changelogOverlay')?.classList.contains('open')) {
+        e.preventDefault(); closeChangelog(); return;
+      }
+      if (document.getElementById('announcementOverlay')?.classList.contains('open')) {
+        e.preventDefault(); closeAnnouncement();
+      }
+    }
+  });
+
+  /* Status footer updates */
+  function _updateFooter(state) {
+    if (!state) return;
+    const running = !!state.running;
+    const sfDot = document.getElementById('sfDot');
+    const sfState = document.getElementById('sfState');
+    const sfTime = document.getElementById('sfTime');
+    if (sfDot) sfDot.classList.toggle('active', running);
+    if (sfState) sfState.textContent = running ? (state.current_state || 'Running') : 'Idle';
+    if (sfTime) {
+      sfTime.textContent = _startedAt
+        ? _fmtElapsed(Math.floor(Date.now() / 1000 - _startedAt))
+        : '—';
+    }
+  }
+
+  /* ── Signed GitHub updates + changelog overlay ── */
+  const AUTO_UPDATE_KEY = 'xynmacro-auto-update';
+  const IGNORED_UPDATE_KEY = 'xynmacro-update-ignored-version';
+  const SEEN_VERSION_KEY = 'xynmacro-changelog-seen';
+  const ANNOUNCEMENT_SEEN_KEY = 'xynmacro-announcement-seen';
+  const WELCOME_SEEN_KEY = 'xynmacro-welcome-seen';
+  const ANNOUNCEMENT_URL = 'https://raw.githubusercontent.com/lowkxyn/xynmacro/main/announcements.json';
+
+  // What's-new content, newest first. Each entry: {version, notes:[{h, items[]}]}.
+  const CHANGELOG = [
+    { version: '2.0.0', notes: [
+      { h: "Rebuilt for the new DBOG training UI", items: [
+        "DBOG's October 2026 update redesigned the training menus, HUD and minigames. XynMacro 2.0 reads the new screens: Training Mode, the Training Progression panel (Level and Points Left), gravity, the HP and Ki bars, and the death screen.",
+        "Stats that are already finished or out of Points Left are skipped without being clicked, and a run ends by itself once every stat in your order is done.",
+        "Start from the Training menu, the Game Menu or normal gameplay. If your character dies, XynMacro clicks Respawn, steps off the pad and restarts your plan.",
+      ] },
+      { h: "A fresh start", items: [
+        "2.0 is a full rebuild, so the project page starts fresh: the old 1.x downloads are retired and no longer hosted. Installed copies update to 2.0 automatically and keep their settings.",
+      ] },
+      { h: "Minigames", items: [
+        "Health presses at the centre of the gold zone instead of its edge.",
+        "Agility and Physical Damage read letters on the light HTC floors, keep up with longer letter sets and tell repeated letters apart.",
+        "Ki reads its label over yellow and pale floors, finds circles that touch the floor stripe or your character early, and times each click from when the ring is predicted to close, so slower PCs no longer click late.",
+        "Queued Ki clicks are cancelled on Stop, Pause or when Roblox loses focus.",
+      ] },
+      { h: "Charging, healing and gravity", items: [
+        "Charge Ki (Shift) tops your Ki up to the second or third bar outside minigames, before each stat and mid-stat when it drops a whole bar. Stop Charging After Ki Control turns it off once Ki Control is done.",
+        "Ki HP Check Timing: Learn from HP drain (default) times the HP checks in Ki stats from how fast HP fell in the other minigames and checks sooner after a death; Every 30 s is the simple option.",
+        "Senzu and Majin healing work with the new menus. Gravity is raised at the pace the game's button accepts.",
+      ] },
+      { h: "App", items: [
+        "Start brings Roblox to the front for the countdown and closes Roblox chat, so its box can't cover the gravity button or Ki circles (Training > Startup).",
+        "Quicker stat switches: the next minigame starts as soon as it appears on screen.",
+        "Discord run updates are cards with elapsed time, the current stat, Level and Points Left for every stat, and run activity. Attach Progress Picture adds the Training Progression panel. The webhook saves as soon as you paste it.",
+        "Interface zoom from 80% to 125%, Left/Right click choice, a 60-second cancellable PC shutdown after a run, and Reduce Effects While Running.",
+        "Ctrl+K finds any setting by name. The W spain title tag is off by default (Settings > Title Bar), and there is a Discord link in the sidebar.",
+      ] },
+      { h: "Installer and updates", items: [
+        "New XynMacro Setup with the app's look: install, update or reinstall in one window, with options for the install folder and shortcuts.",
+        "Updates download and install in the background with no installer window, then XynMacro reopens. Your settings are kept.",
+        "Every update is signed and checked before it installs.",
+      ] },
+    ] },
+    { version: '1.7.3', notes: [
+      { h: 'Training reliability', items: [
+        'Fixed active Health and Agility runs stopping in the 40s when the progression label temporarily disappeared. XynMacro now drops the stale detection lock and waits for the label to return; confirmed GC death handling remains active.',
+        'Health v2 contour and marker thresholds now follow the actual Roblox client size instead of retaining fixed 1080p pixel minimums on a scaled client.',
+      ]},
+      { h: 'Auto-Senzu recovery', items: [
+        'When GC ignores every number-key attempt while the assigned Senzu row is visibly confirmed, XynMacro now clicks that row once and verifies that it cleared before continuing.',
+      ]},
+    ]},
+    { version: '1.7.2', notes: [
+      { h: 'Windowed Mode & Roblox Detection', items: [
+        'Fixed windowed mode detection for sub-800x600 and scaled client windows (such as 800x599) so XynMacro reliably detects windowed Roblox on any resolution.',
+        'Added process class fallbacks (WINDOWSCLIENT, RobloxPlayerBetaWindowClass) and executable aliases (robloxplayer.exe, roblox.exe) for resilient detection even when process lookup permissions are restricted.',
+        'Windowed mode now automatically restores maximized or minimized windows before resizing to exact 1080p target bounds.',
+      ]},
+      { h: 'Auto-Senzu Scanning & Inventory Improvements', items: [
+        'Inventory scroll cursor moved to the right margin of the list so it never hovers over item names or icons during bean scanning.',
+        'Widened positional match tolerance so full Senzu Beans are reliably recognized without false rejections.',
+      ]},
+    ]},
+    { version: '1.7.1', notes: [
+      { h: 'Trait clicks recover automatically', items: [
+        'If a direct trait click leaves the Training Mode menu open, the retry now always walks the cursor in through the middle of the game window and clicks without moving it again. Existing settings do not need to be changed.',
+        'Once that approach is confirmed by the menu disappearing stably, XynMacro saves Approach First for later stats and future runs on that PC.',
+        'The button-only retry refuses to click if the Windows cursor moved away from the trait after the approach, so another input source cannot turn the recovery into a click somewhere else.',
+      ]},
+    ]},
+    { version: '1.7.0', notes: [
+      { h: 'When a trait lights up but never starts (beta)', items: [
+        'New Approach On Retry toggle in Tuning, off by default. Turn it on if the cursor lands on a trait, the trait highlights, and nothing happens — reported as needing an auto clicker running alongside the macro just to get past it.',
+        'The macro jumps the cursor straight onto the button, and DBOG follows the cursor by its movement, so a single jump can leave the game\'s own pointer behind. The trait highlights where you can see the cursor while the click is delivered where the game still thinks it is, which is why clicking again at the same place changed nothing.',
+        'With it on, a click that did not take is retried by walking the cursor in through the middle of the window rather than jumping at it again. The first attempt is never changed, so this costs nothing until a click has already failed.',
+      ]},
+      { h: 'Bug reports can show what the screen capture looked like', items: [
+        'New Capture levels tick box in Report a bug. It measures how bright the capture arrives — a real capture of the game puts black near zero, and the report says so plainly when it does not.',
+        'It also carries the numbers from the last Ki dot the detector turned down, which say whether the dot was found and simply read too bright. Diagnosing the 1.6.0 fault took a saved debug image and a long back and forth; this replaces both with one line.',
+        'This section gives numbers, not a screenshot. No image of your screen is taken or sent. Read the whole report for personal details before you share it.',
+      ]},
+    ]},
+    { version: '1.6.0', notes: [
+      { h: 'Ki detection: Adaptive Brightness (beta)', items: [
+        'New toggle in Tuning under Ki Detection & Timing, off by default. Turn it on if Ki Control and Ki Damage never click while every other stat works fine.',
+        'The dot detector finds the black "1" inside the orange dot by comparing it against a fixed brightness value, and that value had no headroom — measured against known-good dots, a 2% lift anywhere in your display pipeline stops it detecting entirely. BIOS "game mode" and vibrance profiles, HDR, a monitor colour profile and Night Light all do that, and every other stat keeps working, so it looks like Ki alone is broken.',
+        'With the toggle on, the "1" is measured against the dot\'s own brightness instead of a fixed number, which holds through those shifts. Tested against known-good dots at brightness lifts up to 1.5x, where the fixed value reads nothing at all.',
+        'Marked beta because the false-positive side has not been tested against a wide set of non-Ki screens yet. It is off unless you turn it on, and nothing changes if you leave it alone.',
+      ]},
+    ]},
+    { version: '1.5.1', notes: [
+      { h: 'Fixes', items: [
+        'Fixed the new crash notice never appearing for the most common kind of crash. If the app itself died, the shutdown was being recorded as if you had closed it normally, so the next launch said nothing and the crash log was not offered.',
+      ]},
+    ]},
+    { version: '1.5.0', notes: [
+      { h: 'Catching problems before you do', items: [
+        'The app now checks its own buttons on startup. If your browser engine ever blocks them again the way it did in 1.3.1, you get a red banner saying so instead of a window where nothing happens.',
+        'If XynMacro closes unexpectedly, the next launch says so and keeps that session\'s log ready in Report a bug — the log the crash is actually in, which no report could reach before.',
+      ]},
+      { h: 'Display scaling', items: [
+        'Start now warns when Windows display scaling is not 100%. XynMacro reads screen pixels directly, so at 125% or 150% every click lands short of the button — and the resolution readout looked perfectly fine the whole time.',
+        'The resolution pill shows the scaling instead of a tick when it is not 100%.',
+      ]},
+      { h: 'Windowed Mode', items: [
+        'On a display too small for a 1920x1080 window, Windowed Mode no longer just refuses. It warns that detection will be scaled and lets you continue if you want to, the same way the non-1080p warning works.',
+      ]},
+      { h: 'Debug HUD fix', items: [
+        'Fixed the docked HUD breaking the very detection it is there to check. The macro reads screen pixels, so the boxes drawn over Roblox were being scanned as if they were part of the game.',
+        'Starting a run now pops the HUD out and parks it clear of the game window, and it cannot be re-docked until you stop. If it ends up over Roblox anyway, it says so in red.',
+      ]},
+    ]},
+    { version: '1.4.0', notes: [
+      { h: 'Report a bug', items: [
+        'New Report a bug screen in Settings and in the Logs diagnostics, so a problem can actually be diagnosed instead of guessed at.',
+        'You choose what to include with tick boxes — PC specs, display and scaling, the Roblox window, macro settings, recent log — and you can read the exact text before anything leaves your PC.',
+        'Copy instead puts the report on your clipboard to share however you like. Copying keeps it on your PC, but read it for personal details before you share it anywhere.',
+        'Posting to GitHub is optional and opens a pre-filled issue in your browser. Because that is public and permanent it asks you to confirm first, after a pause to read the warning, and it takes three deliberate clicks.',
+        'Nothing is ever sent automatically. Your Windows username is replaced with a placeholder everywhere it appears, including in what you type.',
+      ]},
+    ]},
+    { version: '1.3.1', notes: [
+      { h: 'Fixes', items: [
+        'Fixed every button, toggle and window control being dead. A Microsoft Edge WebView2 update began enforcing a stricter content security rule that blocked the way most of the UI was wired, so clicks silently did nothing — the sidebar kept working because it is wired differently. This affected all recent versions, not just the newest.',
+        'Minimize, maximize and close now report a problem instead of failing silently.',
+        'Dragging the window by its title no longer logs a permission error.',
+      ]},
+    ]},
+    { version: '1.3.0', notes: [
+      { h: 'Windowed Mode', items: [
+        'New Windowed Mode sizes Roblox to an exact 1920x1080 window, centred and clear of the taskbar, so the scan regions line up without changing your desktop resolution (toggle in Settings, off by default).',
+        'Size Window Now does it immediately, so you can check the scan boxes without starting a run.',
+        'When both Windowed Mode and Fullscreen On Start are on, Windowed Mode wins — it no longer gets undone by fullscreen.',
+        'A display too small to fit a 1920x1080 window blocks Start with a message instead of scanning a skewed screen.',
+      ]},
+      { h: 'Debug HUD', items: [
+        'New Debug HUD sits over Roblox showing live window size, scaling, run state and every scan region drawn where the macro actually looks. It\'s click-through, so it never eats a click meant for the game.',
+        'It flags the real problem directly: if the window isn\'t 16:9 the scaling turns red and tells you the regions are skewed.',
+        'Pop out moves the HUD to its own draggable window for a second monitor.',
+      ]},
+    ]},
+    { version: '1.2.1', notes: [
+      { h: 'Fixes', items: [
+        'Fixed the buttons going dead after the app had been open for a long time — backend requests no longer run on the window\'s own thread, so a single slow one can\'t block every click behind it.',
+        'The status and log refreshes skip a tick instead of stacking up when the backend is slow to answer.',
+        'A scan preview left running now stops when you leave Calibration instead of capturing in the background forever.',
+      ]},
+      { h: 'Security', items: [
+        'The key that lets XynMacro talk to its own backend is no longer visible in the Windows process list — it\'s handed over privately at startup instead.',
+        'Backend requests refuse to follow redirects, so that key can only ever be sent to XynMacro\'s own local backend.',
+      ]},
+    ]},
+    { version: '1.2.0', notes: [
+      { h: 'Fixes', items: [
+        'Settings toggles and the v1/v2 mode buttons now always respond; a failed change reports why instead of doing nothing.',
+        'The resolution heads-up no longer starts the macro on its own — at zero the Continue button simply becomes clickable.',
+        'Removed the broken-image icon that flashed in the scan previews before the first capture.',
+      ]},
+      { h: 'Window handling', items: [
+        'A minimized Roblox is recognized instead of read as closed; Start restores it, and when it isn\'t running the button says so.',
+        'Fullscreen On Start puts a windowed Roblox back to fullscreen so the scan regions line up (toggle in Settings).',
+        'Set 1080p now asks you to confirm and reverts automatically after 10 seconds if you don\'t — the timer runs in the backend so an unreadable screen still recovers.',
+      ]},
+    ]},
+    { version: '1.1.0', notes: [
+      { h: 'Error Recovery', items: [
+        'Added bounded retry-after-error controls with a configurable retry limit, recovery method, and walk duration.',
+        'GC death is detected directly, the Respawn dialog is confirmed before clicking, and completed stats are rechecked after recovery.',
+        'Starting the macro while already on GC\'s death screen is detected before any menu input is sent.',
+      ]},
+      { h: 'Safety', items: [
+        'Manual Stop never retries, stale monitor input is stopped before recovery, and after-run failure actions wait until retries are exhausted.',
+        'Standardized remaining internal module, browser-state, and build names under XynMacro with a one-time local preference migration.',
+      ]},
+      { h: 'Interface', items: [
+        'Added After Run choices for Main Menu, closing Roblox, staying in GC at 0G, and optional PC shutdown.',
+        'Added Support Diagnostics with a live labelled vision preview and copyable environment report.',
+      ]},
+      { h: 'Fixes', items: [
+        'Training Mode is detected during a run, so minigame input stops and an unfinished stat resumes safely.',
+        'Manually skipped stats now mark the order incomplete and never trigger successful after-run actions.',
+      ]},
+    ]},
+    { version: '1.0.4', notes: [
+      { h: 'Interface', items: [
+        'Added the W spain titlebar tag and one-time launch celebration.',
+      ]},
+    ]},
+    { version: '1.0.3', notes: [
+      { h: 'Fixes', items: [
+        'Removed a stray empty notification pill that could briefly appear in the top-right corner.',
+      ]},
+    ]},
+    { version: '1.0.2', notes: [
+      { h: 'Fixes', items: [
+        'Auto-Senzu no longer misfires on startup (the stray Tab press right after a category begins).',
+        'In-game clicks now land immediately without needing a mouse wiggle first.',
+        'Aero style: hover tooltips no longer render behind panels.',
+      ]},
+    ]},
+    { version: '1.0.1', notes: [
+      { h: 'Fixes', items: [
+        'Notifications no longer overlap the window buttons in the top-right corner.',
+        'Fixed the 1080p monitor switch failing on secondary monitors (display error -2).',
+      ]},
+    ]},
+    { version: '1.0.0', notes: [
+      { h: 'Training automation', items: [
+        'Automates Health, Agility, Physical Damage, Ki Control, and Ki Damage in HTC and GC.',
+        'Tracks each stat’s progression and advances through your chosen training order.',
+        'Starts safely from gameplay, the Game Menu, the Training menu, or an active minigame.',
+      ]},
+      { h: 'Auto-Senzu and gravity', items: [
+        'Detects red HP, consumes and refills Senzu Beans, and resumes the interrupted stat.',
+        'Supports full beans, half beans, and configurable preference order.',
+        'Can raise GC gravity automatically and return it to 0G when beans run out.',
+      ]},
+      { h: 'Desktop app', items: [
+        'Classic and Aero interface styles, eight colour themes, animated backgrounds, and compact pill mode.',
+        'Live telemetry, session logs, calibration tools, configurable hotkeys, and monitor-aware 1080p switching.',
+        'Signed automatic updates, release notes, and owner announcements through the title-bar bell.',
+      ]},
+    ]},
+  ];
+
+  function autoUpdateOn() {
+    return localStorage.getItem(AUTO_UPDATE_KEY) !== 'off';
+  }
+
+  window.toggleAutoUpdate = (el) => {
+    const next = !autoUpdateOn();
+    localStorage.setItem(AUTO_UPDATE_KEY, next ? 'on' : 'off');
+    el.classList.toggle('active', next);
+    el.setAttribute('aria-checked', next ? 'true' : 'false');
+    const status = document.getElementById('updateStatus');
+    if (status) status.textContent = next
+      ? 'Automatic update checks are on.'
+      : 'Automatic checks are off. Check now still works.';
+  };
+
+  let _updateCheckTask = null;
+  let _autoUpdateChecked = false;
+
+  function _setUpdateStatus(message) {
+    const status = document.getElementById('updateStatus');
+    if (status) status.textContent = message;
+  }
+
+  function _friendlyUpdateError(error) {
+    const message = String(error || 'Unknown update error');
+    if (/Timed out waiting for XynMacro-core\.exe to unlock; update cancelled/i.test(message)) {
+      return "XynMacro didn't close in time. The update will be offered again.";
+    }
+    if (/pubkey|public key|endpoint|not configured|configuration|release json/i.test(message)) {
+      return 'Update checks aren\'t available in this build. Download the latest version from GitHub Releases.';
+    }
+    return `Update check failed: ${message}`;
+  }
+
+  // If installation failed after the app had already hidden and stopped its
+  // backend, Rust relaunches cleanly and leaves one short-lived error marker.
+  // Read it once so the failure is visible instead of looking like a random
+  // restart; the next check can safely offer the update again.
+  setTimeout(async () => {
+    try {
+      const error = await invoke('take_update_install_error');
+      if (!error) return;
+      _setUpdateStatus(`Update was not installed: ${error}`);
+      showToast('Update installation failed. It will be offered again.', 'err');
+    } catch (error) {}
+  }, 500);
+
+  // Update-on-restart: the update downloads in the background (safe even while
+  // the macro is running) and installs when the app closes or the user clicks
+  // "Restart & update" — never mid-session.
+  let _pendingUpdateVersion = null;
+
+  // Transient titlebar text (e.g. "Downloading update… 42%"). Passing a falsy
+  // value fades it away; the element collapses to zero width so nothing lingers.
+  function _setTicker(text) {
+    const t = document.getElementById('updateTicker');
+    if (!t) return;
+    if (text) { t.textContent = text; t.classList.add('show'); }
+    else { t.classList.remove('show'); }
+  }
+
+  // Green dot on the bell while an update is downloaded and waiting to install.
+  function _syncUpdateBell() {
+    const bell = document.getElementById('announcementBell');
+    if (!bell) return;
+    const pending = !!_pendingUpdateVersion;
+    bell.classList.toggle('update-ready', pending);
+    if (pending) {
+      bell.title = `Update ready — v${_pendingUpdateVersion} (click to view)`;
+      bell.setAttribute('aria-label', bell.title);
+    }
+    else _syncAnnouncementBell();
+  }
+
+  function _showUpdateToast(version) {
+    const toast = document.getElementById('updateToast');
+    const body = document.getElementById('utBody');
+    if (body) body.textContent = `XynMacro v${version} is downloaded. It installs automatically when you close or restart the app.`;
+    toast?.classList.add('show');
+  }
+
+  async function _deferPendingUpdate({ ignoreVersion = false } = {}) {
+    const version = _pendingUpdateVersion;
+    if (!version) return;
+    try {
+      await invoke('discard_pending_update');
+    } catch (error) {
+      _setUpdateStatus(_friendlyUpdateError(error));
+      return;
+    }
+    if (ignoreVersion) {
+      localStorage.setItem(IGNORED_UPDATE_KEY, version);
+      _setUpdateStatus(`XynMacro v${version} reminders are hidden. Use Check now to update manually.`);
+    } else {
+      _setUpdateStatus(`XynMacro v${version} was postponed. It will appear again on the next launch or check.`);
+    }
+    _pendingUpdateVersion = null;
+    document.getElementById('updateToast')?.classList.remove('show');
+    _syncUpdateBell();
+  }
+
+  async function _downloadUpdateAndNotify(info) {
+    if (_pendingUpdateVersion === info.version) {
+      _showUpdateToast(info.version);
+      _syncUpdateBell();
+      return true;
+    }
+    _setUpdateStatus(`Downloading XynMacro v${info.version}…`);
+    _setTicker('Downloading update…');
+    try {
+      const version = await invoke('download_update');
+      if (!version) {
+        _setUpdateStatus('The update was no longer available. Check again.');
+        return false;
+      }
+      _pendingUpdateVersion = version;
+      _setUpdateStatus(`XynMacro v${version} is ready — it installs when the app restarts.`);
+      _showUpdateToast(version);
+      _syncUpdateBell();
+      return true;
+    } catch (error) {
+      _setUpdateStatus(_friendlyUpdateError(error));
+      return false;
+    } finally {
+      _setTicker('');
+    }
+  }
+
+  document.getElementById('utLater')?.addEventListener('click', () => {
+    void _deferPendingUpdate();
+  });
+  // Both paths close the card: once it has been read it has done its job, and the
+  // crash log stays available in Report a bug either way.
+  document.getElementById('crashDismiss')?.addEventListener('click', () => {
+    document.getElementById('crashToast')?.classList.remove('show');
+  });
+  document.getElementById('crashReport')?.addEventListener('click', () => {
+    document.getElementById('crashToast')?.classList.remove('show');
+    window.openBugReport?.();
+  });
+  document.getElementById('utIgnore')?.addEventListener('click', () => {
+    void _deferPendingUpdate({ ignoreVersion: true });
+  });
+  document.getElementById('utRestart')?.addEventListener('click', async () => {
+    if (_macroRunning || _macroUiAction) {
+      _setUpdateStatus('Macro is running — the update installs when you stop it and close the app.');
+      return;
+    }
+    const installing = document.getElementById('updateInstalling');
+    const hint = document.getElementById('updateInstallingHint');
+    if (hint) hint.textContent = _pendingUpdateVersion
+      ? `Updating to v${_pendingUpdateVersion} — XynMacro will restart in a moment…`
+      : 'XynMacro will restart in a moment…';
+    installing?.classList.add('open');
+    try {
+      const started = await invoke('install_pending_update');
+      if (!started) {
+        installing?.classList.remove('open');
+        _setUpdateStatus('The downloaded update is no longer pending. Check again.');
+      }
+      // On success the process exits into the installer; this line rarely runs.
+    } catch (error) {
+      installing?.classList.remove('open');
+      _setUpdateStatus(_friendlyUpdateError(error));
+    }
+  });
+
+  async function _runUpdateCheck({ automatic = false } = {}) {
+    if (_updateCheckTask) return _updateCheckTask;
+    _setUpdateStatus('Checking GitHub for updates…');
+    const task = (async () => {
+      try {
+        const info = await invoke('check_update');
+        if (!info) {
+          _setUpdateStatus(`XynMacro ${_appVersion || ''} is up to date.`.trim());
+          return null;
+        }
+        const ignoredVersion = localStorage.getItem(IGNORED_UPDATE_KEY);
+        const reminder = XynMacroUpdateState.reminderDecision(
+          info.version,
+          ignoredVersion,
+          automatic,
+        );
+        if (reminder.skip) {
+          _setUpdateStatus(`XynMacro v${info.version} is available. Its reminder is hidden; use Check now to update.`);
+          return info;
+        }
+        if (reminder.clearIgnored) {
+          localStorage.removeItem(IGNORED_UPDATE_KEY);
+        }
+        _setUpdateStatus(`XynMacro v${info.version} is available.`);
+        await _downloadUpdateAndNotify(info);
+        return info;
+      } catch (error) {
+        _setUpdateStatus(_friendlyUpdateError(error));
+        return null;
+      }
+    })().finally(() => {
+      if (_updateCheckTask === task) _updateCheckTask = null;
+    });
+    _updateCheckTask = task;
+    return task;
+  }
+
+  try {
+    window.__TAURI__.event?.listen('update-download-progress', ({ payload }) => {
+      const downloaded = Number(payload?.downloaded || 0);
+      const total = Number(payload?.total || 0);
+      const label = total > 0
+        ? `Downloading update… ${Math.min(100, Math.round(downloaded * 100 / total))}%`
+        : `Downloading update… ${Math.round(downloaded / 1024)} KB`;
+      _setUpdateStatus(label);
+      _setTicker(label);
+    });
+  } catch (error) {}
+
+  // Inbox of every version, newest first. The one matching `version` (the
+  // just-updated release) opens automatically; the rest are collapsed headers
+  // the user can pop down. Clicking a header toggles its panel.
+  function renderChangelog(version) {
+    const verEl = document.getElementById('clVersion');
+    const body = document.getElementById('clBody');
+    const known = CHANGELOG.some((c) => c.version === version);
+    const openVer = known ? version : (CHANGELOG[0] && CHANGELOG[0].version);
+    if (verEl) verEl.textContent = 'v' + (version || openVer || '');
+    if (!body) return;
+    if (!CHANGELOG.length) {
+      body.innerHTML = '<p style="padding:8px 2px;color:var(--text3)">You’re up to date.</p>';
+      return;
+    }
+    const chevron = '<svg class="cl-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"/></svg>';
+    body.innerHTML = CHANGELOG.map((entry, i) => {
+      const open = entry.version === openVer;
+      const panelId = `changelog-${entry.version.replace(/[^a-z0-9_-]/gi, '-')}`;
+      const notes = entry.notes.map((group) =>
+        `<h4>${group.h}</h4><ul>${group.items.map((it) => `<li>${it}</li>`).join('')}</ul>`
+      ).join('');
+      const summary = entry.notes.map((g) => g.h).join(' · ');
+      const tag = i === 0 ? '<span class="cl-entry-tag">New</span>' : '';
+      return `<div class="cl-entry${open ? ' open' : ''}" data-ver="${entry.version}">`
+        + `<button class="cl-entry-head" type="button" aria-expanded="${open}" aria-controls="${panelId}">${chevron}`
+        + `<span class="cl-entry-ver">v${entry.version}</span>${tag}`
+        + `<span class="cl-entry-summary">${summary}</span></button>`
+        + `<div class="cl-entry-panel" id="${panelId}" role="region" aria-hidden="${!open}"><div class="cl-entry-panel-inner">${notes}</div></div>`
+        + `</div>`;
+    }).join('');
+    body.querySelectorAll('.cl-entry-head').forEach((head) => {
+      head.addEventListener('click', () => {
+        const entry = head.closest('.cl-entry');
+        const open = entry?.classList.toggle('open') || false;
+        head.setAttribute('aria-expanded', open ? 'true' : 'false');
+        entry?.querySelector('.cl-entry-panel')?.setAttribute('aria-hidden', open ? 'false' : 'true');
+      });
+    });
+  }
+
+  // Re-query at call time rather than caching a possibly-null reference from
+  // init (guards against the element not existing yet when the module set up).
+  function openChangelog(version) {
+    const o = document.getElementById('changelogOverlay');
+    if (!o) return;
+    renderChangelog(version);
+    o.classList.remove('closing');
+    o.classList.add('open');
+    _focusModal(o, '#clContinue');
+  }
+
+  /* Bug report. The backend assembles and scrubs the Markdown and builds the GitHub
+     URL. Open sends back only the id of the preview on screen, so the text reviewed
+     here is byte-for-byte the text that gets posted even if the log moved on, and
+     the WebView never gets to hand an arbitrary URL to the shell. */
+  const BUG_SECTIONS = [
+    ['system', 'bugSecSystem'],
+    ['display', 'bugSecDisplay'],
+    ['game', 'bugSecGame'],
+    ['settings', 'bugSecSettings'],
+    ['capture', 'bugSecCapture'],
+    ['logs', 'bugSecLogs'],
+    ['crash', 'bugSecCrash'],
+  ];
+
+  function _bugRequest() {
+    return {
+      sections: BUG_SECTIONS
+        .filter(([, id]) => document.getElementById(id)?.checked)
+        .map(([name]) => name),
+      webview: navigator.userAgent,
+      description: document.getElementById('bugWhat')?.value || '',
+      ui_errors: UI_ERROR_RING.slice(-10),
+    };
+  }
+
+  let _bugPreviewTask = null;
+  let _bugPreviewAgain = false;            // asked for while one was in flight or held
+  let _bugReviewed = {};                   // the preview on screen: Copy and Open use it
+  let _bugConfirming = null;               // the report an open confirmation is bound to
+  async function _refreshBugPreview() {
+    // A slow /command must not stack, and nothing may replace the report a
+    // confirmation is showing: the request is remembered and runs afterwards.
+    if (_bugPreviewTask || _bugConfirming) { _bugPreviewAgain = true; return; }
+    _bugPreviewTask = (async () => {
+      const r = (await sendCommand('bug_report', _bugRequest())) || {};
+      if (_bugConfirming) { _bugPreviewAgain = true; return; }
+      _bugReviewed = r;
+      const preview = document.getElementById('bugPreview');
+      const warn = document.getElementById('bugWarn');
+      if (preview) preview.textContent = r.markdown || r.msg || 'Could not build the report';
+      if (warn) {
+        warn.textContent = r.too_long
+          ? 'Too long for a link — use Copy instead'
+          : '';
+      }
+      const open = document.getElementById('bugOpen');
+      if (open) open.disabled = !!r.too_long;
+    })();
+    try { await _bugPreviewTask; } finally { _bugPreviewTask = null; }
+    if (_bugPreviewAgain && !_bugConfirming) {
+      _bugPreviewAgain = false;
+      await _refreshBugPreview();
+    }
+  }
+
+  window.openBugReport = () => {
+    const o = document.getElementById('bugReportOverlay');
+    if (!o) return;
+    o.classList.remove('closing');
+    o.classList.add('open');
+    _focusModal(o, '#bugWhat');
+    _refreshBugPreview();
+  };
+
+  function closeBugReport() {
+    const o = document.getElementById('bugReportOverlay');
+    if (!o) return;
+    o.classList.remove('open');
+    o.classList.add('closing');
+    _restoreModalFocus(o);
+    setTimeout(() => o.classList.remove('closing'), 760);
+  }
+  window.closeBugReport = closeBugReport;
+
+  (function wireBugReport() {
+    const overlay = document.getElementById('bugReportOverlay');
+    if (!overlay) return;
+    BUG_SECTIONS.forEach(([, id]) => {
+      document.getElementById(id)?.addEventListener('change', _refreshBugPreview);
+    });
+    let typingTimer = null;
+    document.getElementById('bugWhat')?.addEventListener('input', () => {
+      clearTimeout(typingTimer);
+      typingTimer = setTimeout(_refreshBugPreview, 400);
+    });
+    // The card body scrolls, and the preview sits at the bottom of it: opening it
+    // without this leaves what you just asked to see below the fold.
+    document.getElementById('bugPreviewWrap')?.addEventListener('toggle', (e) => {
+      if (e.target.open) {
+        document.getElementById('bugPreview')
+          ?.scrollIntoView({ block: 'end', behavior: 'smooth' });
+      }
+    });
+
+    document.getElementById('bugCancel')?.addEventListener('click', closeBugReport);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) closeBugReport(); });
+
+    document.getElementById('bugCopy')?.addEventListener('click', async () => {
+      const markdown = _bugReviewed.markdown;
+      if (!markdown) return showToast(_bugReviewed.msg || 'Could not build the report', 'err');
+      try {
+        await navigator.clipboard.writeText(markdown);
+        showToast('Report copied — paste it into a GitHub issue', 'ok');
+      } catch (e) {
+        showToast('Could not copy the report', 'err');
+      }
+    });
+
+    document.getElementById('bugOpen')?.addEventListener('click', openBugConfirm);
+  })();
+
+  /* Posting publicly is gated the same way the resolution warning gates Start: a
+     countdown that only enables the button rather than acting on its own. On top of
+     that it takes three separate clicks a second apart, so it cannot be reached by
+     double-clicking or by mashing through the dialog. */
+  const BUG_CONFIRM_COOLDOWN_SEC = 5;
+  const BUG_CONFIRM_CLICKS = 3;
+  const BUG_CONFIRM_CLICK_GAP_MS = 1000;
+  let _bugConfirmTeardown = null;
+
+  function closeBugConfirm() {
+    const o = document.getElementById('bugConfirmOverlay');
+    if (!o) return;
+    if (_bugConfirmTeardown) { _bugConfirmTeardown(); _bugConfirmTeardown = null; }
+    _bugConfirming = null;
+    o.classList.remove('open');
+    o.classList.add('closing');
+    _restoreModalFocus(o);
+    setTimeout(() => o.classList.remove('closing'), 760);
+    // A preview held back while confirming is shown now, for a fresh review.
+    if (_bugPreviewAgain) { _bugPreviewAgain = false; _refreshBugPreview(); }
+  }
+  window.closeBugConfirm = closeBugConfirm;
+
+  function openBugConfirm() {
+    const overlay = document.getElementById('bugConfirmOverlay');
+    const go = document.getElementById('bugConfirmGo');
+    const cancel = document.getElementById('bugConfirmCancel');
+    const hint = document.getElementById('bugConfirmHint');
+    if (!overlay || !go || !cancel) return;
+    // Bound to the report on screen when the user chose to post it, whatever
+    // previews finish during the countdown.
+    const reviewed = _bugReviewed;
+    if (!reviewed.report_id) {
+      return showToast(reviewed.msg || 'Could not build the report', 'err');
+    }
+    _bugConfirming = reviewed;
+
+    let remaining = BUG_CONFIRM_COOLDOWN_SEC;
+    let clicks = 0;
+    let lockedUntil = Date.now() + BUG_CONFIRM_COOLDOWN_SEC * 1000;
+    let countdown = null;
+    let gapTimer = null;
+    let submitting = false;
+
+    /* Deliberately NOT the `disabled` attribute. A disabled button receives no
+       mouse events, so clicks fall straight through to whatever sits behind it —
+       during testing, mashing this dismissed the dialog and silently unticked a
+       section on the card underneath. The button stays enabled and refuses in JS,
+       so every click lands here and nowhere else. */
+    const lock = (label) => {
+      go.classList.add('is-locked');
+      go.setAttribute('aria-disabled', 'true');
+      go.textContent = label;
+    };
+    const armed = () => {
+      go.classList.remove('is-locked');
+      go.setAttribute('aria-disabled', 'false');
+      const left = BUG_CONFIRM_CLICKS - clicks;
+      go.textContent = `Post publicly — click ${left} more time${left === 1 ? '' : 's'}`;
+    };
+
+    go.disabled = false;
+    lock(`Read the warning… (${remaining})`);
+    if (hint) hint.textContent = '';
+    overlay.classList.remove('closing');
+    overlay.classList.add('open');
+    _focusModal(overlay, cancel);   // focus Cancel, never the destructive button
+
+    _bugConfirmTeardown = () => {
+      if (countdown) clearInterval(countdown);
+      if (gapTimer) clearTimeout(gapTimer);
+      go.onclick = null;
+      cancel.onclick = null;
+    };
+
+    countdown = setInterval(() => {
+      remaining -= 1;
+      if (remaining > 0) {
+        lock(`Read the warning… (${remaining})`);
+        return;
+      }
+      clearInterval(countdown);
+      countdown = null;
+      armed();
+    }, 1000);
+
+    cancel.onclick = () => closeBugConfirm();
+
+    go.onclick = async () => {
+      if (submitting || Date.now() < lockedUntil) return;   // mashing changes nothing
+      clicks += 1;
+      lockedUntil = Date.now() + BUG_CONFIRM_CLICK_GAP_MS;
+      if (clicks < BUG_CONFIRM_CLICKS) {
+        lock('Wait…');
+        gapTimer = setTimeout(() => { gapTimer = null; armed(); }, BUG_CONFIRM_CLICK_GAP_MS);
+        return;
+      }
+      submitting = true;
+      lock('Opening…');
+      const r = await sendCommand('bug_report_open', { report_id: reviewed.report_id });
+      showToast(r.msg || 'Opened GitHub', r.ok !== false ? 'ok' : 'err');
+      if (r.ok !== false) _bugPreviewAgain = false;   // the card closes; nothing to show
+      closeBugConfirm();
+      if (r.ok !== false) closeBugReport();
+    };
+  }
+
+  function closeChangelog() {
+    const o = document.getElementById('changelogOverlay');
+    if (!o) return;
+    o.classList.remove('open');
+    o.classList.add('closing');
+    _restoreModalFocus(o);
+    setTimeout(() => o.classList.remove('closing'), 760);
+  }
+
+  const clOverlay = document.getElementById('changelogOverlay');
+
+  document.getElementById('clContinue')?.addEventListener('click', closeChangelog);
+  clOverlay?.addEventListener('click', (e) => { if (e.target === clOverlay) closeChangelog(); });
+
+  // Subtle 3D parallax: the card tilts toward the cursor so the text reads as
+  // floating. Skipped when the user prefers reduced motion. Shared by the
+  // changelog and welcome cards so both feel identical.
+  const _reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  function attachCardParallax(overlay) {
+    const card = overlay?.querySelector('.changelog-card');
+    if (!card || _reduceMotion) return;
+    overlay.addEventListener('mousemove', (e) => {
+      const r = card.getBoundingClientRect();
+      const dx = (e.clientX - (r.left + r.width / 2)) / r.width;
+      const dy = (e.clientY - (r.top + r.height / 2)) / r.height;
+      card.style.transform = `perspective(900px) rotateY(${dx * 1.35}deg) rotateX(${-dy * 1.35}deg)`;
+    });
+    overlay.addEventListener('mouseleave', () => { card.style.transform = ''; });
+  }
+  attachCardParallax(clOverlay);
+  /* First-run welcome — same overlay mechanics as the changelog card. */
+  function openWelcome() {
+    const o = document.getElementById('welcomeOverlay');
+    if (!o) return;
+    o.classList.remove('closing');
+    o.classList.add('open');
+    _focusModal(o, '#welcomeStart');
+  }
+
+  function dismissWelcome() {
+    localStorage.setItem(WELCOME_SEEN_KEY, '1');
+    const o = document.getElementById('welcomeOverlay');
+    if (!o) return;
+    o.classList.remove('open');
+    o.classList.add('closing');
+    _restoreModalFocus(o);
+    setTimeout(() => o.classList.remove('closing'), 760);
+  }
+
+  const welcomeOverlay = document.getElementById('welcomeOverlay');
+  document.getElementById('welcomeStart')?.addEventListener('click', dismissWelcome);
+  welcomeOverlay?.addEventListener('click', (e) => { if (e.target === welcomeOverlay) dismissWelcome(); });
+  attachCardParallax(welcomeOverlay);
+
+  document.getElementById('btnViewChangelog')?.addEventListener('click', () => openChangelog(_appVersion));
+  document.getElementById('btnCheckUpdate')?.addEventListener('click', () => _runUpdateCheck());
+
+  let _announcement = null;
+  let _announcementLoaded = false;
+  let _announcementError = false;
+
+  function _normaliseAnnouncement(value) {
+    const item = value?.announcement;
+    if (!item || typeof item !== 'object') return null;
+    const id = String(item.id || '').trim().slice(0, 100);
+    const title = String(item.title || '').trim().slice(0, 120);
+    const body = String(item.body || '').trim().slice(0, 4000);
+    if (!id || !title || !body) return null;
+    return {
+      id,
+      title,
+      body,
+      publishedAt: String(item.publishedAt || '').trim().slice(0, 40),
+    };
+  }
+
+  function _renderAnnouncement() {
+    const title = document.getElementById('announcementTitle');
+    const body = document.getElementById('announcementBody');
+    const date = document.getElementById('announcementDate');
+    if (!title || !body || !date) return;
+    if (_announcement) {
+      title.textContent = _announcement.title;
+      body.textContent = _announcement.body;
+      const parsed = Date.parse(_announcement.publishedAt);
+      date.textContent = Number.isFinite(parsed)
+        ? new Date(parsed).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })
+        : '';
+      return;
+    }
+    title.textContent = _announcementError
+      ? 'Messages unavailable'
+      : (_announcementLoaded ? 'No announcements' : 'Checking for messages…');
+    body.textContent = _announcementError
+      ? 'XynMacro could not check GitHub right now. Check your connection and try again later.'
+      : (_announcementLoaded ? 'There is no owner message right now.' : 'XynMacro is checking GitHub.');
+    date.textContent = '';
+  }
+
+  function _syncAnnouncementBell() {
+    const bell = document.getElementById('announcementBell');
+    if (!bell) return;
+    const unread = !!_announcement
+      && localStorage.getItem(ANNOUNCEMENT_SEEN_KEY) !== _announcement.id;
+    bell.classList.toggle('unread', unread);
+    bell.title = _announcementError
+      ? 'Announcements unavailable'
+      : _announcement
+      ? (unread ? 'New announcement' : 'Announcements')
+      : 'Announcements';
+    bell.setAttribute('aria-label', bell.title);
+  }
+
+  async function _loadAnnouncement() {
+    try {
+      _announcementError = false;
+      const response = await fetch(ANNOUNCEMENT_URL, { cache: 'no-store' });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      _announcement = _normaliseAnnouncement(await response.json());
+    } catch (error) {
+      _announcement = null;
+      _announcementError = true;
+    } finally {
+      _announcementLoaded = true;
+      _renderAnnouncement();
+      _syncAnnouncementBell();
+    }
+  }
+
+  function closeAnnouncement() {
+    const overlay = document.getElementById('announcementOverlay');
+    if (!overlay) return;
+    overlay.classList.remove('open');
+    overlay.classList.add('closing');
+    _restoreModalFocus(overlay);
+    setTimeout(() => overlay.classList.remove('closing'), 760);
+  }
+
+  window.toggleAnnouncement = () => {
+    // A waiting update takes over the bell: clicking it opens the update inbox
+    // and its install/postpone actions.
+    if (_pendingUpdateVersion) {
+      _showUpdateToast(_pendingUpdateVersion);
+      return;
+    }
+    const overlay = document.getElementById('announcementOverlay');
+    if (!overlay) return;
+    _renderAnnouncement();
+    if (_announcement) {
+      localStorage.setItem(ANNOUNCEMENT_SEEN_KEY, _announcement.id);
+      _syncAnnouncementBell();
+    }
+    overlay.classList.remove('closing');
+    overlay.classList.add('open');
+    _focusModal(overlay, '#announcementClose');
+  };
+
+  const announcementOverlay = document.getElementById('announcementOverlay');
+  document.getElementById('announcementClose')?.addEventListener('click', closeAnnouncement);
+  announcementOverlay?.addEventListener('click', (event) => {
+    if (event.target === announcementOverlay) closeAnnouncement();
+  });
+  setTimeout(_loadAnnouncement, 1500);
+
+  // Initialise the toggle from storage and, once we know the version, show the
+  // changelog the first time we see a new one (that's "after an update").
+  let _appVersion = '';
+  let _changelogChecked = false;
+  const autoUpdateToggle = document.getElementById('toggleAutoUpdate');
+  autoUpdateToggle?.classList.toggle('active', autoUpdateOn());
+  autoUpdateToggle?.setAttribute('aria-checked', autoUpdateOn() ? 'true' : 'false');
+
+  window._maybeShowChangelog = (version) => {
+    _appVersion = version || _appVersion;
+    if (!version) return;
+    if (!_autoUpdateChecked && autoUpdateOn()) {
+      _autoUpdateChecked = true;
+      setTimeout(() => _runUpdateCheck({ automatic: true }), 1200);
+    }
+    if (_changelogChecked) return;
+    _changelogChecked = true;
+    const seen = localStorage.getItem(SEEN_VERSION_KEY);
+    if (localStorage.getItem(WELCOME_SEEN_KEY) === null) {
+      // One-time welcome takes priority over the changelog: fresh installs
+      // and installs that predate the welcome card both see it exactly once.
+      localStorage.setItem(SEEN_VERSION_KEY, version);
+      setTimeout(openWelcome, 650);
+    } else if (seen === null) {
+      localStorage.setItem(SEEN_VERSION_KEY, version);
+    } else if (seen !== version) {
+      localStorage.setItem(SEEN_VERSION_KEY, version);
+      setTimeout(() => openChangelog(version), 650);
+    }
+  };
+
+  /* Resizable sidebar */
+  const sidebarHandle = document.getElementById('sidebarResize');
+  const SIDEBAR_MIN = 180;
+  const SIDEBAR_MAX = 340;
+  const SIDEBAR_KEY = 'dbog-sidebar-width';
+  const savedW = parseInt(localStorage.getItem(SIDEBAR_KEY) || '0', 10);
+  const setSidebarWidth = (width, save = false) => {
+    const value = Math.max(SIDEBAR_MIN, Math.min(SIDEBAR_MAX, width));
+    document.documentElement.style.setProperty('--sidebar-w', value + 'px');
+    sidebarHandle?.setAttribute('aria-valuenow', String(value));
+    if (save) localStorage.setItem(SIDEBAR_KEY, String(value));
+  };
+  if (savedW >= SIDEBAR_MIN && savedW <= SIDEBAR_MAX) {
+    setSidebarWidth(savedW);
+  }
+  if (sidebarHandle) {
+    if (!sidebarHandle.hasAttribute('aria-valuenow')) {
+      const initialWidth = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--sidebar-w'), 10);
+      const accessibleWidth = Math.max(SIDEBAR_MIN, Math.min(SIDEBAR_MAX, initialWidth || SIDEBAR_MIN));
+      sidebarHandle.setAttribute('aria-valuenow', String(accessibleWidth));
+    }
+    sidebarHandle.addEventListener('mousedown', (e) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      sidebarHandle.classList.add('dragging');
+      document.body.classList.add('sidebar-dragging');
+      const onMove = (ev) => {
+        setSidebarWidth((ev.clientX - document.querySelector('.app-shell').getBoundingClientRect().left) / interfaceZoom);
+      };
+      const onUp = () => {
+        window.removeEventListener('mousemove', onMove);
+        window.removeEventListener('mouseup', onUp);
+        sidebarHandle.classList.remove('dragging');
+        document.body.classList.remove('sidebar-dragging');
+        const cur = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--sidebar-w'), 10);
+        if (cur) setSidebarWidth(cur, true);
+      };
+      window.addEventListener('mousemove', onMove);
+      window.addEventListener('mouseup', onUp);
+    });
+    sidebarHandle.addEventListener('keydown', (event) => {
+      if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+      event.preventDefault();
+      const current = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--sidebar-w'), 10) || SIDEBAR_MIN;
+      const next = event.key === 'Home' ? SIDEBAR_MIN
+        : event.key === 'End' ? SIDEBAR_MAX
+        : current + (event.key === 'ArrowLeft' ? -10 : 10);
+      setSidebarWidth(next, true);
+    });
+  }
+})();

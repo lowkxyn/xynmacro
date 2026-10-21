@@ -1,0 +1,29 @@
+XynMacro third-party notices
+============================
+
+This distribution includes the following font software under the SIL Open Font
+License, Version 1.1. The complete license is included beside this file as
+OFL-1.1.txt.
+
+Chakra Petch
+Copyright 2018 The Chakra Petch Project Authors
+https://github.com/m4rc1e/Chakra-Petch
+
+DM Mono
+Copyright 2020 The DM Mono Project Authors
+https://github.com/googlefonts/dm-mono
+
+Inter
+Copyright 2016 The Inter Project Authors
+https://github.com/rsms/inter
+
+The fonts are redistributed unmodified as application assets. Their inclusion
+does not place XynMacro itself under the SIL Open Font License.
+
+tauri-plugin-updater 2.10.1 (with the documented XynMacro local patch)
+Copyright (c) 2017 - Present Tauri Apps Contributors
+https://github.com/tauri-apps/plugins-workspace
+
+This component is distributed under Apache-2.0 OR MIT. Its complete notices and
+licenses are included beside this file as TAURI-UPDATER-LICENSE-SPDX.txt,
+TAURI-UPDATER-LICENSE-APACHE-2.0.txt and TAURI-UPDATER-LICENSE-MIT.txt.
