@@ -1,6 +1,6 @@
 [package]
 name = "xyn_setup"
-version = "2.0.1"
+version = "2.0.2"
 description = "XynMacro Setup: branded window that runs the XynMacro NSIS installer silently"
 authors = ["Xyn"]
 edition = "2021"

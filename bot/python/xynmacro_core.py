@@ -225,6 +225,7 @@ HIDE_ROBLOX_CHAT_ON_START = True
 STOP_CHARGING_AFTER_KI_CONTROL = False
 # Ki HP checks. "fixed": every 30 s (sooner only once two checks in this stat show
 # HP falling). "adaptive": also learns the drain outside Ki and checks sooner after deaths.
+# "off": never steps out of a Ki stat (that is also where Ki stats recharge).
 KI_HP_CHECK_MODE = "adaptive"
 # Roblox restored from the taskbar comes back windowed even when it was fullscreen,
 # which moves every scan region. Put it back to fullscreen before a run.
@@ -4265,6 +4266,10 @@ def _ki_hp_interval(now=None):
 HTC_LEVEL_TOTAL = 50  # GC stats run to 20 (training_ui.POINTS_TOTALS)
 
 
+def _ki_hp_checks_wanted(stat):
+    return KI_HP_CHECK_MODE != "off" and not _in_htc(stat)
+
+
 def _in_htc(stat):
     """True when the stat's Training Progression total says HTC, where HP barely
     drains, so stepping out of Ki training to read it only costs time. Unread
@@ -5754,10 +5759,13 @@ def _background_game_monitor(stop_event, ready_event=None):
                 if current_state != ki_hp_state:
                     ki_hp_state, ki_hp_checked_at = current_state, now
                     _KI_HP_READINGS.clear()
-                    if ki_stat and _healing_monitor_enabled() and _in_htc(current_state):
-                        print(f"[HP] {current_state} is in HTC; skipping Ki HP checks")
+                    if ki_stat and _healing_monitor_enabled():
+                        if KI_HP_CHECK_MODE == "off":
+                            print(f"[HP] Ki HP checks are off; {current_state} won't step out to check HP")
+                        elif _in_htc(current_state):
+                            print(f"[HP] {current_state} is in HTC; skipping Ki HP checks")
                 if (ki_stat and _healing_monitor_enabled()
-                        and not _in_htc(current_state)
+                        and _ki_hp_checks_wanted(current_state)
                         and now - ki_hp_checked_at >= _ki_hp_interval()):
                     ki_hp_checked_at = now
                     stall_before_check = progression_stall
@@ -6509,7 +6517,7 @@ def load_master_config():
             HIDE_ROBLOX_CHAT_ON_START = _ui_bool(data["hide_roblox_chat_on_start"])
         if "stop_charging_after_ki_control" in data:
             STOP_CHARGING_AFTER_KI_CONTROL = _ui_bool(data["stop_charging_after_ki_control"])
-        if data.get("ki_hp_check_mode") in ("fixed", "adaptive"):
+        if data.get("ki_hp_check_mode") in ("fixed", "adaptive", "off"):
             KI_HP_CHECK_MODE = data["ki_hp_check_mode"]
         if "restore_fullscreen_on_start" in data:
             RESTORE_FULLSCREEN_ON_START = _ui_bool(

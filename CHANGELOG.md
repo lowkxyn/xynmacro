@@ -3,6 +3,11 @@
 All notable changes to XynMacro. This file is generated from the in-app
 "What's new" notes by `scripts/changelog.mjs` — edit those, not this file.
 
+## 2.0.2
+
+### Settings
+- Ki HP Check Timing has an Off choice: Ki Control and Ki Damage never step out to check HP (or to recharge Ki mid-stat). Senzu still works in the other stats; turn on Retry After Error to cover a death in a Ki stat.
+
 ## 2.0.1
 
 ### Fixes
