@@ -793,8 +793,9 @@ def _begin_run_result():
     global _CURRENT_RUN_OUTCOME, _CURRENT_RUN_REASON, _CURRENT_RUN_CATEGORY
     global _CURRENT_RUN_RETRYABLE
     global _USER_STOP_LATCHED, _AFTER_ACTIONS_BLOCKED
-    global GC_RUN_CONFIRMED
+    global GC_RUN_CONFIRMED, _GAME_COVERED_SINCE
     GC_RUN_CONFIRMED = False
+    _GAME_COVERED_SINCE = None
     with _run_result_lock:
         _CURRENT_RUN_OUTCOME = None
         _CURRENT_RUN_REASON = None
@@ -1097,6 +1098,7 @@ def _log_game_focus_failure():
 
 
 def _ensure_game_focus_for_input():
+    _wait_while_game_covered()
     if _game_has_focus():
         return True
     focus_game_window()
@@ -1894,6 +1896,62 @@ def _game_window_covering_title():
                for x1, y1, x2, y2 in regions):
             return title or "untitled window"
     return None
+
+
+# A notification toast or the taskbar can pop up over fullscreen Roblox for a
+# while. Input waits for it to go instead of ending the run, and only gives up
+# if something stays on top this long.
+GAME_COVERED_GIVE_UP_SEC = 120.0
+_GAME_COVERED_SINCE = None
+_game_covered_lock = threading.Lock()
+
+
+def _set_game_covered(covered):
+    global _GAME_COVERED_SINCE
+    with _game_covered_lock:
+        if covered == (_GAME_COVERED_SINCE is not None):
+            return
+        _GAME_COVERED_SINCE = time.monotonic() if covered else None
+    if covered:
+        _set_charge_hold(False)
+        print("[SAFETY] Another window is over Roblox; input paused until it goes")
+    else:
+        print("[SAFETY] Roblox is clear again; carrying on")
+
+
+def _watch_game_covered():
+    """Monitor-thread check. Returns True once the run has been stopped."""
+    if not _game_window_covering_title():
+        _set_game_covered(False)
+        return False
+    _set_game_covered(True)
+    since = _GAME_COVERED_SINCE
+    if since is not None and time.monotonic() - since >= GAME_COVERED_GIVE_UP_SEC:
+        return _stop_if_game_covered()
+    return False
+
+
+def _wait_while_game_covered():
+    """Hold input while another window is over Roblox.
+
+    A minigame input that had to wait is dropped rather than sent late: the
+    frame it was aimed at is gone. Menu and healing input carries on."""
+    if _GAME_COVERED_SINCE is None:
+        return
+    while _game_window_covering_title():
+        if _USER_STOP_LATCHED or UI_STOP_REQUESTED:
+            check_exit()
+        since = _GAME_COVERED_SINCE
+        if since is not None and time.monotonic() - since >= GAME_COVERED_GIVE_UP_SEC:
+            _stop_if_game_covered()
+            check_exit()
+        time.sleep(0.1)
+    _set_game_covered(False)
+    # After-run cleanup runs once the monitor has stopped; it only waits.
+    monitor = _background_monitor_thread
+    if (CURRENT_TRAINING_STATE is not None and monitor is not None
+            and threading.current_thread() is not monitor):
+        raise SkipMinigameException()
 
 
 def _stop_if_game_covered():
@@ -3928,7 +3986,7 @@ def _majin_tap(key):
         raise RuntimeError("Roblox focus not confirmed for regeneration")
     with _stop_input_gate:
         _majin_check()
-        if not _tap_key_unchecked(key):
+        if not _tap_key_unchecked(key, wait_for_cover=False):
             raise QuitException()
 
 
@@ -4202,6 +4260,17 @@ def _ki_hp_interval(now=None):
     if KI_HP_CHECK_MODE != "adaptive":
         return interval
     return max(5.0, interval * _KI_CHECK_SCALE)
+
+
+HTC_LEVEL_TOTAL = 50  # GC stats run to 20 (training_ui.POINTS_TOTALS)
+
+
+def _in_htc(stat):
+    """True when the stat's Training Progression total says HTC, where HP barely
+    drains, so stepping out of Ki training to read it only costs time. Unread
+    totals or any sign of GC keep the checks on."""
+    target = PROGRESSION_TARGETS.get(stat)
+    return bool(target and target[1] == HTC_LEVEL_TOTAL and not GC_RUN_CONFIRMED)
 
 
 def _ki_hp_check(sct):
@@ -5529,9 +5598,11 @@ def _background_game_monitor(stop_event, ready_event=None):
                     progression_stall = None
                     stop_event.wait(PROG_POLL_INTERVAL_SEC)
                     continue
-                if CURRENT_TRAINING_STATE and _game_has_focus() and now >= covering_check_at:
+                if now >= covering_check_at and (
+                        _GAME_COVERED_SINCE is not None
+                        or (CURRENT_TRAINING_STATE and _game_has_focus())):
                     covering_check_at = now + 0.5
-                    if _stop_if_game_covered():
+                    if _watch_game_covered():
                         break
                 game_geometry = _game_geometry()
                 token = _progression_token()
@@ -5679,11 +5750,14 @@ def _background_game_monitor(stop_event, ready_event=None):
                 # (the visible "it just presses Tab" symptom). Suppress the check for
                 # SENZU_AFTER_SWITCH_GRACE_SEC; a real low-HP emergency still needs
                 # 2 red frames + SENZU_DELAY_SEC, so it lands just after the window.
+                ki_stat = _new_game_ui() and current_state in ("Ki Control", "Ki Damage")
                 if current_state != ki_hp_state:
                     ki_hp_state, ki_hp_checked_at = current_state, now
                     _KI_HP_READINGS.clear()
-                if (_new_game_ui() and current_state in ("Ki Control", "Ki Damage")
-                        and _healing_monitor_enabled()
+                    if ki_stat and _healing_monitor_enabled() and _in_htc(current_state):
+                        print(f"[HP] {current_state} is in HTC; skipping Ki HP checks")
+                if (ki_stat and _healing_monitor_enabled()
+                        and not _in_htc(current_state)
                         and now - ki_hp_checked_at >= _ki_hp_interval()):
                     ki_hp_checked_at = now
                     stall_before_check = progression_stall
@@ -6820,7 +6894,8 @@ def _charge_wanted(state):
     if SENZU_CONTROLLER_ACTIVE.is_set() and _CHARGING_NOW != "healing":
         return False
     return (_game_has_focus() and not CONTROLLER_PAUSED and not PAUSE_TOGGLE_REQUESTED
-            and not TRAINING_MENU_VISIBLE and not GC_RECOVERY_VERIFY_PENDING)
+            and not TRAINING_MENU_VISIBLE and not GC_RECOVERY_VERIFY_PENDING
+            and _GAME_COVERED_SINCE is None)
 
 
 def _ki_charge_level(sct):
@@ -6832,7 +6907,8 @@ def _ki_charge_level(sct):
 
 def _charge_interrupted():
     return (_USER_STOP_LATCHED or UI_STOP_REQUESTED or CONTROLLER_PAUSED
-            or PAUSE_TOGGLE_REQUESTED or not _game_has_focus())
+            or PAUSE_TOGGLE_REQUESTED or not _game_has_focus()
+            or _GAME_COVERED_SINCE is not None)
 
 
 def _mark_ki_control_done():
@@ -6909,8 +6985,12 @@ def charge_ki_bar(sct, reason, only_if_drained=False, owner="controller"):
     return True
 
 
-def _tap_key_unchecked(key, *, minigame=False):
+def _tap_key_unchecked(key, *, minigame=False, wait_for_cover=True):
     # Menu actions must survive a slow game frame; minigame timing stays at 30ms.
+    # Callers already holding _stop_input_gate pass wait_for_cover=False and wait
+    # before taking it: waiting with the gate held would block Stop.
+    if wait_for_cover:
+        _wait_while_game_covered()
     with _stop_input_gate:
         if _controller_decisions_suspended():
             raise SenzuControllerPause()
@@ -8717,7 +8797,8 @@ def _ki_v9_context_valid(context):
                 and ENABLE_KI_MINIGAME and _new_game_ui()
                 and not (_USER_STOP_LATCHED or UI_STOP_REQUESTED or CONTROLLER_PAUSED
                          or PAUSE_TOGGLE_REQUESTED or MANUAL_NEXT_REQUESTED
-                         or MAJIN_CONTROLLER_ACTIVE or _sidecar_closing)
+                         or MAJIN_CONTROLLER_ACTIVE or _sidecar_closing
+                         or _GAME_COVERED_SINCE is not None)
                 and not _controller_decisions_suspended()
                 and not PROGRESSION_COMPLETE_REQUESTED.is_set())
 

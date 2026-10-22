@@ -771,3 +771,16 @@ def test_dark_death_buttons_are_still_a_death_screen():
     # dialog areas are kept in the fixture.
     frame = cv2.imread(str(FIXTURES / "death_dark_buttons.png"))
     assert core.training_ui.death_dialog_visible(frame)
+
+
+@pytest.mark.parametrize("targets, gc_seen, expected", [
+    ({"Ki Control": (44, 50)}, False, True),    # HTC total, no GC sign
+    ({"Ki Control": (20, 20)}, False, False),   # GC total
+    ({}, False, False),                         # Points Left not read: keep checking
+    ({"Ki Control": (44, 50)}, True, False),    # GC seen this run wins
+    ({"Ki Damage": (44, 50)}, False, False),    # another stat's total doesn't count
+])
+def test_ki_hp_checks_skip_only_when_sure_it_is_htc(monkeypatch, targets, gc_seen, expected):
+    monkeypatch.setattr(core, "PROGRESSION_TARGETS", dict(targets))
+    monkeypatch.setattr(core, "GC_RUN_CONFIRMED", gc_seen)
+    assert core._in_htc("Ki Control") is expected

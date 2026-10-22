@@ -2716,6 +2716,12 @@ window.wcCompact = () => {
 
   // What's-new content, newest first. Each entry: {version, notes:[{h, items[]}]}.
   const CHANGELOG = [
+    { version: '2.0.1', notes: [
+      { h: "Fixes", items: [
+        "A notification, the taskbar or another window popping up over Roblox no longer ends the run. XynMacro pauses its clicks and keys until it's gone, then carries on. It only stops if something stays on top for 2 minutes.",
+        "In HTC, Ki Control and Ki Damage no longer step out every 30 seconds to check HP, so the minigame isn't restarted and no progress is lost. HP checks still run in the Gravity Chamber.",
+      ] },
+    ] },
     { version: '2.0.0', notes: [
       { h: "Rebuilt for the new DBOG training UI", items: [
         "DBOG's October 2026 update redesigned the training menus, HUD and minigames. XynMacro 2.0 reads the new screens: Training Mode, the Training Progression panel (Level and Points Left), gravity, the HP and Ki bars, and the death screen.",
