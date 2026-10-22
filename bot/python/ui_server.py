@@ -271,8 +271,8 @@ def _ui_apply_setting_unlocked(key, value):
     elif key == "stop_charging_after_ki_control":
         core.STOP_CHARGING_AFTER_KI_CONTROL = core._ui_bool(value)
     elif key == "ki_hp_check_mode":
-        if value not in ("fixed", "adaptive"):
-            raise ValueError("Choose Every 30 s or Learn from HP drain")
+        if value not in ("fixed", "adaptive", "off"):
+            raise ValueError("Choose Learn from HP drain, Every 30 s or Off")
         core.KI_HP_CHECK_MODE = value
     elif key == "restore_fullscreen_on_start":
         core.RESTORE_FULLSCREEN_ON_START = core._ui_bool(value)

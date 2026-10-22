@@ -419,10 +419,11 @@
             <select class="inp" id="kiHpCheckMode" aria-label="Ki HP check timing" aria-describedby="kiHpCheckHint">
               <option value="adaptive">Learn from HP drain</option>
               <option value="fixed">Every 30 s</option>
+              <option value="off">Off</option>
             </select>
           </div>
         </div>
-        <div class="row-hint" id="kiHpCheckHint">Ki Control and Ki Damage hide your HP, so XynMacro steps out to check it. Every 30 s: a fixed check, sooner only once two checks show HP falling fast. Learn from HP drain: also uses how fast HP fell in the other minigames for the first check, and checks sooner after each death in a Ki stat.</div>
+        <div class="row-hint" id="kiHpCheckHint">Ki Control and Ki Damage hide your HP, so XynMacro steps out to check it. Every 30 s: a fixed check, sooner only once two checks show HP falling fast. Learn from HP drain: also uses how fast HP fell in the other minigames for the first check, and checks sooner after each death in a Ki stat. Off: never steps out, so Ki stats also don't recharge mid-stat; Senzu still works in the other stats, and turning on Retry After Error covers a death in a Ki stat. HTC is never checked.</div>
         <div class="row-hint" id="healingSummary" role="status">Method: Senzu (off)</div>
       </div>
 

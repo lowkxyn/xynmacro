@@ -2434,7 +2434,7 @@ window.wcCompact = () => {
     toggleSwitchToGame: 'bring front foreground focus roblox window top',
     toggleHideChat: 'chat close hide roblox',
     toggleStopChargeAfterKi: 'shift charge ki control stop',
-    kiHpCheckMode: 'hp health check timing drain senzu ki',
+    kiHpCheckMode: 'hp health check timing drain senzu ki off',
     notificationScreenshots: 'discord webhook picture screenshot image',
     mouseClickButton: 'left right click swap remap',
     respawnSettle: 'respawn loading ping delay walk',
@@ -2716,6 +2716,11 @@ window.wcCompact = () => {
 
   // What's-new content, newest first. Each entry: {version, notes:[{h, items[]}]}.
   const CHANGELOG = [
+    { version: '2.0.2', notes: [
+      { h: "Settings", items: [
+        "Ki HP Check Timing has an Off choice: Ki Control and Ki Damage never step out to check HP (or to recharge Ki mid-stat). Senzu still works in the other stats; turn on Retry After Error to cover a death in a Ki stat.",
+      ] },
+    ] },
     { version: '2.0.1', notes: [
       { h: "Fixes", items: [
         "A notification, the taskbar or another window popping up over Roblox no longer ends the run. XynMacro pauses its clicks and keys until it's gone, then carries on. It only stops if something stays on top for 2 minutes.",
