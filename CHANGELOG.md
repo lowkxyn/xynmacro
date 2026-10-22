@@ -3,6 +3,12 @@
 All notable changes to XynMacro. This file is generated from the in-app
 "What's new" notes by `scripts/changelog.mjs` — edit those, not this file.
 
+## 2.0.1
+
+### Fixes
+- A notification, the taskbar or another window popping up over Roblox no longer ends the run. XynMacro pauses its clicks and keys until it's gone, then carries on. It only stops if something stays on top for 2 minutes.
+- In HTC, Ki Control and Ki Damage no longer step out every 30 seconds to check HP, so the minigame isn't restarted and no progress is lost. HP checks still run in the Gravity Chamber.
+
 ## 2.0.0
 
 ### Rebuilt for the new DBOG training UI

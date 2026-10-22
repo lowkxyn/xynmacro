@@ -51,16 +51,113 @@ def test_z_order_skips_fully_transparent_overlays_but_keeps_opaque_ones(monkeypa
     assert list(core._windows_above_game()) == [((1230, 820, 1920, 940), "opaque overlay")]
 
 
-def test_overlay_appearing_during_run_stops_and_blocks_after_run_input(monkeypatch):
+def test_brief_popup_pauses_input_then_clears_without_stopping(monkeypatch):
     monkeypatch.setattr(core, "_AFTER_ACTIONS_BLOCKED", False)
-    cover = Mock(side_effect=[None, "PiP"])
+    monkeypatch.setattr(core, "_GAME_COVERED_SINCE", None)
+    monkeypatch.setattr(core, "_set_charge_hold", Mock())
+    cover = Mock(side_effect=[None, "Toast", "Toast", None])
     monkeypatch.setattr(core, "_game_window_covering_title", cover)
-    _run_monitor(monkeypatch, [(10, {}), (10.25, {}), (10.5, {}), (11, {})])
-    assert cover.call_count == 2
+    # Focus is lost while covered; the check keeps running so the pause can clear.
+    _run_monitor(monkeypatch, [(10, {}), (11, {}), (12, {"focused": False}), (13, {})])
+    assert cover.call_count == 4
+    assert core._GAME_COVERED_SINCE is None
+    assert not core.UI_STOP_REQUESTED and not core._AFTER_ACTIONS_BLOCKED
+    core._set_charge_hold.assert_called_once_with(False)
+
+
+def test_window_left_over_roblox_still_stops_after_give_up_time(monkeypatch):
+    monkeypatch.setattr(core, "_AFTER_ACTIONS_BLOCKED", False)
+    monkeypatch.setattr(core, "_GAME_COVERED_SINCE", None)
+    monkeypatch.setattr(core, "_set_charge_hold", Mock())
+    monkeypatch.setattr(core, "_game_window_covering_title", Mock(return_value="PiP"))
+    give_up = 10 + core.GAME_COVERED_GIVE_UP_SEC
+    _run_monitor(monkeypatch, [(10, {}), (give_up - 1, {}), (give_up, {}), (give_up + 5, {})])
     assert core.UI_STOP_REQUESTED
     assert core._AFTER_ACTIONS_BLOCKED
     core._release_macro_input.assert_called_once()
-    assert not core.PROGRESSION_COMPLETE_REQUESTED.is_set()
+
+
+def test_minigame_input_waits_out_popup_then_is_dropped(monkeypatch):
+    clock = SimpleNamespace(now=0.0)
+    monkeypatch.setattr(core.time, "monotonic", lambda: clock.now)
+    monkeypatch.setattr(core.time, "sleep", lambda sec: setattr(clock, "now", clock.now + sec))
+    monkeypatch.setattr(core, "_GAME_COVERED_SINCE", 0.0)
+    monkeypatch.setattr(core, "_USER_STOP_LATCHED", False)
+    monkeypatch.setattr(core, "UI_STOP_REQUESTED", False)
+    monkeypatch.setattr(core, "CURRENT_TRAINING_STATE", "Agility")
+    monkeypatch.setattr(core, "_background_monitor_thread", object())
+    monkeypatch.setattr(core, "_game_window_covering_title",
+                        Mock(side_effect=["Toast", "Toast", None]))
+    with pytest.raises(core.SkipMinigameException):
+        core._wait_while_game_covered()
+    assert core._GAME_COVERED_SINCE is None
+
+
+@pytest.mark.parametrize("monitor", ["current", None])
+def test_healing_and_after_run_input_wait_without_dropping(monkeypatch, monitor):
+    # The monitor thread's own healing input, and after-run cleanup once the
+    # monitor has stopped, still go through after the popup clears.
+    monkeypatch.setattr(core.time, "sleep", lambda _: None)
+    monkeypatch.setattr(core, "_GAME_COVERED_SINCE", core.time.monotonic())
+    monkeypatch.setattr(core, "_USER_STOP_LATCHED", False)
+    monkeypatch.setattr(core, "UI_STOP_REQUESTED", False)
+    monkeypatch.setattr(core, "CURRENT_TRAINING_STATE", "Ki Control")
+    monkeypatch.setattr(core, "_background_monitor_thread",
+                        core.threading.current_thread() if monitor == "current" else None)
+    monkeypatch.setattr(core, "_game_window_covering_title", Mock(side_effect=["Toast", None]))
+    core._wait_while_game_covered()
+    assert core._GAME_COVERED_SINCE is None
+
+
+def test_key_sent_with_stop_gate_held_never_waits_on_popup(monkeypatch):
+    # Majin taps hold _stop_input_gate; waiting there would block Stop.
+    monkeypatch.setattr(core, "_GAME_COVERED_SINCE", core.time.monotonic())
+    monkeypatch.setattr(core, "_USER_STOP_LATCHED", False)
+    monkeypatch.setattr(core, "MAJIN_CONTROLLER_ACTIVE", False)
+    covered = Mock(return_value="Toast")
+    monkeypatch.setattr(core, "_game_window_covering_title", covered)
+    monkeypatch.setattr(core, "_set_charge_hold", Mock())
+    monkeypatch.setattr(core.pydirectinput, "keyDown", Mock())
+    monkeypatch.setattr(core.pydirectinput, "keyUp", Mock())
+    monkeypatch.setattr(core.time, "sleep", lambda _: None)
+    assert core._tap_key_unchecked("tab", wait_for_cover=False)
+    covered.assert_not_called()
+
+
+def test_covered_game_blocks_charge_and_queued_ki_clicks(monkeypatch):
+    monkeypatch.setattr(core, "_GAME_COVERED_SINCE", 1.0)
+    monkeypatch.setattr(core, "_USER_STOP_LATCHED", False)
+    monkeypatch.setattr(core, "UI_STOP_REQUESTED", False)
+    monkeypatch.setattr(core, "CONTROLLER_PAUSED", False)
+    monkeypatch.setattr(core, "PAUSE_TOGGLE_REQUESTED", False)
+    monkeypatch.setattr(core, "_game_has_focus", lambda: True)
+    assert core._charge_interrupted()
+    monkeypatch.setattr(core, "_CHARGING_NOW", "controller")
+    monkeypatch.setattr(core, "TRAINING_MENU_VISIBLE", False)
+    monkeypatch.setattr(core, "GC_RECOVERY_VERIFY_PENDING", False)
+    assert not core._charge_wanted("Agility")
+    monkeypatch.setattr(core, "_GAME_COVERED_SINCE", None)
+    assert core._charge_wanted("Agility") == (core.COMPATIBILITY_SETTINGS["charge_hold_mode"] != "off")
+
+
+def test_menu_input_waits_out_popup_and_is_still_sent(monkeypatch):
+    monkeypatch.setattr(core.time, "sleep", lambda _: None)
+    monkeypatch.setattr(core, "_GAME_COVERED_SINCE", core.time.monotonic())
+    monkeypatch.setattr(core, "_USER_STOP_LATCHED", False)
+    monkeypatch.setattr(core, "UI_STOP_REQUESTED", False)
+    monkeypatch.setattr(core, "CURRENT_TRAINING_STATE", None)
+    monkeypatch.setattr(core, "_game_window_covering_title", Mock(side_effect=["Toast", None]))
+    core._wait_while_game_covered()
+    assert core._GAME_COVERED_SINCE is None
+
+
+def test_stop_while_waiting_on_popup_stops_input(monkeypatch):
+    monkeypatch.setattr(core, "_GAME_COVERED_SINCE", core.time.monotonic())
+    monkeypatch.setattr(core, "_USER_STOP_LATCHED", True)
+    monkeypatch.setattr(core, "_record_run_outcome", Mock())
+    monkeypatch.setattr(core, "_game_window_covering_title", Mock(return_value="Toast"))
+    with pytest.raises(core.QuitException):
+        core._wait_while_game_covered()
 
 
 def test_periodic_cover_check_preserves_start_countdown_and_alt_tab_refocus(monkeypatch):
