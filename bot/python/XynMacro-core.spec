@@ -17,6 +17,7 @@ a = Analysis(
         ('tpl_gc_banner_v2.png', '.'),
         ('tpl_gc_open_training_v2.png', '.'),
         ('tpl_side_menu_tab_v2.png', '.'),
+        ('tpl_side_menu_icons_v3.png', '.'),
         ('tpl_menu_heading_items_v2.png', '.'),
         ('tpl_menu_heading_customize_v2.png', '.'),
         ('tpl_menu_heading_senzu_bean_v2.png', '.'),

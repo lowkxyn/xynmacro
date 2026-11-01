@@ -405,8 +405,11 @@ class MajinTransform:
 
 class SenzuMenus:
     HOTBAR_BOX = MajinTransform.PANEL_BOX
-    SIDE_TAB_OPEN_BOX = (500, 470, 120, 270)    # vertical MENU tab, menu open
-    SIDE_TAB_CLOSED_BOX = (0, 470, 90, 270)     # same tab at the left edge
+    # The vertical MENU tab was removed in a game update (seen 2026-11-01); the
+    # page icon column down the menu's left edge shows on every page instead.
+    SIDE_MENU_ICONS_BOX = (0, 430, 110, 400)    # live: 1.000 open on 6 pages, <= 0.27 closed
+    SIDE_TAB_OPEN_BOX = (500, 470, 120, 270)    # old vertical MENU tab, menu open
+    SIDE_TAB_CLOSED_BOX = (0, 470, 90, 270)     # old tab at the left edge
     HEADING_BOX = (95, 385, 265, 55)
     LIST_BOX = (60, 440, 470, 330)              # first five list rows
     CUSTOMIZE_ICON = (34, 540)
@@ -437,12 +440,11 @@ class SenzuMenus:
 
     @classmethod
     def side_menu_state(cls, frame):
-        """"open", "closed" or None (e.g. Training Mode covers both spots)."""
-        if cls._match(crop(frame, cls.SIDE_TAB_OPEN_BOX), "tpl_side_menu_tab_v2.png")[0] >= cls._MIN:
+        """"open" or "closed". Closed has no marker of its own any more."""
+        if (cls._match(crop(frame, cls.SIDE_MENU_ICONS_BOX), "tpl_side_menu_icons_v3.png")[0] >= cls._MIN
+                or cls._match(crop(frame, cls.SIDE_TAB_OPEN_BOX), "tpl_side_menu_tab_v2.png")[0] >= cls._MIN):
             return "open"
-        if cls._match(crop(frame, cls.SIDE_TAB_CLOSED_BOX), "tpl_side_menu_tab_v2.png")[0] >= cls._MIN:
-            return "closed"
-        return None
+        return "closed"
 
     @classmethod
     def heading(cls, frame):

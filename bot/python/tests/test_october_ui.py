@@ -456,12 +456,20 @@ def test_side_menu_pages_and_senzu_row():
     menus = ui.SenzuMenus
     assert menus.side_menu_state(paste([("side_tab_open", menus.SIDE_TAB_OPEN_BOX)])) == "open"
     assert menus.side_menu_state(paste([("side_tab_closed", menus.SIDE_TAB_CLOSED_BOX)])) == "closed"
-    assert menus.side_menu_state(paste([])) is None
+    assert menus.side_menu_state(paste([])) == "closed"
     for name in menus.HEADINGS:
         assert menus.heading(paste([(f"heading_{name}", menus.HEADING_BOX)])) == name
     assert menus.senzu_row_y(paste([("items_list_senzu", menus.LIST_BOX)])) == pytest.approx(671, abs=3)
     assert menus.senzu_row_y(paste([("items_list_no_senzu", menus.LIST_BOX)])) is None
     assert [menus.slot_row_y(slot) for slot in (1, 4)] == [485, 671]
+
+
+@pytest.mark.parametrize("piece", ["side_menu_icons", "side_menu_icons_profile"])
+def test_side_menu_without_the_old_menu_tab_reads_open(piece):
+    # A game update removed the vertical MENU tab, so every refill stopped at
+    # "Side menu not confirmed after M". The page icons show on every page.
+    menus = ui.SenzuMenus
+    assert menus.side_menu_state(paste([(piece, menus.SIDE_MENU_ICONS_BOX)])) == "open"
 
 
 def test_items_hotbar_shows_the_loaded_slot():

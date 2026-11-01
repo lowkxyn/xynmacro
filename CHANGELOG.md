@@ -3,6 +3,11 @@
 All notable changes to XynMacro. This file is generated from the in-app
 "What's new" notes by `scripts/changelog.mjs` — edit those, not this file.
 
+## 2.0.4
+
+### Fixes
+- Auto-Senzu can load a Senzu Bean again. A game update removed the MENU tab on the M menu, so the macro thought the menu never opened and stopped with "No Senzu could be loaded". It now spots the menu by its page icons.
+
 ## 2.0.3
 
 ### Fixes

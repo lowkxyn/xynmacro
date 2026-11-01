@@ -2723,6 +2723,11 @@ window.wcCompact = () => {
 
   // What's-new content, newest first. Each entry: {version, notes:[{h, items[]}]}.
   const CHANGELOG = [
+    { version: '2.0.4', notes: [
+      { h: "Fixes", items: [
+        "Auto-Senzu can load a Senzu Bean again. A game update removed the MENU tab on the M menu, so the macro thought the menu never opened and stopped with \"No Senzu could be loaded\". It now spots the menu by its page icons.",
+      ] },
+    ] },
     { version: '2.0.3', notes: [
       { h: "Fixes", items: [
         "A stat that stops moving now gets skipped after 2 minutes like it should. In HTC the light sky behind the Progression number made it look like it changed every few seconds, so a stuck Health could train forever.",
