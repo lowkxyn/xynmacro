@@ -3,6 +3,15 @@
 All notable changes to XynMacro. This file is generated from the in-app
 "What's new" notes by `scripts/changelog.mjs` — edit those, not this file.
 
+## 2.0.3
+
+### Fixes
+- A stat that stops moving now gets skipped after 2 minutes like it should. In HTC the light sky behind the Progression number made it look like it changed every few seconds, so a stuck Health could train forever.
+- Health learns your PC's timing. Each press checks where the marker stopped, and if presses land late (slower PCs) or early, the next ones are timed to match. The log shows where each press landed.
+
+### Diagnostics
+- New Open logs folder button: the last 25 session logs are saved there automatically, ready to send when something goes wrong.
+
 ## 2.0.2
 
 ### Settings

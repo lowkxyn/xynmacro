@@ -50,10 +50,54 @@ def test_change_to_either_side_of_signature_resets_timer(monkeypatch, signature,
     changed = list(signature)
     changed[side] = (np.roll(signature[side][0], 16, axis=1),)
     changed = tuple(changed)
+    # An unreadable label has to keep looking different before it counts as a change.
     timer, stalled = core._progression_stall_state(STAT, STAT, False, changed, 129.0, timer)
+    assert timer[2] == 10.0 and not stalled
+    timer, stalled = core._progression_stall_state(STAT, STAT, False, changed, 132.0, timer)
     assert timer[2] == 129.0 and not stalled
     _, stalled = core._progression_stall_state(STAT, STAT, False, changed, 249.0, timer)
     assert stalled
+
+
+def test_brief_unreadable_glitches_do_not_restart_the_timer(monkeypatch, signature):
+    # Pale HTC sky behind the digits broke ~3 reads in 10; each one used to restart it.
+    monkeypatch.setattr(core, "PROGRESSION_STALL_TIMEOUT_SEC", 120.0)
+    glitch = ((np.roll(signature[0][0], 16, axis=1),), signature[1])
+    timer, _ = core._progression_stall_state(STAT, STAT, False, signature, 10.0, None, level=(0, 50))
+    now, stalled = 10.0, False
+    while now < 131.0:
+        now += 0.25
+        frame, level = (glitch, None) if int(now * 4) % 10 < 3 else (signature, (0, 50))
+        timer, stalled = core._progression_stall_state(STAT, STAT, False, frame, now, timer, level=level)
+        if stalled:
+            break
+    assert stalled and 130.0 <= now < 130.5
+
+
+def test_a_readable_new_count_restarts_the_timer_at_once(monkeypatch, signature):
+    monkeypatch.setattr(core, "PROGRESSION_STALL_TIMEOUT_SEC", 120.0)
+    timer, _ = core._progression_stall_state(STAT, STAT, False, signature, 10.0, None, level=(4, 50))
+    # Same digits read as numbers win over a shape mismatch, and a new number resets.
+    timer, _ = core._progression_stall_state(STAT, STAT, False, signature, 20.0, timer, level=(4, 50))
+    assert timer[2] == 10.0
+    timer, stalled = core._progression_stall_state(STAT, STAT, False, signature, 30.0, timer, level=(5, 50))
+    assert timer[2] == 30.0 and timer[3] == (5, 50) and not stalled
+
+
+def test_live_htc_label_glitch_reads_as_unknown_not_as_a_new_count():
+    import cv2
+    from pathlib import Path
+    import training_ui as ui
+    folder = Path(__file__).parent / "fixtures" / "ui_2026_10"
+    clean = cv2.imread(str(folder / "progression_htc_health_clean.png"))
+    pale = cv2.imread(str(folder / "progression_htc_health_pale.png"))
+    assert ui.read_progression_level(clean) == (0, 50)
+    assert ui.read_progression_level(pale) is None
+    clean_sig = ui.progression_signature(ui.progression_numbers(clean))
+    pale_sig = ui.progression_signature(ui.progression_numbers(pale))
+    timer, _ = core._progression_stall_state("Health", "Health", False, clean_sig, 10.0, None, level=(0, 50))
+    timer, _ = core._progression_stall_state("Health", "Health", False, pale_sig, 11.0, timer)
+    assert timer[2] == 10.0
 
 
 def test_stat_switch_resets_timer_even_with_identical_glyphs(signature):

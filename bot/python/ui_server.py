@@ -875,6 +875,16 @@ def run_ui_server(sidecar_pid=None, auth_token=None):
         except Exception as e:
             return jsonify({"ok": False, "msg": str(e)})
 
+    @app.route("/open_logs_dir", methods=["POST"])
+    def open_logs_dir():
+        try:
+            logs_dir = core.os.path.join(core.JSON_DIR, "logs")  # auto-saved session logs
+            core.os.makedirs(logs_dir, exist_ok=True)
+            core.os.startfile(logs_dir)
+            return jsonify({"ok": True, "path": logs_dir})
+        except Exception as e:
+            return jsonify({"ok": False, "msg": str(e)})
+
     @app.route("/open_discord", methods=["POST"])
     def open_discord():
         # Fixed URL, so the page can't ask the backend to open anything else.

@@ -80,6 +80,75 @@ def test_health_bar_reads_marker_and_gold_zone():
     assert ui.health_bar(fixture("health_bar_failed")) is None
 
 
+def test_health_bar_reads_the_htc_bar():
+    marker, zone = ui.health_bar(fixture("health_bar_htc"))
+    assert marker == pytest.approx(72, abs=2)
+    assert zone == (180, 279)
+
+
+def _landing_memo(lead=0.02):
+    return {"marker": None, "lead": lead, "grab": 0.01, "speed": 650.0,
+            "landing": {"zone": (180, 279), "pressed_at": 10.0, "direction": 1, "speed": 650.0,
+                        "furthest": None}}
+
+
+@pytest.mark.parametrize("frozen, lead_after, verdict", [
+    (330.0, 0.02 + 0.03, "MISSED"),                # froze past the zone: press earlier, one step
+    (150.0, 0.0, "MISSED"),                        # early, lead can't go below zero
+    (234.0, 0.02, "in zone"),                      # within 8 px of centre: leave it
+    (250.0, 0.02 + 0.5 * 20.5 / 650, "in zone"),   # a little late: half the error
+])
+def test_health_landing_moves_the_lead_by_where_the_marker_froze(capsys, frozen, lead_after, verdict):
+    memo = _landing_memo()
+    core._health_v3_check_landing(memo, frozen, 10.05)   # first frozen frame, nothing to compare yet
+    memo["marker"] = frozen
+    core._health_v3_check_landing(memo, frozen, 10.07)
+    assert memo["landing"] is None
+    assert memo["lead"] == pytest.approx(lead_after)
+    assert verdict in capsys.readouterr().out
+
+
+def test_health_lead_is_capped_and_a_moving_marker_is_not_a_landing(capsys):
+    memo = _landing_memo(lead=0.19)
+    memo["marker"] = 200.0
+    core._health_v3_check_landing(memo, 220.0, 10.05)   # still moving
+    assert memo["landing"] is not None
+    memo["marker"] = 279.0
+    core._health_v3_check_landing(memo, 279.0, 10.1)
+    assert memo["lead"] == core.HEALTH_V3_LEAD_RANGE[1]
+
+
+def test_health_press_that_never_freezes_is_logged_and_dropped(capsys):
+    memo = _landing_memo()
+    core._health_v3_check_landing(memo, None, 10.3)
+    assert memo["landing"] is not None
+    core._health_v3_check_landing(memo, 400.0, 10.0 + core.HEALTH_V3_LANDING_WINDOW_SEC + 0.01)
+    assert memo["landing"] is None and memo["lead"] == 0.02
+    assert "didn't stop" in capsys.readouterr().out
+
+
+def test_health_press_aimed_at_a_slow_restarting_marker_teaches_nothing(capsys):
+    # Live: a press fired as the marker restarted after a hit (250 px/s) once taught +90 ms.
+    memo = _landing_memo()
+    memo["landing"]["speed"] = 250.0
+    memo["marker"] = 273.0
+    core._health_v3_check_landing(memo, 273.0, 10.05)
+    assert memo["landing"] is None and memo["lead"] == 0.02
+
+
+def test_health_miss_that_ends_in_failed_moves_the_lead_earlier_a_little(capsys):
+    # The marker was still moving past the centre, then the bar went to FAILED.
+    memo = _landing_memo()
+    memo["marker"] = 200.0
+    core._health_v3_check_landing(memo, 260.0, 10.05)
+    memo["marker"] = 260.0
+    core._health_v3_check_landing(memo, 300.0, 10.08)
+    core._health_v3_check_landing(memo, None, 10.11)
+    assert memo["landing"] is None
+    assert memo["lead"] == pytest.approx(0.02 + 0.03)
+    assert "+70px" in capsys.readouterr().out
+
+
 @pytest.mark.parametrize("marker, velocity, expected", [
     (230, 0, True),        # centred
     (185, 0, False),       # inside but within the edge margin

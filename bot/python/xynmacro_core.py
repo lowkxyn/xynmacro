@@ -264,6 +264,7 @@ NO_YELLOW_FALLBACK_ENABLED = False    # Progression tracking is the primary comp
                                       # no-yellow switch is an opt-in fallback; when off, an untracked
                                       # stat keeps training until tracking locks or a manual skip.
 PROGRESSION_STALL_TIMEOUT_SEC = 120.0  # Points Left can cap a readable count below its displayed target.
+PROGRESSION_STALL_CHANGE_SEC = 3.0     # an unreadable label must look different this long to count as a change
 YELLOW_SAMPLE_INTERVAL_SEC = 0.25     # seconds between samples (lower = faster response, more CPU)
 TRAINING_LOAD_GRACE_SEC = 12.0        # after a switch/start, allow this long for the FIRST yellow
                                       # (slow load/ping) before the no-yellow switch can fire
@@ -5262,10 +5263,16 @@ def read_progression_completion(sct, geometry=None):
     return _apply_points_cap(frame, _progression_completion_from_frame(frame))
 
 
+_LAST_PROGRESSION_LEVEL = None   # numeric (count, target) from the last new-UI read, for the stall timer
+
+
 def read_progression_state(sct, geometry=None, stat=None):
+    global _LAST_PROGRESSION_LEVEL
     stat = CURRENT_TRAINING_STATE if stat is None else stat
+    _LAST_PROGRESSION_LEVEL = None
     if _new_game_ui():
         frame = _grab_reference_box(sct, training_ui.progression_label_box(stat), geometry=geometry)
+        _LAST_PROGRESSION_LEVEL = training_ui.read_progression_level(frame)
         numbers = training_ui.progression_numbers(frame)
         completion = training_ui.progression_complete(numbers)
         reason = _progression_completion_reason(frame, completion, stat)
@@ -5493,18 +5500,40 @@ def _progression_stall_state(
     now,
     stall_state,
     suspended=False,
+    level=None,
 ):
-    """Time only a continuously readable, locked, incomplete count."""
+    """Time only a continuously readable, locked, incomplete count.
+
+    The state is (stat, signature, since, level, looks_changed_since); level is the
+    numeric (count, target) when the digits could be read. Pale HTC sky behind the
+    digits breaks the shape masks on about 3 reads in 10, and resetting on each of
+    those kept a stuck Health run going for 6 minutes. So a readable count decides,
+    and an unreadable one only counts as changed once it stays different.
+    """
     if not COMPATIBILITY_SETTINGS["progression_stall_enabled"]:
         return None, False
     if (not current_state or tracked_state != current_state
             or completion is not False or signature is None or suspended):
         return None, False
-    if (stall_state is None or stall_state[0] != current_state
-            or not all(_progression_shapes_match(previous, current)
-                       for previous, current in zip(stall_state[1], signature))):
-        return (current_state, signature, now), False
-    return stall_state, now - stall_state[2] >= PROGRESSION_STALL_TIMEOUT_SEC
+    if stall_state is None or stall_state[0] != current_state:
+        return (current_state, signature, now, level, None), False
+    _stat, reference, since, known_level, looks_changed_since = stall_state
+    timed_out = now - since >= PROGRESSION_STALL_TIMEOUT_SEC
+    if level is not None and known_level is not None:
+        if level != known_level:
+            return (current_state, signature, now, level, None), False
+        return (current_state, reference, since, known_level, None), timed_out
+    if level is not None:
+        # First clean read of this count: keep it as the reference.
+        return (current_state, signature, since, level, None), timed_out
+    if all(_progression_shapes_match(previous, current)
+           for previous, current in zip(reference, signature)):
+        return (current_state, reference, since, known_level, None), timed_out
+    if looks_changed_since is None:
+        looks_changed_since = now
+    if now - looks_changed_since >= PROGRESSION_STALL_CHANGE_SEC:
+        return (current_state, signature, looks_changed_since, None, None), False
+    return (current_state, reference, since, known_level, looks_changed_since), timed_out
 
 
 def _progression_meter_growth(fill, previous):
@@ -5736,6 +5765,7 @@ def _background_game_monitor(stop_event, ready_event=None):
                     progression_stall, stalled = _progression_stall_state(
                         current_state, PROGRESSION_TRACKED_STATE, completion,
                         signature, now, progression_stall, suspended=stall_suspended,
+                        level=_LAST_PROGRESSION_LEVEL,
                     )
                     if progression_stall is None or progression_stall[2] == now:
                         stall_meter = None
@@ -5746,7 +5776,7 @@ def _background_game_monitor(stop_event, ready_event=None):
                             meter_fill = gc_recovery.progress_fill(meter_frame, current_state)
                         stall_meter, growing = _progression_meter_growth(meter_fill, stall_meter)
                         if growing:
-                            progression_stall = (current_state, signature, now)
+                            progression_stall = (current_state, signature, now, None, None)
                             stalled = False
 
                 # Post-switch settle window (like the progression check above): right
@@ -8611,16 +8641,65 @@ def _ki_click(screen_cx, screen_cy):
 
 HEALTH_V3_INPUT_LEAD_SEC = 0.02   # capture age + key-down, at ~650 px/s marker speed
 _HEALTH_V3_STATE = {"marker": None, "seen_at": 0.0, "velocity": 0.0, "pressed_at": 0.0,
-                     "frame_interval": 0.02}
+                     "frame_interval": 0.02, "lead": HEALTH_V3_INPUT_LEAD_SEC, "grab": 0.0,
+                     "landing": None, "speed": 650.0}
 HEALTH_V3_MAX_WAIT_SEC = 0.05   # never hold the loop longer than this waiting for the centre
+HEALTH_V3_LEAD_RANGE = (0.0, 0.2)
+HEALTH_V3_LANDING_WINDOW_SEC = 0.6   # a press that registered freezes the marker well inside this
+HEALTH_V3_LEAD_STEP_SEC = 0.03       # most one landing can move the lead
+
+
+def _health_v3_check_landing(memo, marker, now):
+    """After a press, find where the marker froze and learn the lead from it.
+
+    A registered press freezes the marker where the game took it (live HTC: aimed at
+    centre 285, froze at 286), so the freeze position measures how late this PC's
+    presses land. Older or busier PCs were landing past the zone on every press.
+    A miss shows FAILED instead of a freeze; if the marker was seen still moving past
+    the centre after the press, the press was late, so the lead grows a little.
+    """
+    landing = memo["landing"]
+    if landing is None or now <= landing["pressed_at"]:
+        return
+    left, right = landing["zone"]
+    low, high = HEALTH_V3_LEAD_RANGE
+    # Pixels to seconds at the usual sweep speed. A press aimed while the marker was
+    # just starting to move again (live: 250 px/s against ~650) taught a 90 ms jump.
+    speed = memo["speed"]
+    learn = landing["speed"] >= 0.7 * speed
+    if marker is None or now - landing["pressed_at"] > HEALTH_V3_LANDING_WINDOW_SEC:
+        if marker is None and landing["furthest"] is None and now - landing["pressed_at"] <= HEALTH_V3_LANDING_WINDOW_SEC:
+            return   # no post-press frame yet; wait for one
+        memo["landing"] = None
+        furthest = landing["furthest"]
+        if learn and furthest is not None and furthest > 0:
+            memo["lead"] = min(high, memo["lead"] + min(HEALTH_V3_LEAD_STEP_SEC, 0.5 * furthest / speed))
+        moved = "no frames" if furthest is None else f"marker still moving at {furthest:+.0f}px"
+        print(f"[HEALTH] Press didn't stop the marker ({moved}); lead {memo['lead'] * 1000:.0f}ms, "
+              f"grab {memo['grab'] * 1000:.0f}ms")
+        return
+    late_px = (marker - (left + right) / 2.0) * landing["direction"]
+    if memo["marker"] is None or abs(marker - memo["marker"]) > 1.5:
+        landing["furthest"] = late_px if landing["furthest"] is None else max(landing["furthest"], late_px)
+        return
+    memo["landing"] = None
+    if learn and abs(late_px) > 8:
+        step = max(-HEALTH_V3_LEAD_STEP_SEC, min(HEALTH_V3_LEAD_STEP_SEC, 0.5 * late_px / speed))
+        memo["lead"] = min(high, max(low, memo["lead"] + step))
+    where = "in zone" if left <= marker <= right else "MISSED"
+    print(f"[HEALTH] Landed {late_px:+.0f}px from centre ({where}); lead {memo['lead'] * 1000:.0f}ms, "
+          f"grab {memo['grab'] * 1000:.0f}ms, {landing['speed']:.0f}px/s")
 
 
 def _logic_health_v3(sct, monitor):
     """Tap F while the sweeping white marker is inside the gold zone."""
-    reading = training_ui.health_bar(
-        _grab_reference_box(sct, training_ui.HEALTH_BAR_BOX, geometry=monitor))
+    grab_started = time.perf_counter()
+    bar = _grab_reference_box(sct, training_ui.HEALTH_BAR_BOX, geometry=monitor)
+    reading = training_ui.health_bar(bar)
     memo = _HEALTH_V3_STATE
+    memo["grab"] += (time.perf_counter() - grab_started - memo["grab"]) * 0.2
     now = time.monotonic()
+    _health_v3_check_landing(memo, None if reading is None else reading[0], now)
     if reading is None:
         memo.update(marker=None, velocity=0.0)
         return
@@ -8628,6 +8707,8 @@ def _logic_health_v3(sct, monitor):
     elapsed = now - memo["seen_at"]
     if memo["marker"] is not None and 0 < elapsed < 0.2:
         memo["velocity"] = (marker - memo["marker"]) / elapsed
+        if 300 <= abs(memo["velocity"]) <= 1500:
+            memo["speed"] += (abs(memo["velocity"]) - memo["speed"]) * 0.05
         memo["frame_interval"] += (elapsed - memo["frame_interval"]) * 0.2
     else:
         # A stale speed would turn a hit's frozen marker into a second press.
@@ -8638,14 +8719,17 @@ def _logic_health_v3(sct, monitor):
     if abs(memo["velocity"]) < 100 or now - memo["pressed_at"] < HEALTH_HIT_COOLDOWN_SEC:
         return
     delay = training_ui.health_press_delay(
-        marker, zone, memo["velocity"], HEALTH_V3_INPUT_LEAD_SEC, memo["frame_interval"])
+        marker, zone, memo["velocity"], memo["lead"], memo["frame_interval"])
     if delay is None:
         return
     if delay > 0:
         time.sleep(min(delay, HEALTH_V3_MAX_WAIT_SEC))
-    print(">>> [HEALTH] Hit")
+    print(">>> [HEALTH] Press F")
     if hardware_tap("f"):
         memo["pressed_at"] = now + delay
+        memo["landing"] = {"zone": zone, "pressed_at": now + delay,
+                           "direction": 1 if memo["velocity"] > 0 else -1,
+                           "speed": abs(memo["velocity"]), "furthest": None}
         TELEMETRY["health_hits"] += 1
 
 
