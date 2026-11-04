@@ -464,6 +464,28 @@ def test_side_menu_pages_and_senzu_row():
     assert [menus.slot_row_y(slot) for slot in (1, 4)] == [485, 671]
 
 
+@pytest.mark.new_game_ui
+@pytest.mark.parametrize("state", ["Agility", "Physical Damage"])
+def test_visible_letter_counts_as_training_when_the_label_is_hidden(state):
+    # Colour Fallback skipped both stats while the macro was still pressing letters.
+    def grab(_sct, box, geometry=None):
+        if box == ui.AGILITY_LETTER_BOX:
+            return fixture("agility_w")
+        return np.zeros((box[3], box[2], 3), np.uint8)
+    with patch.object(core, "_grab_reference_box", side_effect=grab):
+        assert core.detect_yellow_progress(None, state)[0] == 1
+    with patch.object(core, "_grab_reference_box",
+                      side_effect=lambda _s, box, geometry=None: np.zeros((box[3], box[2], 3), np.uint8)):
+        assert core.detect_yellow_progress(None, state)[0] == 0
+
+
+def test_basic_defaults_have_no_healing_or_charging_and_do_retry():
+    defaults = core.DEFAULT_USER_SETTINGS
+    assert defaults["senzu_enabled"] is False and defaults["ki_hp_check_mode"] == "off"
+    assert defaults["charge_hold_mode"] == "off" and defaults["auto_retry_on_failure"] is True
+    assert defaults["majin_regen_auto"] is False
+
+
 @pytest.mark.parametrize("piece", ["side_menu_icons", "side_menu_icons_profile"])
 def test_side_menu_without_the_old_menu_tab_reads_open(piece):
     # A game update removed the vertical MENU tab, so every refill stopped at

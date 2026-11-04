@@ -1,6 +1,6 @@
 use std::fmt::Write as _;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -270,6 +270,24 @@ fn factory_reset_app_prefs(app: AppHandle) -> Result<(), String> {
     .map_err(|error| error.to_string())?;
     win.center().map_err(|error| error.to_string())?;
     Ok(())
+}
+
+/// One clean start for the 2.0.5 defaults. Moving the config aside triggers the
+/// normal reset below, and the old file stays next to it as a backup. The marker
+/// is only written once the config is gone, so a failed move retries next launch.
+fn reset_settings_once(json_dir: &Path) {
+    let marker = json_dir.join("settings_reset_2_0_5.done");
+    if marker.exists() {
+        return;
+    }
+    let config = json_dir.join("macro_config.json");
+    if config.exists()
+        && fs::rename(&config, json_dir.join("macro_config.before-2.0.5.json")).is_err()
+    {
+        return;
+    }
+    let _ = fs::create_dir_all(json_dir);
+    let _ = fs::write(marker, "");
 }
 
 #[tauri::command]
@@ -1445,7 +1463,9 @@ pub fn run() {
             // macro_config.json is the user-visible reset anchor. Check before
             // the sidecar recreates it, then discard the native bounds and tell
             // the frontend to clear its active preferences once.
-            let macro_config = data_dir(app.handle()).join("json").join("macro_config.json");
+            let json_dir = data_dir(app.handle()).join("json");
+            reset_settings_once(&json_dir);
+            let macro_config = json_dir.join("macro_config.json");
             let config_was_deleted = !macro_config.exists();
             if let Some(state) = app.try_state::<ConfigResetState>() {
                 state.0.store(config_was_deleted, Ordering::SeqCst);
@@ -1618,9 +1638,29 @@ mod tests {
     };
     use super::{backend_health_matches, bounds_overlap, parse_backend_endpoint, BackendEndpoint,
         SavedWindowBounds, ShutdownState, UpdateDownloadGuard, UpdateDownloadState};
+    use super::reset_settings_once;
     use std::path::Path;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Mutex;
+
+    #[test]
+    fn settings_reset_runs_once_and_keeps_a_backup() {
+        let dir = std::env::temp_dir().join(format!("xyn-reset-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let config = dir.join("macro_config.json");
+        std::fs::write(&config, "old").unwrap();
+        reset_settings_once(&dir);
+        assert!(!config.exists());
+        let backup = dir.join("macro_config.before-2.0.5.json");
+        assert_eq!(std::fs::read_to_string(&backup).unwrap(), "old");
+        // Settings chosen after the reset must survive every later launch.
+        std::fs::write(&config, "new").unwrap();
+        reset_settings_once(&dir);
+        assert_eq!(std::fs::read_to_string(&config).unwrap(), "new");
+        assert_eq!(std::fs::read_to_string(&backup).unwrap(), "old");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn install_claim_prevents_discard_or_a_second_shutdown() {

@@ -3,6 +3,15 @@
 All notable changes to XynMacro. This file is generated from the in-app
 "What's new" notes by `scripts/changelog.mjs` — edit those, not this file.
 
+## 2.0.5
+
+### Settings reset
+- All settings are back to defaults once with this update, including calibration and hotkeys. Your old settings are kept as macro_config.before-2.0.5.json in the config folder.
+- Simpler defaults: Auto-Senzu, Majin Regeneration, Ki HP checks and Ki charging are off, and Retry After Error is on so the macro respawns and carries on after a death. Turn on what you want in Settings. Auto-Senzu uses the Senzu Hotbar Slot setting and replaces whatever is in that slot.
+
+### Fixes
+- Colour Fallback no longer skips Agility or Physical Damage while letters are still on screen. The bright HTC floor could hide the Progression label and end those stats early.
+
 ## 2.0.4
 
 ### Fixes

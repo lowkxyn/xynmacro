@@ -2723,6 +2723,15 @@ window.wcCompact = () => {
 
   // What's-new content, newest first. Each entry: {version, notes:[{h, items[]}]}.
   const CHANGELOG = [
+    { version: '2.0.5', notes: [
+      { h: "Settings reset", items: [
+        "All settings are back to defaults once with this update, including calibration and hotkeys. Your old settings are kept as macro_config.before-2.0.5.json in the config folder.",
+        "Simpler defaults: Auto-Senzu, Majin Regeneration, Ki HP checks and Ki charging are off, and Retry After Error is on so the macro respawns and carries on after a death. Turn on what you want in Settings. Auto-Senzu uses the Senzu Hotbar Slot setting and replaces whatever is in that slot.",
+      ] },
+      { h: "Fixes", items: [
+        "Colour Fallback no longer skips Agility or Physical Damage while letters are still on screen. The bright HTC floor could hide the Progression label and end those stats early.",
+      ] },
+    ] },
     { version: '2.0.4', notes: [
       { h: "Fixes", items: [
         "Auto-Senzu can load a Senzu Bean again. A game update removed the MENU tab on the M menu, so the macro thought the menu never opened and stopped with \"No Senzu could be loaded\". It now spots the menu by its page icons.",

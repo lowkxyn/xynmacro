@@ -226,7 +226,7 @@ STOP_CHARGING_AFTER_KI_CONTROL = False
 # Ki HP checks. "fixed": every 30 s (sooner only once two checks in this stat show
 # HP falling). "adaptive": also learns the drain outside Ki and checks sooner after deaths.
 # "off": never steps out of a Ki stat (that is also where Ki stats recharge).
-KI_HP_CHECK_MODE = "adaptive"
+KI_HP_CHECK_MODE = "off"
 # Roblox restored from the taskbar comes back windowed even when it was fullscreen,
 # which moves every scan region. Put it back to fullscreen before a run.
 RESTORE_FULLSCREEN_ON_START = True
@@ -242,7 +242,7 @@ DISPLAY_CONFIRM_TIMEOUT_SEC = 10.0
 SHUTDOWN_PC_WHEN_FINISHED = False
 AFTER_RUN_GAME_ACTION = "none"
 AFTER_RUN_ON_FAILURE = False
-AUTO_RETRY_ON_FAILURE = False
+AUTO_RETRY_ON_FAILURE = True
 AUTO_RETRY_MAX_ATTEMPTS = 3
 AUTO_RETRY_RECOVERY_MODE = "reset"
 AUTO_RETRY_WALK_OUT = True
@@ -600,13 +600,13 @@ MAJIN_REGEN_SLOT = 3
 MAJIN_REGEN_SENZU_RESERVE = True
 # Auto: look for Super Regeneration in the G panel (any slot) and fall back to
 # the normal heal method once a run proves this character doesn't have it.
-MAJIN_REGEN_AUTO = True
+MAJIN_REGEN_AUTO = False
 MAJIN_REGEN_UNAVAILABLE_FOR_RUN = False
 MAJIN_REGEN_READY_AT = 0.0             # Monotonic, retained across Stop/Start within this process.
 MAJIN_REGEN_CHANNEL_UNTIL = 0.0
 MAJIN_CONTROLLER_ACTIVE = False
 HEALING_ACTION = None
-SENZU_ENABLED = True                  # Autofeed: eat a senzu (H + slot key) when the HP bar turns red.
+SENZU_ENABLED = False                 # Autofeed: eat a senzu (H + slot key) when the HP bar turns red.
 SENZU_SLOT = 1                        # Item slot the senzu is assigned to (1-4).
 SENZU_SLOT_MATCH_MIN = 0.74
 SENZU_DELAY_SEC = 0.0                 # Extra wait between detecting red HP and eating.
@@ -3638,7 +3638,7 @@ def _eat_senzu_v2(sct):
         _stop_for_senzu_failure("Items list (H) not confirmed")
         return False
     if not loaded:
-        print(f"[SENZU] Slot {SENZU_SLOT} is empty; loading it first")
+        print(f"[SENZU] Slot {SENZU_SLOT} has no Senzu Bean; loading one into it")
         _close_hotbar(sct)
         if not _refill_senzu_slot_v2(sct):
             if _senzu_abort_requested():
@@ -5075,6 +5075,12 @@ def detect_yellow_progress(sct, state, geometry=None):
             # proves the minigame is running, so it must not time out.
             present = training_ui.health_bar(
                 _grab_reference_box(sct, training_ui.HEALTH_BAR_BOX, geometry=geometry)) is not None
+        if not present and state in ("Agility", "Physical Damage"):
+            # Same for a letter: Colour Fallback cut both stats off mid-round in
+            # HTC, in the same second the macro was still pressing letters.
+            present = training_ui.agility_letter(
+                _grab_reference_box(sct, training_ui.AGILITY_LETTER_BOX, geometry=geometry),
+                _AGILITY_V4_TEMPLATES or training_ui.load_agility_templates())[0] is not None
         return int(present), raw, np.full(raw.shape[:2], 255 if present else 0, np.uint8)
     # Pixel-only sampling (1x1 grab)
     pixel = YELLOW_PIXEL_KI if "Ki" in state else YELLOW_PIXEL_STD

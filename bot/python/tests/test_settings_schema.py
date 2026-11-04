@@ -32,6 +32,11 @@ for snapshot_name, shipped in BASELINE.items():
         if key == "restart_after_hit_delay_sec":
             current.update(charge_hold_mode="off", progression_stall_enabled=True,
                            auto_retry_walk_fallback=True)
+    # 2.0.5 basic defaults: no healing, and respawn after a death.
+    for key, value in dict(senzu_enabled=False, majin_regen_auto=False,
+                           ki_hp_check_mode="off", auto_retry_on_failure=True).items():
+        if key in current:
+            current[key] = value
     EXPECTED[snapshot_name] = current
 
 
