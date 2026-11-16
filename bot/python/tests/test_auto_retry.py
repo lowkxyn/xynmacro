@@ -68,6 +68,47 @@ class AutoRetryTests(unittest.TestCase):
         finalize.assert_called_once_with()
         self.assertEqual(core.TELEMETRY["recovery_attempts"], 1)
 
+    def test_recovery_starts_without_a_leftover_healing_pause(self):
+        seen = []
+
+        def controller():
+            core._record_run_outcome("error", "temporary failure", retryable=True)
+            # Healing stopped the attempt and its monitor exited before the
+            # controller acknowledged the pause.
+            core.SENZU_CONTROLLER_ACTIVE.set()
+            core.SENZU_CONTROLLER_RESUME_REQUIRED.set()
+
+        def recover():
+            seen.append((core.SENZU_CONTROLLER_ACTIVE.is_set(),
+                         core.SENZU_CONTROLLER_RESUME_REQUIRED.is_set()))
+            return False
+
+        with (
+            patch.object(core, "run_master_controller", side_effect=controller),
+            patch.object(core, "_stop_background_game_monitor", return_value=True),
+            patch.object(core, "_auto_retry_recover", side_effect=recover),
+            patch.object(core, "_finalize_run_result"),
+        ):
+            core._run_macro_safe()
+
+        self.assertEqual(seen, [(False, False)])
+
+    def test_recovery_that_raises_ends_the_run_instead_of_the_thread(self):
+        def controller():
+            core._record_run_outcome("error", "temporary failure", retryable=True)
+
+        with (
+            patch.object(core, "run_master_controller", side_effect=controller),
+            patch.object(core, "_stop_background_game_monitor", return_value=True),
+            patch.object(core, "_auto_retry_recover",
+                         side_effect=RuntimeError("Roblox is not foreground for click")),
+            patch.object(core, "_finalize_run_result") as finalize,
+        ):
+            core._run_macro_safe()
+
+        self.assertEqual(core._CURRENT_RUN_OUTCOME, "error")
+        finalize.assert_called_once_with()
+
     def test_failed_recovery_keeps_the_original_error_and_stops(self):
         def controller():
             core._record_run_outcome("error", "temporary failure", retryable=True)

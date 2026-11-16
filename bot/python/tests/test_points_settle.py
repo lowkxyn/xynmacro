@@ -74,3 +74,20 @@ def test_a_stat_with_points_left_is_not_capped_yet():
         core._record_points_target("Ki Damage", [STILL_A, STILL_B])
         assert core.PROGRESSION_TARGETS["Ki Damage"] == (20, 50)
         assert "Ki Damage" not in core._POINTS_CAP_REACHED
+
+
+@pytest.mark.new_game_ui
+@pytest.mark.parametrize("frames, covered_since, panel_clear, kept", [
+    ([STILL_A, STILL_B], None, True, True),
+    ([SLIDING] * 40, None, True, False),       # never read as the panel: could be any window
+    ([STILL_A, STILL_B], 12.5, True, False),   # something is over Roblox right now
+    # A window or tooltip over the middle of the panel leaves the numbers readable.
+    ([STILL_A, STILL_B], None, False, False),
+])
+def test_only_a_recognised_uncovered_panel_becomes_the_notification_picture(
+        monkeypatch, frames, covered_since, panel_clear, kept):
+    monkeypatch.setattr(core, "_LATEST_POINTS_PANEL", None)
+    monkeypatch.setattr(core, "_GAME_COVERED_SINCE", covered_since)
+    monkeypatch.setattr(core, "_points_panel_uncovered", lambda _box: panel_clear)
+    capture(frames)
+    assert (core._LATEST_POINTS_PANEL is not None) == kept

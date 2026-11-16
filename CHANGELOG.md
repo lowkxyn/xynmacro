@@ -3,6 +3,22 @@
 All notable changes to XynMacro. This file is generated from the in-app
 "What's new" notes by `scripts/changelog.mjs` — edit those, not this file.
 
+## 2.0.6
+
+### Fixes
+- GC gravity is set again. The game replaced the gravity button with a number box, so the Gravity Target and the after-run 0G action did nothing. The macro now types the value and checks it. If it can't, training carries on at the gravity you already have.
+- Auto-Senzu on slower PCs: a slot that is slow to redraw after eating no longer counts as a stuck bean (that reset the character), and a slow item list no longer reads as "no Senzu left".
+- Dying while a Senzu is being eaten or loaded now respawns and carries on, with Retry After Error on, instead of stopping the run.
+- Health on slower PCs: the bar is still pressed when the screen can only be read a few times a second, and presses are no longer sent early.
+- The stop hotkey now works while a run started with the hotkey is still setting up.
+- A tooltip from another program no longer pauses the run as "another window over Roblox".
+- Training Mode left open after a Ki HP check is closed with one more Tab instead of stopping the run.
+
+### Changes
+- The Dashboard shows how the last run ended, with a button to open the log.
+- Settings for the old game layout are hidden, and Diagnostics shows the log first.
+- Log files in the logs folder no longer contain your Windows user name.
+
 ## 2.0.5
 
 ### Settings reset

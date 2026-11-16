@@ -199,8 +199,39 @@ def test_stuck_item_recovery_forces_existing_reset_and_gc_return(flow, monkeypat
     monkeypatch.setattr(core, "_auto_retry_wait_for_death", death)
     assert core._auto_retry_recover(stuck_senzu=True)
     reset.assert_called_once_with()
-    walk.assert_called_once_with()
+    walk.assert_called_once_with(force=True)
     death.assert_not_called()
+
+
+def test_forced_gc_return_runs_with_the_walk_setting_off(flow, monkeypatch):
+    # The helper used to return at its own setting check, so the stuck-item
+    # reset restarted training on the respawn pad.
+    monkeypatch.setattr(core, "AUTO_RETRY_WALK_OUT", False)
+    wait = Mock(return_value=False)
+    monkeypatch.setattr(core, "_auto_retry_wait", wait)
+    assert core._auto_retry_walk_forward()
+    wait.assert_not_called()
+    assert not core._auto_retry_walk_forward(force=True)
+    wait.assert_called_once()
+
+
+def test_senzu_failure_with_the_death_dialog_up_becomes_a_retryable_death(flow, monkeypatch):
+    monkeypatch.setattr(core, "_death_dialog_confirmed", lambda: True)
+    record = Mock()
+    monkeypatch.setattr(core, "_record_run_outcome", record)
+    core._stop_for_senzu_failure("Items list (H) not confirmed")
+    record.assert_called_once_with("error", "Character death was confirmed", retryable=True)
+    assert core.UI_STOP_REQUESTED
+
+
+def test_senzu_failure_that_is_already_retryable_skips_the_death_check(flow, monkeypatch):
+    confirmed = Mock(return_value=True)
+    monkeypatch.setattr(core, "_death_dialog_confirmed", confirmed)
+    record = Mock()
+    monkeypatch.setattr(core, "_record_run_outcome", record)
+    core._stop_for_senzu_failure("HP was not confirmed healed", retryable=True)
+    confirmed.assert_not_called()
+    record.assert_called_once_with("error", "Auto-Senzu: HP was not confirmed healed", retryable=True)
 
 
 def test_all_ignored_digits_keep_the_original_acceptance_budget_and_never_click(flow, monkeypatch):

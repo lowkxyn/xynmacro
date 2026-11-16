@@ -48,6 +48,8 @@ def native_operations_require_mocks(monkeypatch, request):
     for name in ("hook", "add_hotkey", "hook_key", "on_press", "on_release"):
         monkeypatch.setattr(core.keyboard, name, blocked(f"keyboard.{name}"))
     monkeypatch.setattr(core.mss, "MSS", blocked("mss.MSS"))
+    # Every Senzu failure stop now looks at the real screen for a death dialog.
+    monkeypatch.setattr(core, "_death_dialog_confirmed", lambda: False)
     # The coverage check walks the real desktop z-order. With Roblox open on the
     # test machine it found real windows and stalled a monitor test's loop.
     # Healing tests predate Majin auto-detect and pin the method they exercise;

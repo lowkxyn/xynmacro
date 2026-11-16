@@ -102,10 +102,61 @@ def test_health_landing_moves_the_lead_by_where_the_marker_froze(capsys, frozen,
     memo = _landing_memo()
     core._health_v3_check_landing(memo, frozen, 10.05)   # first frozen frame, nothing to compare yet
     memo["marker"] = frozen
-    core._health_v3_check_landing(memo, frozen, 10.07)
+    core._health_v3_check_landing(memo, frozen, 10.07)   # could be the same game frame grabbed twice
+    assert memo["landing"] is not None and memo["lead"] == 0.02
+    core._health_v3_check_landing(memo, frozen, 10.13)
     assert memo["landing"] is None
     assert memo["lead"] == pytest.approx(lead_after)
     assert verdict in capsys.readouterr().out
+
+
+def test_health_marker_that_moves_on_after_a_repeated_frame_is_not_a_landing(capsys):
+    # A 100 Hz loop on a 60 fps game: the repeat at 200 used to set the lead to zero.
+    memo = _landing_memo()
+    memo["marker"] = 190.0
+    core._health_v3_check_landing(memo, 200.0, 10.01)
+    memo["marker"] = 200.0
+    core._health_v3_check_landing(memo, 200.0, 10.02)
+    core._health_v3_check_landing(memo, 211.0, 10.03)
+    memo["marker"] = 211.0
+    core._health_v3_check_landing(memo, 211.0, 10.04)
+    assert memo["landing"] is not None and memo["landing"]["still_since"] == 10.04
+    assert memo["lead"] == 0.02
+    assert "Landed" not in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("marker, frame_interval, slept, presses", [
+    # 133 ms to the centre on a PC reading the bar every 90 ms: wait all of it.
+    # The old 50 ms cap pressed 54 px early, outside the zone.
+    (130.0, 0.09, [pytest.approx(0.1331, abs=1e-3)], 1),
+    (40.0, 0.25, [], 0),   # 272 ms away is past the cap: look again, don't guess
+])
+def test_health_waits_out_the_whole_predicted_delay_on_a_slow_pc(monkeypatch, marker, frame_interval, slept, presses):
+    # Zone centre 229.5, 650 px/s, 20 ms lead.
+    for key, value in {"marker": marker - 58.5, "seen_at": 9.91, "pressed_at": 0.0, "lead": 0.02,
+                       "frame_interval": frame_interval, "landing": None, "speed": 650.0}.items():
+        monkeypatch.setitem(core._HEALTH_V3_STATE, key, value)
+    monkeypatch.setattr(core, "HEALTH_HIT_COOLDOWN_SEC", 0.2)
+    waits = []
+    with patch.object(core, "_grab_reference_box"), \
+         patch.object(core.training_ui, "health_bar", return_value=(marker, (180, 279))), \
+         patch.object(core.time, "monotonic", return_value=10.0), \
+         patch.object(core.time, "sleep", side_effect=waits.append), \
+         patch.object(core, "hardware_tap", return_value=True) as tap:
+        core._logic_health_v3(None, {"left": 0, "top": 0, "width": 1920, "height": 1080})
+    assert waits == slept
+    assert tap.call_count == presses
+
+
+def test_leaving_a_minigame_drops_the_health_marker_but_keeps_the_learned_lead(monkeypatch):
+    for key, value in {"marker": 300.0, "velocity": 650.0, "lead": 0.07, "speed": 610.0,
+                       "landing": {"zone": (180, 279)}}.items():
+        monkeypatch.setitem(core._HEALTH_V3_STATE, key, value)
+    with patch.object(core, "_reset_ki_v9"):
+        core._reset_minigame_detection()
+    state = core._HEALTH_V3_STATE
+    assert (state["marker"], state["velocity"], state["landing"]) == (None, 0.0, None)
+    assert (state["lead"], state["speed"]) == (0.07, 610.0)
 
 
 def test_health_lead_is_capped_and_a_moving_marker_is_not_a_landing(capsys):
@@ -115,6 +166,7 @@ def test_health_lead_is_capped_and_a_moving_marker_is_not_a_landing(capsys):
     assert memo["landing"] is not None
     memo["marker"] = 279.0
     core._health_v3_check_landing(memo, 279.0, 10.1)
+    core._health_v3_check_landing(memo, 279.0, 10.16)
     assert memo["lead"] == core.HEALTH_V3_LEAD_RANGE[1]
 
 
@@ -133,6 +185,7 @@ def test_health_press_aimed_at_a_slow_restarting_marker_teaches_nothing(capsys):
     memo["landing"]["speed"] = 250.0
     memo["marker"] = 273.0
     core._health_v3_check_landing(memo, 273.0, 10.05)
+    core._health_v3_check_landing(memo, 273.0, 10.11)
     assert memo["landing"] is None and memo["lead"] == 0.02
 
 
@@ -547,7 +600,7 @@ def test_eat_v2_stuck_slot_requests_the_reset_recovery(monkeypatch):
          patch.object(core, "_hotbar_slot_loaded", return_value=True), \
          patch.object(core, "_focus_game_for_senzu", return_value=True), \
          patch.object(core, "_tap_key_unchecked"), \
-         patch.object(core, "_wait_for_frame", return_value=False), \
+         patch.object(core, "_wait_for_frame", side_effect=[False, True]), \
          patch.object(core, "_request_stuck_senzu_recovery", return_value=False) as stuck:
         assert core._eat_senzu_v2(None) is False
     stuck.assert_called_once()
@@ -883,3 +936,18 @@ def test_ki_hp_checks_skip_only_when_sure_it_is_htc(monkeypatch, targets, gc_see
     monkeypatch.setattr(core, "PROGRESSION_TARGETS", dict(targets))
     monkeypatch.setattr(core, "GC_RUN_CONFIRMED", gc_seen)
     assert core._in_htc("Ki Control") is expected
+
+
+@pytest.mark.new_game_ui
+def test_confirmed_gc_without_a_readable_gravity_box_still_starts(capsys):
+    with patch.object(core, "_load_gravity_templates", return_value=dict.fromkeys(range(0, 101, 10))), \
+         patch.object(core, "robust_move"), \
+         patch.object(core, "safe_sleep"), \
+         patch.object(core, "_read_gc_gravity", return_value=(None, 0.0, 0.0, False)), \
+         patch.object(core, "_gc_room_confirmed", return_value=True), \
+         patch.object(core, "_set_gc_gravity_by_input", return_value=None), \
+         patch.object(core, "click_at") as click:
+        geometry = {"left": 0, "top": 0, "width": 1920, "height": 1080}
+        assert core._raise_gc_gravity(None, geometry, 100) is True
+    click.assert_not_called()
+    assert "gravity was not raised to 100G" in capsys.readouterr().out

@@ -612,6 +612,15 @@ SENZU_SLOT_MATCH_MIN = 0.74
 SENZU_DELAY_SEC = 0.0                 # Extra wait between detecting red HP and eating.
 SENZU_RECOVERY_TIMEOUT_SEC = 7.0      # Wait for green HP before one confirmed retry.
 SENZU_STUCK_RESET_LIMIT = 1
+# Longest wait for the eaten bean to leave the H-list slot. A slow PC redraws
+# late; a shorter limit called a normal eat "stuck" and reset the character.
+SENZU_V2_EAT_CONFIRM_SEC = 2.5
+# Mean grey change in the Items list that counts as the list having scrolled.
+SENZU_LIST_MOVE_MIN = 2.0
+# How long a scrolled list may show nothing new before it counts as "did not
+# move". Calling that early on a quick PC with a slow game redraw ended the search
+# with beans further down, and a false "stock is empty" turns healing off.
+SENZU_LIST_STILL_SEC = 1.0
 SENZU_STUCK_RESETS_USED = 0
 SENZU_STUCK_RESET_REQUESTED = False
 SENZU_PREFERENCE_MODE = "full_only"  # full_only/full_then_half/half_only/half_then_full.
@@ -888,7 +897,10 @@ class _TeeBuffer(_io.TextIOBase):
             if self._file is not None:
                 try:
                     ts = time.strftime("%H:%M:%S")
-                    self._file.write(f"{ts} {s if s.endswith(chr(10)) else s + chr(10)}")
+                    # People send these files as they are (Open logs folder), so they
+                    # get the same redaction as Copy and Save Log.
+                    line = _scrub_user_paths(s)
+                    self._file.write(f"{ts} {line if line.endswith(chr(10)) else line + chr(10)}")
                     self._file.flush()
                 except Exception:
                     pass
@@ -1114,6 +1126,9 @@ def _reset_minigame_detection():
     _reset_ki_v9()
     _ki_v8_state.update(last_dot=None, consecutive_seen=0, last_click_at=0.0)
     _HEALTH_V2_STATE.update(geometry=None, target=None, armed=True, last_hit=0.0)
+    # The learned lead and sweep speed stay; a marker position from before a menu
+    # trip would give the first frame back a made-up velocity.
+    _HEALTH_V3_STATE.update(marker=None, velocity=0.0, landing=None)
 
 
 def _restart_minigame_after_hit(category, menu_visible, reselect):
@@ -1828,7 +1843,7 @@ def focus_game_window():
     return focused
 
 
-def _windows_above_game():
+def _windows_above_game(include_tooltips=False):
     import win32gui
     from ctypes import wintypes
 
@@ -1853,7 +1868,12 @@ def _windows_above_game():
                 # Steam) span the whole screen but only draw a corner toast and take no
                 # input; live, one stopped a run as "covering Roblox".
                 click_through = bool(style & win32con.WS_EX_TRANSPARENT and style & win32con.WS_EX_LAYERED)
-                if not cloaked.value and not invisible_overlay and not click_through:
+                # Tooltips take no input and go away by themselves. Live 2026-11-16 another
+                # program's tooltip by the parked pointer paused a Ki stat for 10 s as
+                # "covering Roblox".
+                tooltip = (not include_tooltips
+                           and win32gui.GetClassName(hwnd) == "tooltips_class32")
+                if not cloaked.value and not invisible_overlay and not click_through and not tooltip:
                     yield win32gui.GetWindowRect(hwnd), win32gui.GetWindowText(hwnd)
             hwnd = win32gui.GetWindow(hwnd, win32con.GW_HWNDNEXT)
         except win32gui.error:
@@ -1933,13 +1953,25 @@ def _watch_game_covered():
     return False
 
 
+_cover_wait = threading.local()
+
+
 def _wait_while_game_covered():
     """Hold input while another window is over Roblox.
 
     A minigame input that had to wait is dropped rather than sent late: the
     frame it was aimed at is gone. Menu and healing input carries on."""
     if _GAME_COVERED_SINCE is None:
-        return
+        # The monitor thread is the one that looks for covering windows, so while
+        # it is busy healing nobody would notice a new one: look before its input.
+        if (threading.current_thread() is not _background_monitor_thread
+                or not _game_window_covering_title()):
+            return
+        _set_game_covered(True)
+    if getattr(_cover_wait, "drop_instead", False):
+        # A Ki click gets here holding the Stop gate; waiting would block Stop for
+        # as long as the window stays.
+        raise SkipMinigameException()
     while _game_window_covering_title():
         if _USER_STOP_LATCHED or UI_STOP_REQUESTED:
             check_exit()
@@ -1972,11 +2004,20 @@ def _stop_if_game_covered():
     return True
 
 
-def _new_ui_hp_fraction(sct):
-    """HP bar fill share, or None while the HUD is hidden (menus, Ki minigames)."""
-    if not training_ui.hud_visible(_grab_reference_box(sct, training_ui.HUD_LABELS_BOX)):
+def _new_ui_hp_fraction(sct, frame=None):
+    """HP bar fill share, or None while the HUD is hidden (menus, Ki minigames).
+
+    With a full client frame the caller already grabbed, read that instead of
+    grabbing twice more: on a slow PC each grab delays critical HP."""
+    def box(region):
+        if frame is None:
+            return _grab_reference_box(sct, region)
+        if isinstance(region, dict):
+            region = (region["left"], region["top"], region["width"], region["height"])
+        return training_ui.crop(frame, region)
+    if not training_ui.hud_visible(box(training_ui.HUD_LABELS_BOX)):
         return None
-    return training_ui.hp_fill_fraction(_grab_reference_box(sct, SENZU_HP_FILL_BOX))
+    return training_ui.hp_fill_fraction(box(SENZU_HP_FILL_BOX))
 
 
 def _hp_above_red(sct):
@@ -2001,10 +2042,10 @@ def _hp_fill_is_above_red(raw):
     return recovered >= int(vivid_count * 0.82)
 
 
-def _hp_bar_is_red(sct):
+def _hp_bar_is_red(sct, frame=None):
     """True only when the fixed left-side HP fill patch is critical red."""
     if _new_game_ui():
-        fraction = _new_ui_hp_fraction(sct)
+        fraction = _new_ui_hp_fraction(sct, frame)
         return fraction is not None and fraction <= training_ui.HP_CRITICAL_FRACTION
     raw = _grab_reference_box(sct, SENZU_HP_FILL_BOX)
     return _hp_fill_is_critical(raw)
@@ -3258,11 +3299,32 @@ def _resume_training_after_senzu(sct, assets):
     return False
 
 
+def _death_dialog_confirmed():
+    """Three reads of the death dialog, the same bar the monitor uses."""
+    try:
+        with mss.MSS() as sct:
+            geometry = _confirmed_game_capture_rect()
+            for sample in range(3):
+                if sample:
+                    time.sleep(0.15)
+                if not _gc_death_dialog_visible(sct, geometry):
+                    return False
+        return True
+    except Exception:
+        return False
+
+
 def _stop_for_senzu_failure(message, status="error", retryable=False):
     global UI_STOP_REQUESTED, SENZU_STATUS
     SENZU_STATUS = status
     # Failure paths leave the menu state unknown; never fast-path off it later.
     _invalidate_senzu_row_cache()
+    # The monitor that spots a death is the thread doing this healing, so dying
+    # while the menus were open ended the run as a missing menu with no respawn.
+    if not retryable and _death_dialog_confirmed():
+        print(f"[SENZU] {message}; the character died during healing")
+        _stop_for_game_death()
+        return
     _record_run_outcome(
         "error", f"Auto-Senzu: {message}", retryable=retryable
     )
@@ -3474,7 +3536,19 @@ def _leave_training_to_gameplay(sct):
         _tap_key_unchecked("tab")
         if _wait_for_frame(sct, open_prompt, timeout=0.8):
             return True
-    return _wait_for_frame(sct, open_prompt, timeout=0.6)
+    if _wait_for_frame(sct, open_prompt, timeout=0.6):
+        return True
+    # Live 2026-11-16: the game ignored the second Tab and Training Mode stayed
+    # open, which stopped the run. One more Tab only while that menu is what
+    # shows, so it can only close it.
+    template = _training_menu_template()
+    if template is None or not _training_menu_visible_for_senzu(sct, template)[0]:
+        return False
+    print("[HP] Training Mode still open after two Tabs; closing it with one more")
+    if not _focus_game_for_senzu():
+        return False
+    _tap_key_unchecked("tab")
+    return _wait_for_frame(sct, open_prompt, timeout=0.8)
 
 
 def _close_side_menu(sct):
@@ -3500,7 +3574,7 @@ def _scroll_side_list(notches):
     return True
 
 
-def _refill_senzu_slot_v2(sct):
+def _refill_senzu_slot_v2(sct, slot):
     """M -> Customize -> Items -> Senzu Bean -> slot. Each click waits for its page."""
     global SENZU_STATUS, SENZU_ACTIVE_TYPE
     menus = training_ui.SenzuMenus
@@ -3548,14 +3622,64 @@ def _refill_senzu_slot_v2(sct):
         row_y = menus.senzu_row_y(_client_frame(sct))
         if row_y is None:
             time.sleep(0.08)
+
+    def list_view(frame):
+        return cv2.cvtColor(training_ui.crop(frame, menus.LIST_BOX), cv2.COLOR_BGR2GRAY).astype(np.int16)
+
+    def views_differ(a, b):
+        return float(np.abs(a - b).mean()) > SENZU_LIST_MOVE_MIN
+
+    def scroll_once(notches):
+        """Scroll, then wait until the list is seen to move and hold still, or to
+        stay put. A slow PC redraws late, so a single read 250 ms after the
+        wheel can't tell "the list ended" from "not redrawn yet".
+        Returns (moved, row_y), or (None, None) on Stop."""
+        before = list_view(_client_frame(sct))
+        if not _scroll_side_list(notches):
+            return None, None
+        started = time.monotonic()
+        looks, moved, last = 0, False, before
+        while not _senzu_abort_requested():
+            time.sleep(0.03)
+            frame = _client_frame(sct)
+            view = list_view(frame)
+            looks += 1
+            elapsed = time.monotonic() - started
+            moved = moved or views_differ(view, before)
+            if elapsed >= 0.25 and looks >= 3:
+                # The old fixed 0.25 s read is the floor; on a fast PC this is it.
+                if moved and not views_differ(view, last):
+                    return True, menus.senzu_row_y(frame)
+                if not moved and elapsed >= SENZU_LIST_STILL_SEC:
+                    return False, menus.senzu_row_y(frame)
+            if elapsed >= 1.5:
+                return moved, menus.senzu_row_y(frame)   # kept moving; read it anyway
+            last = view
+        return None, None
+
+    def search(notches):
+        """Scroll one way until Senzu shows, the list is seen to end (two scrolls
+        in a row that move nothing), or six scrolls."""
+        still = 0
+        for _scroll in range(6):
+            moved, found = scroll_once(notches)
+            if moved is None or found is not None:
+                return found
+            still = 0 if moved else still + 1
+            if still >= 2:
+                return None
+        return None
+
+    # M reopens Items where it was last scrolled, so Senzu can be above the view
+    # too; searching only downward from there called a full stock empty.
+    if row_y is None:
+        row_y = search(2)
     # Only five rows show; with more items Senzu can sit below the fold.
-    scrolls = 0
-    while row_y is None and scrolls < 6 and not _senzu_abort_requested():
-        scrolls += 1
-        if not _scroll_side_list(-2):
-            break
-        time.sleep(0.25)
-        row_y = menus.senzu_row_y(_client_frame(sct))
+    if row_y is None and not _senzu_abort_requested():
+        row_y = search(-2)
+    if row_y is None and _senzu_abort_requested():
+        _close_side_menu(sct)
+        return False
     if row_y is None:
         print("[SENZU] No Senzu Bean row in Items; stock is empty")
         SENZU_STATUS = "empty"
@@ -3566,8 +3690,8 @@ def _refill_senzu_slot_v2(sct):
         SENZU_STATUS = "error"
         _close_side_menu(sct)
         return False
-    if not click_reference(menus.SLOT_ROW_X, menus.slot_row_y(SENZU_SLOT)) or not page("items", 1.5):
-        print(f"[SENZU] Slot {SENZU_SLOT} assignment not confirmed")
+    if not click_reference(menus.SLOT_ROW_X, menus.slot_row_y(slot)) or not page("items", 1.5):
+        print(f"[SENZU] Slot {slot} assignment not confirmed")
         SENZU_STATUS = "error"
         _close_side_menu(sct)
         return False
@@ -3578,11 +3702,11 @@ def _refill_senzu_slot_v2(sct):
     TELEMETRY["senzu_refills"] += 1
     SENZU_STATUS = "ready"
     SENZU_ACTIVE_TYPE = "full"
-    print(f"[SENZU] Slot {SENZU_SLOT} refilled with a Senzu Bean")
+    print(f"[SENZU] Slot {slot} refilled with a Senzu Bean")
     return True
 
 
-def _hotbar_slot_loaded(sct):
+def _hotbar_slot_loaded(sct, slot):
     """Open the H list if needed and report whether the Senzu slot is loaded."""
     menus = training_ui.SenzuMenus
     if not menus.hotbar_visible(_client_frame(sct)):
@@ -3591,15 +3715,26 @@ def _hotbar_slot_loaded(sct):
         _tap_key_unchecked("h")
         if not _wait_for_frame(sct, menus.hotbar_visible, timeout=0.8):
             return None
-    return _wait_for_frame(sct, lambda frame: menus.hotbar_slot_has_senzu(frame, SENZU_SLOT),
+    return _wait_for_frame(sct, lambda frame: menus.hotbar_slot_has_senzu(frame, slot),
                            timeout=0.7)
 
 
 def _close_hotbar(sct):
+    """Close the H list; True once it is seen closed. While it closes, the game
+    can swallow the next M, so the refill must not start before this."""
     menus = training_ui.SenzuMenus
-    if menus.hotbar_visible(_client_frame(sct)) and _focus_game_for_senzu():
+    for _attempt in range(2):
+        # H again only while the list is seen open: a second H on a list that
+        # is still closing would open it again.
+        if not menus.hotbar_visible(_client_frame(sct)):
+            return True
+        if not _focus_game_for_senzu():
+            return False
         _tap_key_unchecked("h")
-        _wait_for_frame(sct, lambda frame: not menus.hotbar_visible(frame), timeout=0.6)
+        if _wait_for_frame(sct, lambda frame: not menus.hotbar_visible(frame), timeout=1.5):
+            return True
+    print("[SENZU] Items list (H) did not close")
+    return False
 
 
 def _resume_after_empty_v2(sct, assets):
@@ -3620,6 +3755,9 @@ def _eat_senzu_v2(sct):
     global SENZU_STATUS
     assets = _senzu_assets()
     menus = training_ui.SenzuMenus
+    # One slot for the whole heal: a settings change mid-heal applies to the next
+    # one, never to the slot being eaten from and refilled.
+    slot = SENZU_SLOT
     SENZU_STATUS = "eating"
     if "full" not in _senzu_type_priority():
         # Only "Senzu Bean" has been seen in the new menus; never spend a
@@ -3631,43 +3769,57 @@ def _eat_senzu_v2(sct):
             return False
         _stop_for_senzu_failure("Could not leave Training Mode to eat")
         return False
-    loaded = _hotbar_slot_loaded(sct)
+    loaded = _hotbar_slot_loaded(sct, slot)
     if loaded is None:
         if _senzu_abort_requested():
             return False
         _stop_for_senzu_failure("Items list (H) not confirmed")
         return False
     if not loaded:
-        print(f"[SENZU] Slot {SENZU_SLOT} has no Senzu Bean; loading one into it")
-        _close_hotbar(sct)
-        if not _refill_senzu_slot_v2(sct):
+        print(f"[SENZU] Slot {slot} has no Senzu Bean; loading one into it")
+        if not _close_hotbar(sct):
+            if _senzu_abort_requested():
+                return False
+            _stop_for_senzu_failure("Items list (H) did not close before loading the slot")
+            return False
+        if not _refill_senzu_slot_v2(sct, slot):
             if _senzu_abort_requested():
                 return False
             if SENZU_STATUS == "empty":
                 return _resume_after_empty_v2(sct, assets)
             _stop_for_senzu_failure("No Senzu could be loaded", SENZU_STATUS)
             return False
-        loaded = _hotbar_slot_loaded(sct)
+        loaded = _hotbar_slot_loaded(sct, slot)
         if not loaded:
             if _senzu_abort_requested():
                 return False
-            _stop_for_senzu_failure(f"Senzu slot {SENZU_SLOT} not confirmed after the refill")
+            _stop_for_senzu_failure(f"Senzu slot {slot} not confirmed after the refill")
             return False
-    print(f"[SENZU] Critical HP: eating the Senzu Bean in slot {SENZU_SLOT}")
+    print(f"[SENZU] Critical HP: eating the Senzu Bean in slot {slot}")
     if not _focus_game_for_senzu():
         _stop_for_senzu_failure("Roblox focus not confirmed before the eat digit")
         return False
-    _tap_key_unchecked(str(SENZU_SLOT))
+    _tap_key_unchecked(str(slot))
+    # Returns as soon as the slot clears (~0.25 s live); the long limit is for
+    # slow PCs, where a late redraw must not be mistaken for an ignored key.
     consumed = _wait_for_frame(
-        sct, lambda frame: not menus.hotbar_slot_has_senzu(frame, SENZU_SLOT), timeout=0.8)
+        sct, lambda frame: not menus.hotbar_slot_has_senzu(frame, slot),
+        timeout=SENZU_V2_EAT_CONFIRM_SEC)
     if not consumed:
         if _senzu_abort_requested():
             return False
-        return _request_stuck_senzu_recovery()
-    TELEMETRY["senzu_eaten"] += 1
-    _close_hotbar(sct)
+        # Only a slot still seen holding the bean proves the key was ignored;
+        # resetting the character on anything less can cost the user progress.
+        if _wait_for_frame(sct, lambda frame: menus.hotbar_slot_has_senzu(frame, slot),
+                           timeout=0.7):
+            return _request_stuck_senzu_recovery()
+        if _senzu_abort_requested():
+            return False
+        print("[SENZU] Eat not confirmed on the slot either way; the HP check decides")
+    else:
+        TELEMETRY["senzu_eaten"] += 1
     # Refill while the bean's heal plays (~3 s live), so the next eat is instant.
-    refilled = _refill_senzu_slot_v2(sct)
+    refilled = _close_hotbar(sct) and _refill_senzu_slot_v2(sct, slot)
     if not refilled and _senzu_abort_requested():
         return False
     if not _wait_for_green_hp(sct, SENZU_RECOVERY_TIMEOUT_SEC):
@@ -5394,6 +5546,28 @@ POINTS_PANEL_SETTLE_GRABS = 11
 POINTS_PANEL_SETTLE_STEP_SEC = 0.08
 
 
+def _points_panel_uncovered(box):
+    """Is the panel free of other windows right now, tooltips included?
+
+    The cached covered flag is up to a monitor pass old, ignores tooltips, and a
+    window over the middle of the panel leaves the numbers readable."""
+    if GAME_HWND is None or GAME_WIDTH <= 0 or GAME_HEIGHT <= 0:
+        return False
+    if isinstance(box, dict):
+        box = tuple(box[key] for key in ("left", "top", "width", "height"))
+    x, y, width, height = box
+    x1 = GAME_OFFSET_X + x * GAME_WIDTH / 1920
+    y1 = GAME_OFFSET_Y + y * GAME_HEIGHT / 1080
+    x2 = GAME_OFFSET_X + (x + width) * GAME_WIDTH / 1920
+    y2 = GAME_OFFSET_Y + (y + height) * GAME_HEIGHT / 1080
+    try:
+        return not any(left < x2 and right > x1 and top < y2 and bottom > y1
+                       for (left, top, right, bottom), _title
+                       in _windows_above_game(include_tooltips=True))
+    except Exception:
+        return False
+
+
 def _capture_points_panels(sct, stat=None):
     """Two captures of the Training Progression panel, or none if capture fails.
 
@@ -5419,8 +5593,12 @@ def _capture_points_panels(sct, stat=None):
             time.sleep(POINTS_PANEL_SETTLE_STEP_SEC)
             first, previous = second, reading
             second = _grab_reference_box(sct, box)
+        # These are desktop pixels. An unreadable grab can be another window sitting
+        # over Roblox, and this picture is what a Discord update attaches.
         global _LATEST_POINTS_PANEL
-        _LATEST_POINTS_PANEL = second
+        if (_GAME_COVERED_SINCE is None and _read_training_points(second, stat) is not None
+                and _points_panel_uncovered(box)):
+            _LATEST_POINTS_PANEL = second
         return [first, second]
     except Exception as error:
         print(f"[PROG] Training Progression panel capture failed: {error}")
@@ -5688,10 +5866,15 @@ def _background_game_monitor(stop_event, ready_event=None):
                         _release_macro_input()
                         break
                 recovery_last_tick = tick
+                client_frame = None
                 try:
+                    if current_state and _new_game_ui():
+                        # One full grab serves the death check and the HP reads below.
+                        client_frame = _grab_reference_box(
+                            sct, (0, 0, GAME_REFERENCE_WIDTH, GAME_REFERENCE_HEIGHT), game_geometry)
                     death_visible = bool(
                         current_state
-                        and _gc_death_dialog_visible(sct, game_geometry)
+                        and _gc_death_dialog_visible(sct, game_geometry, client_frame)
                     )
                 except Exception:
                     death_visible = False
@@ -5836,47 +6019,9 @@ def _background_game_monitor(stop_event, ready_event=None):
                 if (_new_game_ui() and current_state in ("Health", "Agility", "Physical Damage")
                         and now - hp_sampled_at >= HP_DRAIN_SAMPLE_SEC):
                     hp_sampled_at = now
-                    fraction = _new_ui_hp_fraction(sct)
+                    fraction = _new_ui_hp_fraction(sct, client_frame)
                     if fraction is not None:
                         _note_hp_reading(fraction, now)
-                charge_mode = COMPATIBILITY_SETTINGS["charge_hold_mode"]
-                if (_new_game_ui() and charge_mode != "off"
-                        and not (STOP_CHARGING_AFTER_KI_CONTROL and _KI_CONTROL_DONE)
-                        and not GC_RECOVERY_VERIFY_PENDING
-                        and current_state in ("Health", "Agility", "Physical Damage")
-                        and now - charge_checked_at >= MID_STAT_CHARGE_POLL_SEC
-                        and now - PROGRESSION_STATE_STARTED_AT >= SENZU_AFTER_SWITCH_GRACE_SEC):
-                    charge_checked_at = now
-                    level = _ki_charge_level(sct)
-                    if (level is not None
-                            and _ki_charge_drained(level, KI_CHARGE_TARGETS[charge_mode])
-                            and _claim_healing(token, for_charge=True)):
-                        print(f"[CHARGE] {current_state}: Ki down to {level:.2f}; stepping out to charge")
-                        stall_before_charge = progression_stall
-                        try:
-                            charged = _mid_stat_recharge(sct)
-                        except QuitException:
-                            raise
-                        except Exception as e:
-                            print(f"[CHARGE] Mid-stat charge failed: {e}")
-                            _stop_for_senzu_failure(f"Mid-stat charge: {e.__class__.__name__}: {e}")
-                            break
-                        finally:
-                            with _stop_input_gate:
-                                _set_training_state(CURRENT_TRAINING_STATE)
-                                HEALING_ACTION = None
-                                SENZU_CONTROLLER_ACTIVE.clear()
-                        charge_checked_at = time.monotonic()
-                        if not charged:
-                            charge_checked_at += MID_STAT_CHARGE_BACKOFF_SEC
-                            print(f"[CHARGE] Couldn't charge; next mid-stat try in {MID_STAT_CHARGE_BACKOFF_SEC:.0f}s")
-                        # Same as a Ki check that didn't heal: the count didn't move.
-                        tracked_token = _progression_token()
-                        progression_stall = stall_before_charge
-                        PROGRESSION_TRACKED_STATE = current_state
-                        complete_streak = 0
-                        completion_sent = False
-                        continue
                 if _effective_heal_method() != last_heal_method:
                     last_heal_method = _effective_heal_method()
                     red_handled = False
@@ -5887,7 +6032,7 @@ def _background_game_monitor(stop_event, ready_event=None):
                     red_handled = False
                 if (_healing_monitor_enabled() and current_state
                         and now - PROGRESSION_STATE_STARTED_AT >= SENZU_AFTER_SWITCH_GRACE_SEC):
-                    if _hp_bar_is_red(sct):
+                    if _hp_bar_is_red(sct, client_frame):
                         red_streak += 1
                         if red_since is None:
                             red_since = now
@@ -5943,6 +6088,47 @@ def _background_game_monitor(stop_event, ready_event=None):
                     # window and Pause, otherwise it reopens menus every second.
                     if _effective_heal_method() != "majin_regen" or not current_state:
                         red_handled = False
+                # Optional Ki charging comes after the critical-HP decision and waits
+                # while HP reads red: stepping out to charge first cost a slow PC seconds.
+                charge_mode = COMPATIBILITY_SETTINGS["charge_hold_mode"]
+                if (_new_game_ui() and charge_mode != "off"
+                        and not (STOP_CHARGING_AFTER_KI_CONTROL and _KI_CONTROL_DONE)
+                        and not GC_RECOVERY_VERIFY_PENDING
+                        and current_state in ("Health", "Agility", "Physical Damage")
+                        and now - charge_checked_at >= MID_STAT_CHARGE_POLL_SEC
+                        and now - PROGRESSION_STATE_STARTED_AT >= SENZU_AFTER_SWITCH_GRACE_SEC
+                        and red_since is None):
+                    charge_checked_at = now
+                    level = _ki_charge_level(sct)
+                    if (level is not None
+                            and _ki_charge_drained(level, KI_CHARGE_TARGETS[charge_mode])
+                            and _claim_healing(token, for_charge=True)):
+                        print(f"[CHARGE] {current_state}: Ki down to {level:.2f}; stepping out to charge")
+                        stall_before_charge = progression_stall
+                        try:
+                            charged = _mid_stat_recharge(sct)
+                        except QuitException:
+                            raise
+                        except Exception as e:
+                            print(f"[CHARGE] Mid-stat charge failed: {e}")
+                            _stop_for_senzu_failure(f"Mid-stat charge: {e.__class__.__name__}: {e}")
+                            break
+                        finally:
+                            with _stop_input_gate:
+                                _set_training_state(CURRENT_TRAINING_STATE)
+                                HEALING_ACTION = None
+                                SENZU_CONTROLLER_ACTIVE.clear()
+                        charge_checked_at = time.monotonic()
+                        if not charged:
+                            charge_checked_at += MID_STAT_CHARGE_BACKOFF_SEC
+                            print(f"[CHARGE] Couldn't charge; next mid-stat try in {MID_STAT_CHARGE_BACKOFF_SEC:.0f}s")
+                        # Same as a Ki check that didn't heal: the count didn't move.
+                        tracked_token = _progression_token()
+                        progression_stall = stall_before_charge
+                        PROGRESSION_TRACKED_STATE = current_state
+                        complete_streak = 0
+                        completion_sent = False
+                        continue
                 # Healing or a stat switch can invalidate a frame while it is being read.
                 if complete_streak >= PROG_STABLE_COMPLETE_FRAMES and completion_reason:
                     completion_sent = _publish_progression_completion(token, completion_reason)
@@ -6238,6 +6424,181 @@ def _gc_room_confirmed(sct, geometry):
     return GC_RUN_CONFIRMED
 
 
+# Nov 2026 GC panel: a number box plus Apply replaced the click-to-cycle button.
+# Live 2026-11-16 on the new panel: Enter applies the typed value, typing 0 gives
+# 1G, a value above the account's max is clamped to it, and reopening Training
+# Mode shows the current gravity in the box.
+GRAVITY_INPUT_MIN_G = 1
+# The game refuses another change for a few seconds after one
+# ("You can change gravity again in 3s").
+GRAVITY_INPUT_COOLDOWN_SEC = 5.5
+_GRAVITY_INPUT_TEMPLATES = None
+
+
+def _gravity_input_templates():
+    global _GRAVITY_INPUT_TEMPLATES
+    if _GRAVITY_INPUT_TEMPLATES is None:
+        _GRAVITY_INPUT_TEMPLATES = training_ui.load_gravity_input_templates()
+    return _GRAVITY_INPUT_TEMPLATES
+
+
+def _read_gc_gravity_input(sct, geometry, templates):
+    """Return (number box on screen, its value or None)."""
+    global GC_RUN_CONFIRMED
+    apply_crop = _grab_reference_box(sct, training_ui.GRAVITY_APPLY_BOX, geometry=geometry)
+    if not training_ui.gravity_apply_visible(apply_crop, templates):
+        return False, None
+    GC_RUN_CONFIRMED = True
+    box = _grab_reference_box(sct, training_ui.GRAVITY_INPUT_BOX, geometry=geometry)
+    return True, training_ui.read_gravity_input(box, templates)
+
+
+def _gravity_input_park(geometry, after_run):
+    park_at = _reference_point(*GRAVITY_POINTER_PARK_POINT, geometry)
+    if after_run:
+        with _input_lock:
+            _ensure_after_run_active()
+            _user32.SetCursorPos(*park_at)
+            _nudge_pointer()
+        time.sleep(0.10)
+        _ensure_after_run_active()
+    else:
+        robust_move(*park_at, nudge=True)
+        safe_sleep(0.10)
+
+
+def _gravity_input_tap(key, after_run):
+    """One key for the gravity box. Refocusing Roblox would not put the caret back
+    in the box, and without focus the key lands in whatever took it, so a lost
+    focus ends the typing instead."""
+    _wait_while_game_covered()
+    with _input_lock:
+        if after_run:
+            _ensure_after_run_active()
+        else:
+            check_exit()
+        if not _game_has_focus():
+            raise RuntimeError("Roblox lost focus while the gravity box was being typed in")
+        _tap_key_unchecked(key, wait_for_cover=False)
+
+
+def _gravity_input_select_all(after_run):
+    with _input_lock:
+        if after_run:
+            _ensure_after_run_active()
+        else:
+            check_exit()
+        if not _game_has_focus():
+            raise RuntimeError("Roblox lost focus while the gravity box was being typed in")
+        with _stop_input_gate:
+            try:
+                pydirectinput.keyDown("ctrl")
+                time.sleep(0.05)
+                pydirectinput.keyDown("a")
+                time.sleep(UTILITY_KEY_HOLD_SEC)
+            finally:
+                pydirectinput.keyUp("a")
+                pydirectinput.keyUp("ctrl")
+    time.sleep(UTILITY_KEY_GAP_SEC)
+
+
+def _type_gc_gravity_input(sct, geometry, templates, value, after_run):
+    """Type `value` into the box and press Enter, then reopen Training Mode and
+    return the gravity the box shows (None if it can't be confirmed)."""
+    x, y = training_ui.GRAVITY_INPUT_CLICK_POINT
+    if after_run:
+        _after_run_click_reference(x, y, geometry)
+    else:
+        check_exit()
+        click_at(*_reference_point(x, y, geometry))
+    time.sleep(0.25)
+    _gravity_input_select_all(after_run)
+    text = str(value)
+    for digit in text:
+        _gravity_input_tap(digit, after_run)
+    _gravity_input_park(geometry, after_run)
+    present, typed = _read_gc_gravity_input(sct, geometry, templates)
+    if not present or typed != value:
+        # Without a confirmed focused box, Enter or more digits could reach the
+        # game's hotbar instead.
+        print(f"[GRAVITY] Typed {text} but the box reads {typed}; not applying it")
+        # Left focused, the box would swallow every later Tab.
+        x, y = training_ui.GRAVITY_INPUT_RELEASE_POINT
+        if after_run:
+            _after_run_click_reference(x, y, geometry)
+        else:
+            click_at(*_reference_point(x, y, geometry))
+        time.sleep(0.15)
+        return None
+    _gravity_input_tap("enter", after_run)
+    template = _training_menu_template()
+    _gravity_input_tap("tab", after_run)
+    closed = _after_run_wait_training_menu(sct, geometry, template, False)
+    _gravity_input_tap("tab", after_run)
+    if not (closed and _after_run_wait_training_menu(sct, geometry, template, True)):
+        print("[GRAVITY] Training Mode didn't reopen to confirm the new gravity")
+        return None
+    _gravity_input_park(geometry, after_run)
+    present, shown = _read_gc_gravity_input(sct, geometry, templates)
+    return shown if present else None
+
+
+def _set_gc_gravity_by_input(sct, geometry, target, *, after_run=False):
+    """Raise to `target` (or drop to the lowest gravity when target is 0) with
+    the number box. Returns None when the box isn't on screen."""
+    templates = _gravity_input_templates()
+    if not templates:
+        return None
+    _gravity_input_park(geometry, after_run)
+    present, current = _read_gc_gravity_input(sct, geometry, templates)
+    if not present:
+        return None
+    if current is None:
+        print("[GRAVITY] Gravity box found but its number was unreadable; leaving it unchanged")
+        return False
+    lowering = target == 0
+    if lowering and current <= GRAVITY_INPUT_MIN_G:
+        print(f"[GRAVITY] Gravity is already at the lowest ({current}G)")
+        return True
+    if not lowering and current >= target:
+        print(f"[GRAVITY] Current {current}G already meets target {target}G; no change")
+        return True
+    started = time.monotonic()
+    for attempt in (1, 2):
+        try:
+            shown = _type_gc_gravity_input(sct, geometry, templates, target, after_run)
+        except AfterRunCancelled:
+            raise
+        except RuntimeError as error:
+            print(f"[GRAVITY] {error}; gravity left as it was")
+            return False
+        if shown is None:
+            return False
+        if lowering and shown <= GRAVITY_INPUT_MIN_G:
+            print(f"[GRAVITY] Lowered {current}G -> {shown}G (the game's lowest) "
+                  f"in {time.monotonic() - started:.1f}s")
+            return True
+        if not lowering and shown >= target:
+            print(f"[GRAVITY] Raised {current}G -> {shown}G in "
+                  f"{time.monotonic() - started:.1f}s; target confirmed")
+            return True
+        if not lowering and shown > current:
+            print(f"[GRAVITY] The game capped gravity at {shown}G (below the {target}G "
+                  "target, so this character's max is lower); training continues")
+            return True
+        if attempt == 1:
+            print(f"[GRAVITY] Still {shown}G after Enter; waiting out the game's "
+                  "change cooldown and trying once more")
+            if after_run:
+                time.sleep(GRAVITY_INPUT_COOLDOWN_SEC)
+                _ensure_after_run_active()
+            else:
+                safe_sleep(GRAVITY_INPUT_COOLDOWN_SEC)
+    print(f"[GRAVITY] The game kept {shown}G (this character's max, or it refused "
+          "the change); target not applied")
+    return False
+
+
 def _raise_gc_gravity(sct, geometry, target):
     """Raise GC gravity to `target`; never lower, wrap, or click in HTC."""
     target = _normalize_gravity_target(target, strict=True)
@@ -6258,8 +6619,22 @@ def _raise_gc_gravity(sct, geometry, target):
     current, score, second, control_present = _read_gc_gravity(
         sct, geometry, templates
     )
+    if not control_present and _new_game_ui():
+        handled = _set_gc_gravity_by_input(sct, geometry, target)
+        if handled is not None:
+            if not handled:
+                # A raise never lowers, so a failed one leaves a gravity the character
+                # already had. Cancelling Start here would lock out anyone whose
+                # screen the box can't be read on, or who is already at their max.
+                print(f"[GRAVITY] Gravity was not raised to {target}G; training "
+                      "continues at the current gravity")
+            return True
     if not control_present:
-        print("[GRAVITY] GC control not found; HTC detected, leaving gravity unchanged")
+        if _new_game_ui() and _gc_room_confirmed(sct, geometry):
+            print(f"[GRAVITY] The GC gravity box was not found, so gravity was not "
+                  f"raised to {target}G; training continues at the current gravity")
+            return True
+        print("[GRAVITY] GC control not found; leaving gravity unchanged")
         return True
     if current is None:
         print(
@@ -6367,6 +6742,10 @@ def _cycle_gc_gravity_to_zero(sct, geometry, *, after_run=False):
     current, score, second, control_present = _read_gc_gravity(
         sct, geometry, templates
     )
+    if not control_present and _new_game_ui():
+        handled = _set_gc_gravity_by_input(sct, geometry, 0, after_run=after_run)
+        if handled is not None:
+            return handled
     if not control_present:
         if _gc_room_confirmed(sct, geometry):
             print(
@@ -7060,9 +7439,15 @@ def hardware_tap(key):
     with _input_lock:
         # Auto-Senzu may have started while this thread waited for the lock.
         check_exit()
+        minigame = key in ("w", "a", "s", "d", "f")
+        if minigame and CURRENT_TRAINING_STATE is not None and not _game_has_focus():
+            # Restoring focus takes 150 ms or more, so the frame this key was aimed
+            # at is gone: refocus, drop the key, and let the next look decide.
+            _ensure_game_focus_for_input()
+            return False
         if not _ensure_game_focus_for_input():
             return False
-        _tap_key_unchecked(key, minigame=key in ("w", "a", "s", "d", "f"))
+        _tap_key_unchecked(key, minigame=minigame)
     check_exit()
     return True
 
@@ -8649,9 +9034,15 @@ HEALTH_V3_INPUT_LEAD_SEC = 0.02   # capture age + key-down, at ~650 px/s marker 
 _HEALTH_V3_STATE = {"marker": None, "seen_at": 0.0, "velocity": 0.0, "pressed_at": 0.0,
                      "frame_interval": 0.02, "lead": HEALTH_V3_INPUT_LEAD_SEC, "grab": 0.0,
                      "landing": None, "speed": 650.0}
-HEALTH_V3_MAX_WAIT_SEC = 0.05   # never hold the loop longer than this waiting for the centre
+# A PC that reads the bar every 90 ms is told to wait up to 135 ms for the centre. The
+# old 50 ms cap pressed at 50 ms anyway, up to 55 px early: outside a 100 px zone.
+HEALTH_V3_MAX_WAIT_SEC = 0.25   # a longer predicted wait is a bad read; look again instead
+HEALTH_V3_FREEZE_CONFIRM_SEC = 0.05   # a real freeze outlasts three 60 fps game frames
 HEALTH_V3_LEAD_RANGE = (0.0, 0.2)
 HEALTH_V3_LANDING_WINDOW_SEC = 0.6   # a press that registered freezes the marker well inside this
+# Slow PCs see the bar only every ~250 ms. Two looks further apart than this are
+# too stale to aim from (the marker can have bounced and turned more than once).
+HEALTH_V3_MAX_SAMPLE_GAP_SEC = 0.4
 HEALTH_V3_LEAD_STEP_SEC = 0.03       # most one landing can move the lead
 
 
@@ -8673,8 +9064,10 @@ def _health_v3_check_landing(memo, marker, now):
     # just starting to move again (live: 250 px/s against ~650) taught a 90 ms jump.
     speed = memo["speed"]
     learn = landing["speed"] >= 0.7 * speed
-    if marker is None or now - landing["pressed_at"] > HEALTH_V3_LANDING_WINDOW_SEC:
-        if marker is None and landing["furthest"] is None and now - landing["pressed_at"] <= HEALTH_V3_LANDING_WINDOW_SEC:
+    # A freeze needs three looks to confirm; at slow frame rates they take longer.
+    window = max(HEALTH_V3_LANDING_WINDOW_SEC, 3.5 * memo.get("frame_interval", 0.0))
+    if marker is None or now - landing["pressed_at"] > window:
+        if marker is None and landing["furthest"] is None and now - landing["pressed_at"] <= window:
             return   # no post-press frame yet; wait for one
         memo["landing"] = None
         furthest = landing["furthest"]
@@ -8687,6 +9080,13 @@ def _health_v3_check_landing(memo, marker, now):
     late_px = (marker - (left + right) / 2.0) * landing["direction"]
     if memo["marker"] is None or abs(marker - memo["marker"]) > 1.5:
         landing["furthest"] = late_px if landing["furthest"] is None else max(landing["furthest"], late_px)
+        landing["still_since"] = None
+        return
+    # A loop faster than the game's 60 fps grabs one game frame twice. That repeat
+    # looked like a freeze and taught the lead from a marker that was still moving.
+    if landing.get("still_since") is None:
+        landing["still_since"] = now
+    if now - landing["still_since"] < HEALTH_V3_FREEZE_CONFIRM_SEC:
         return
     memo["landing"] = None
     if learn and abs(late_px) > 8:
@@ -8711,10 +9111,16 @@ def _logic_health_v3(sct, monitor):
         return
     marker, zone = reading
     elapsed = now - memo["seen_at"]
-    if memo["marker"] is not None and 0 < elapsed < 0.2:
-        memo["velocity"] = (marker - memo["marker"]) / elapsed
-        if 300 <= abs(memo["velocity"]) <= 1500:
-            memo["speed"] += (abs(memo["velocity"]) - memo["speed"]) * 0.05
+    if memo["marker"] is not None and 0 < elapsed < HEALTH_V3_MAX_SAMPLE_GAP_SEC:
+        velocity = (marker - memo["marker"]) / elapsed
+        if 300 <= abs(velocity) <= 1500:
+            memo["speed"] += (abs(velocity) - memo["speed"]) * 0.05
+        # Across a long gap the marker may have hit a bar end and come back: the
+        # two looks then show less travel than its sweep speed allows. Aim only
+        # from a gap whose travel matches that speed.
+        if elapsed >= 0.2 and abs(velocity) < 0.8 * memo["speed"]:
+            velocity = 0.0
+        memo["velocity"] = velocity
         memo["frame_interval"] += (elapsed - memo["frame_interval"]) * 0.2
     else:
         # A stale speed would turn a hit's frozen marker into a second press.
@@ -8726,16 +9132,17 @@ def _logic_health_v3(sct, monitor):
         return
     delay = training_ui.health_press_delay(
         marker, zone, memo["velocity"], memo["lead"], memo["frame_interval"])
-    if delay is None:
+    if delay is None or delay > HEALTH_V3_MAX_WAIT_SEC:
         return
     if delay > 0:
-        time.sleep(min(delay, HEALTH_V3_MAX_WAIT_SEC))
+        time.sleep(delay)
     print(">>> [HEALTH] Press F")
     if hardware_tap("f"):
         memo["pressed_at"] = now + delay
         memo["landing"] = {"zone": zone, "pressed_at": now + delay,
                            "direction": 1 if memo["velocity"] > 0 else -1,
-                           "speed": abs(memo["velocity"]), "furthest": None}
+                           "speed": abs(memo["velocity"]), "furthest": None,
+                           "still_since": None}
         TELEMETRY["health_hits"] += 1
 
 
@@ -8917,13 +9324,22 @@ def _ki_v9_dispatch_due():
         if track is None:
             return
         screen_x, screen_y = _reference_point(track['x'], track['y'], memo['context'][2])
-        if _ki_click_blocked(screen_x, screen_y) or not _game_has_focus():
+        # click_at waits out a covering window, and here that wait would hold the
+        # Stop gate; a covered frame's target is stale anyway.
+        if (_ki_click_blocked(screen_x, screen_y) or not _game_has_focus()
+                or _GAME_COVERED_SINCE is not None):
             _KI_V9_SCHEDULER.clear()
             return
         try:
             check_exit()
             started = time.perf_counter()
-            _ki_click(screen_x, screen_y)
+            # The monitor can mark the game covered between the check above and
+            # the click's own check.
+            _cover_wait.drop_instead = True
+            try:
+                _ki_click(screen_x, screen_y)
+            finally:
+                _cover_wait.drop_instead = False
         except (QuitException, SkipMinigameException, SenzuControllerPause):
             _KI_V9_SCHEDULER.clear()
             return
@@ -9129,6 +9545,8 @@ def run_master_controller():
         gc_room_watch = GcRoomWatch()
         # Yellow tracking state
         yellow_last_poll = 0.0
+        yellow_poll_interval = YELLOW_SAMPLE_INTERVAL_SEC
+        yellow_sample_cost = 0.0
         yellow_last_seen_ts = time.monotonic()
         last_yellow_log_ts = 0.0
         awaiting_first_yellow = True  # load grace: first yellow after start/switch
@@ -9487,6 +9905,7 @@ def run_master_controller():
 
             if MANUAL_NEXT_REQUESTED:
                 MANUAL_NEXT_REQUESTED = False
+                switches_before = TELEMETRY["switches"]
                 try:
                     if do_switch(
                         f"[SKIP] Manual next ({MANUAL_NEXT_KEY.upper()})",
@@ -9494,7 +9913,10 @@ def run_master_controller():
                     ):
                         break
                 except SenzuControllerPause:
-                    pass
+                    # Healing claimed input before this switch began: keep the
+                    # skip for when healing hands back, instead of losing it.
+                    if TELEMETRY["switches"] == switches_before:
+                        MANUAL_NEXT_REQUESTED = True
                 except QuitException:
                     raise
                 continue  # restart loop after switch — don't fall into a stale minigame
@@ -9560,12 +9982,20 @@ def run_master_controller():
                 if gc_room_watch.left_room(sct, monitor, now):
                     _stop_for_leaving_gc_room()
                     check_exit()
-                if now - yellow_last_poll >= YELLOW_SAMPLE_INTERVAL_SEC:
+                if now - yellow_last_poll >= yellow_poll_interval:
                     yellow_last_poll = now
+                    sample_started = time.monotonic()
                     # The agility chain loop samples yellow itself while it holds
                     # the thread; fold that in so missing_for stays truthful.
                     yellow_last_seen_ts = max(yellow_last_seen_ts, _agility_chain_yellow_ts)
-                    y_count, y_raw, y_mask = detect_yellow_progress(sct, state, monitor)
+                    if (NO_YELLOW_FALLBACK_ENABLED or awaiting_first_yellow
+                            or SHOW_DEBUG_HUD or YELLOW_DEBUG_LOG):
+                        y_count, y_raw, y_mask = detect_yellow_progress(sct, state, monitor)
+                    else:
+                        # With the fallback off, presence only feeds the first-yellow
+                        # line and the debug views. At 200 ms a grab, its extra grabs
+                        # left Health and the letters one look every ~0.6 s.
+                        y_count, y_raw, y_mask = 1, None, None
                     present = (y_count > 0)
                     if present:
                         yellow_last_seen_ts = now
@@ -9608,6 +10038,11 @@ def run_master_controller():
                                 f"[MENU shadow] {label} score={menu_score:.3f} "
                                 f"streak={menu_match_streak}/{TRAINING_MENU_STABLE_FRAMES}"
                             )
+                    # Space these checks by what they cost: 0.25 s as before on a
+                    # normal PC, about a third of the loop on a slow one, so the
+                    # minigame still gets most of the frames.
+                    yellow_sample_cost += (time.monotonic() - sample_started - yellow_sample_cost) * 0.2
+                    yellow_poll_interval = max(YELLOW_SAMPLE_INTERVAL_SEC, min(1.0, 3 * yellow_sample_cost))
 
                 if TRAINING_MENU_VISIBLE:
                     # The user may press Tab, or the game may return here on its
@@ -10139,11 +10574,12 @@ def _auto_retry_wait(duration, step=0.05):
     return not _auto_retry_cancelled()
 
 
-def _gc_death_dialog_visible(sct, geometry):
+def _gc_death_dialog_visible(sct, geometry, frame=None):
     """Match DBOG's centered You Died/Respawn dialog by its three blue bands."""
     if _new_game_ui():
-        return training_ui.death_dialog_visible(
-            _grab_reference_box(sct, (0, 0, GAME_REFERENCE_WIDTH, GAME_REFERENCE_HEIGHT), geometry))
+        if frame is None:
+            frame = _grab_reference_box(sct, (0, 0, GAME_REFERENCE_WIDTH, GAME_REFERENCE_HEIGHT), geometry)
+        return training_ui.death_dialog_visible(frame)
     for box in GC_DEATH_DIALOG_BANDS:
         frame = _grab_reference_box(sct, box, geometry=geometry)[:, :, :3]
         dark_blue = (
@@ -10341,10 +10777,10 @@ GC_RESPAWN_STABLE_FRAMES = 10     # 2.5s of continuous prompt at 0.25s per frame
 GC_RESPAWN_LOADING_FRAMES = 60    # 15s for the respawn and loading screen
 
 
-def _auto_retry_walk_forward():
+def _auto_retry_walk_forward(force=False):
     """Legacy setting name; return across the GC safety boundary using vision."""
     global GC_RECOVERY_VERIFY_PENDING
-    if not AUTO_RETRY_WALK_OUT:
+    if not AUTO_RETRY_WALK_OUT and not force:
         return True
     settle = COMPATIBILITY_SETTINGS["respawn_settle_sec"]
     print(f"[RECOVERY] Waiting {settle:g}s before finding the GC training area")
@@ -10579,7 +11015,7 @@ def _auto_retry_recover(*, stuck_senzu=False):
         settle = COMPATIBILITY_SETTINGS["respawn_settle_sec"]
         print(f"[RECOVERY] Waiting {settle:g}s after respawn")
         return _auto_retry_wait(settle)
-    return _auto_retry_walk_forward()
+    return _auto_retry_walk_forward(force=True) if stuck_senzu else _auto_retry_walk_forward()
 
 
 def _prepare_controller_attempt():
@@ -10690,17 +11126,28 @@ def _run_macro_safe():
             TELEMETRY["recovery_attempts"] += 1
             with _run_result_lock:
                 failed_reason = _CURRENT_RUN_REASON or "Unknown controller error"
+            # The monitor is gone, so nothing owns a healing pause any more. Left
+            # set, the first recovery key or click raises SenzuControllerPause.
+            SENZU_CONTROLLER_ACTIVE.clear()
+            SENZU_CONTROLLER_RESUME_REQUIRED.clear()
             if stuck_senzu:
                 SENZU_STUCK_RESET_REQUESTED = False
                 print("[RECOVERY] Clearing the stuck Senzu item state and returning to GC training")
-                recovered = _auto_retry_recover(stuck_senzu=True)
             else:
                 retries_used += 1
                 print(
                     f"[RECOVERY] Attempt {retries_used}/{AUTO_RETRY_MAX_ATTEMPTS} "
                     f"after: {failed_reason}"
                 )
-                recovered = _auto_retry_recover()
+            try:
+                recovered = _auto_retry_recover(stuck_senzu=True) if stuck_senzu else _auto_retry_recover()
+            except QuitException:
+                recovered = False
+            except Exception as error:
+                # Recovery input can fail too (Roblox lost focus mid-click). That
+                # must end the run with a reason, not kill this thread.
+                print(f"[RECOVERY] Recovery failed ({error.__class__.__name__}): {error}")
+                recovered = False
             if not recovered:
                 if _auto_retry_cancelled():
                     _record_run_outcome("stopped", "User requested stop")
@@ -10912,7 +11359,19 @@ def _hotkey_toggle_macro():
         if _sidecar_closing:
             return
         now = time.monotonic()
-        if _hotkey_toggle_busy or now - _hotkey_toggle_last_accepted < 0.4:
+        if now - _hotkey_toggle_last_accepted < 0.4:
+            return
+        if _hotkey_toggle_busy:
+            # The worker can sit in a hotkey Start's window setup for seconds on a
+            # slow PC. A Stop then must not queue behind it or be dropped: cancel
+            # the pending Start now (Stop only takes the input gate briefly).
+            with _stop_input_gate:
+                generation = _macro_start_generation
+                pending = _macro_pending_start_generation == generation
+            if pending:
+                _hotkey_toggle_last_accepted = now
+                threading.Thread(target=_ui_stop_macro, kwargs={"expected_generation": generation},
+                                 daemon=True, name="hotkey-stop").start()
             return
         with _stop_input_gate:
             if _sidecar_closing:

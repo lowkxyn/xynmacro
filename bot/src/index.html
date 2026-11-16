@@ -150,13 +150,22 @@
         <div class="stat-card"><div class="stat-label">Session Time</div><div class="stat-value" id="elapsedTime">&mdash;</div></div>
       </div>
 
+      <div class="run-result" id="runSummary" role="status" hidden>
+        <span class="run-result-badge" id="runResultBadge"></span>
+        <div class="run-result-body">
+          <div class="run-result-reason" id="runResultReason"></div>
+          <div class="run-result-meta" id="runResultMeta"></div>
+        </div>
+        <button class="btn-sm" type="button" id="runResultLog">View log</button>
+      </div>
+
       <div class="section-title">Live Telemetry</div>
       <div class="panel panel-static" id="telemetryPanel">
         <div class="telem-row">
           <div class="telem-card">
-            <div class="telem-label">Adaptive WASD</div>
+            <div class="telem-label">Letter Keys</div>
             <div class="telem-value" id="telemWasdRate">&mdash;</div>
-            <div class="telem-sub" id="telemWasdBreakdown">no data yet</div>
+            <div class="telem-sub" id="telemWasdBreakdown">no keys yet</div>
           </div>
           <div class="telem-card">
             <div class="telem-label">Ki Clicks</div>
@@ -180,7 +189,6 @@
           </div>
         </div>
       </div>
-      <div class="run-summary" id="runSummary" hidden></div>
 
       <div class="section-title">Setup Checklist</div>
       <div class="panel panel-static">
@@ -227,10 +235,11 @@
       <div class="section-title">Troubleshooting</div>
       <div class="panel panel-static">
         <div class="tip-row"><span class="tip-label">Won't Start</span><span class="tip-val">Confirm the Roblox Window check is green and that you are inside HTC or GC. If global hotkeys or game input fail, re-launch as Administrator.</span></div>
-        <div class="tip-row"><span class="tip-label">Stopped</span><span class="tip-val">Check Diagnostics for the exact last confirmed screen or detector failure. In compact mode, an operational error turns the pill red; click it to expand.</span></div>
-        <div class="tip-row"><span class="tip-label">Ki Misses</span><span class="tip-val">Lower "Ring Brightness Min" in 5-point steps while checking for background false detections. Raise "Ring Pixel Min" if it clicks on speckle.</span></div>
+        <div class="tip-row"><span class="tip-label">Stopped</span><span class="tip-val">The reason stays under the status tiles on this page after a run ends. Diagnostics has the full log, and Open logs folder there has the last 25 sessions. In compact mode, an error turns the pill red; click it to expand.</span></div>
+        <div class="tip-row"><span class="tip-label">Ki Misses</span><span class="tip-val">Ki timing is automatic. Turn on Hide Roblox Chat on Start in Training so open chat can't cover the circles, and keep other windows off Roblox.</span></div>
         <div class="tip-row"><span class="tip-label">Senzu Fails</span><span class="tip-val">Auto-Senzu samples the fixed left side of the player HP fill and reacts only to red. Disable overlays that recolour the HUD, then check Diagnostics for menu or inventory confirmation failures.</span></div>
-        <div class="tip-row"><span class="tip-label">WASD Fails</span><span class="tip-val">Agility and Physical Damage require a QWERTY layout. If Adaptive misses letters, switch to Burst in Minigames.</span></div>
+        <div class="tip-row"><span class="tip-label">WASD Fails</span><span class="tip-val">Agility and Physical Damage require a QWERTY layout, and the letters must not be covered by an overlay or another window.</span></div>
+        <div class="tip-row"><span class="tip-label">Health Misses</span><span class="tip-val">Health adjusts its timing from where the first presses land. If it keeps missing, send the session log from Diagnostics; its [HEALTH] lines show how late each press landed.</span></div>
       </div>
     </div>
 
@@ -313,7 +322,7 @@
           <span class="row-label" id="toggleAutoRetryLabel">Retry After Error</span>
           <div class="row-ctrl"><button type="button" class="toggle" id="toggleAutoRetry" role="switch" aria-checked="false" aria-labelledby="toggleAutoRetryLabel" onclick="toggleSetting('auto_retry_on_failure',this)"></button></div>
         </div>
-        <div class="row-hint">Off by default. Manual Stop never retries. After-run failure actions wait until every recovery attempt is exhausted.</div>
+        <div class="row-hint">On by default. After a death, respawns and restarts training, up to Maximum Retries times. Manual Stop never retries. After-run failure actions wait until every recovery attempt is exhausted.</div>
         <div class="row-item">
           <span class="row-label">Maximum Retries</span>
           <div class="row-ctrl"><input type="number" class="inp" id="autoRetryMaxAttempts" value="3" step="1" min="1" max="10" aria-label="Maximum recovery retries"></div>
@@ -379,8 +388,9 @@
         <div class="row-hint">“Then” modes use the second type only after the preferred type has no stock. Full only is the default.</div>
         <div class="row-item">
           <label class="row-label" for="senzuSlot">Senzu Hotbar Slot</label>
-          <div class="row-ctrl"><input type="number" class="inp" id="senzuSlot" step="1" min="1" max="4" aria-label="Senzu Hotbar Slot"></div>
+          <div class="row-ctrl"><input type="number" class="inp" id="senzuSlot" step="1" min="1" max="4" aria-label="Senzu Hotbar Slot" aria-describedby="senzuSlotHint"></div>
         </div>
+        <div class="row-hint" id="senzuSlotHint">The hotbar slot (1 to 4) XynMacro eats from and reloads. Whatever is in that slot is replaced with Senzu.</div>
         <div class="row-item">
           <span class="row-label">Delay After Red</span>
           <div class="row-ctrl"><input type="number" class="inp" id="senzuDelay" step="0.5" min="0" max="30" aria-label="Delay after red HP in seconds"><span class="unit">sec</span></div>
@@ -552,7 +562,7 @@
     <div class="view" id="tuning">
       <div class="page-header">
         <h1>Minigames</h1>
-        <p>Advanced detector and timing adjustments</p>
+        <p>Stat switching rules and timing</p>
       </div>
 
       <div class="section-title">Progression &amp; Switching</div>
@@ -566,7 +576,7 @@
             <label class="row-label" for="noYellowTimeout">Colour Fallback Timeout</label>
             <div class="row-ctrl"><input type="number" class="inp" id="noYellowTimeout" step="1" min="1" max="300" aria-label="Colour fallback timeout in seconds" aria-describedby="colourFallbackHint"><span class="unit">sec</span></div>
           </div>
-          <div class="row-hint" id="colourFallbackHint">Off by default. Moves to the next stat if the counter hasn't been found and no progress colour appears for this long.</div>
+          <div class="row-hint" id="colourFallbackHint">Off by default. Moves to the next stat when the counter can't be read and no minigame is on screen for this long.</div>
         </div>
         <div class="row-item">
           <span class="row-label" id="toggleProgressionStallLabel">Stuck Counter Fallback</span>
@@ -586,6 +596,7 @@
         <div class="row-hint">Waits after switching to a new stat. The counter is the main finish check; Points Left can show an earlier cap. Use the fallbacks above when these checks miss progress.</div>
       </div>
 
+      <div class="legacy-ui" hidden>
       <div class="section-title">WASD Mode</div>
       <div class="panel">
         <div class="row-item">
@@ -600,12 +611,15 @@
         <div class="row-hint">Adaptive confirms each key turned green before sending the next. Burst reads all visible letters at once and sends them together. Try Burst if Adaptive feels too slow.</div>
       </div>
 
-      <div class="section-title">WASD Timings</div>
+      </div>
+
+      <div class="section-title">Key Timing</div>
       <div class="panel">
         <div class="row-item">
           <span class="row-label">Delay After Key Tap</span>
           <div class="row-ctrl"><input type="number" class="inp" id="wasdKeyPress" step="0.001" min="0" max="1" aria-label="WASD key press duration in seconds"><span class="unit">sec</span></div>
         </div>
+        <div class="legacy-ui" hidden>
         <div class="row-item">
           <span class="row-label">Post-Input Stabilize</span>
           <div class="row-ctrl"><input type="number" class="inp" id="wasdStabilize" step="0.01" min="0" max="5" aria-label="WASD post-input stabilize time in seconds"><span class="unit">sec</span></div>
@@ -626,11 +640,13 @@
           <span class="row-label">Wait for Next Sequence</span>
           <div class="row-ctrl"><input type="number" class="inp" id="wasdInterStringWait" step="0.1" min="0.1" max="10" aria-label="WASD inter-string wait in seconds"><span class="unit">sec</span></div>
         </div>
-        <div class="row-hint">Delay After Key Tap applies to every simulated key tap, including F and Tab; each key is held for 30 ms. Post-Input Stabilize and Post-Burst Cooldown apply to Burst mode. In Adaptive mode, Wait for Key Confirmation is how long each key has to turn green before a retry, Pause After Confirmed Keys waits before scanning again, and Wait for Next Sequence limits how long the next sequence is polled.</div>
+        </div>
+        <div class="row-hint">Applies to every simulated key tap, including WASD, F and Tab; each key is held for 30 ms.</div>
       </div>
 
       <div class="section-title">Health Timing</div>
       <div class="panel">
+        <div class="legacy-ui" hidden>
         <div class="row-item">
           <span class="row-label">Health Mode</span>
           <div class="row-ctrl">
@@ -641,6 +657,7 @@
           </div>
         </div>
         <div class="row-hint">v1 scales the original narrow red probe over the target zone. v2 finds the Health bar and tracks the moving red marker into the middle of the green target.</div>
+        </div>
         <div class="row-item">
           <span class="row-label">Minimum Time Between Health F Presses</span>
           <div class="row-ctrl"><input type="number" class="inp" id="healthHitCooldown" step="0.1" min="0" max="5" aria-label="Health hit cooldown in seconds"><span class="unit">sec</span></div>
@@ -648,6 +665,7 @@
         <div class="row-hint">Minimum gap between F presses during Health training.</div>
       </div>
 
+      <div class="legacy-ui" hidden>
       <div class="section-title">Ki Detection &amp; Timing</div>
       <div class="panel">
         <div class="row-item">
@@ -685,6 +703,8 @@
           <div class="row-ctrl"><input type="number" class="inp" id="kiV8V2BrightCountThreshold" step="1" min="1" max="32" aria-label="Ki ring pixel minimum"></div>
         </div>
         <div class="row-hint">v2 only. Bright pixels needed, out of 32 sampled per radius, to count that radius as the ring. Default 6. Higher is stricter and ignores speckle; lower is more sensitive and catches partial or hidden rings.</div>
+      </div>
+
       </div>
 
       <div class="section-title">Restart After Each Hit</div>
@@ -830,6 +850,8 @@
           <button class="btn-sm" onclick="clearLogs()" title="Clear this view only; the session log is kept">Clear view</button>
         </div>
       </div>
+      <div class="log-viewer log-feed" id="logViewer"></div>
+      <div class="log-note">Clear view only hides lines already shown. Save session log copies the full active session file to the configured save folder.</div>
       <div class="section-title">Scan Performance</div>
       <div class="panel">
         <div class="row-item">
@@ -860,8 +882,6 @@
         </div>
         <div class="row-hint">Debug HUD sits over Roblox with live window, scaling and run readouts plus the scan boxes; it is click-through, so it never eats a click. Pop out moves it to its own draggable window for a second monitor. Vision preview labels exactly what the macro scans; Ki scans the full Roblox client. A visible taskbar doesn't shift the boxes, but minimizing or covering Roblox can break capture.</div>
       </div>
-      <div class="log-viewer log-feed" id="logViewer"></div>
-      <div class="log-note">Clear view only hides lines already shown. Save session log copies the full active session file to the configured save folder.</div>
     </div>
 
     <!-- SETTINGS -->

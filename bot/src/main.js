@@ -441,6 +441,7 @@ window.wcCompact = () => {
   navBtns.forEach(btn => {
     btn.addEventListener('click', () => openView(btn.dataset.view));
   });
+  document.getElementById('runResultLog')?.addEventListener('click', () => openView('logs'));
 
   /* Smooth scroll via translate3d on .main-inner */
   const _scroller = document.querySelector('.main');
@@ -1760,8 +1761,6 @@ window.wcCompact = () => {
     switch_to_game_on_start: 'toggleSwitchToGame',
     hide_roblox_chat_on_start: 'toggleHideChat',
     stop_charging_after_ki_control: 'toggleStopChargeAfterKi',
-    restore_fullscreen_on_start: 'toggleRestoreFullscreen',
-    windowed_mode_on_start: 'toggleWindowedMode',
     display_confirm_changes: 'toggleDisplayConfirm',
     diagnostic_mode: 'toggleDiagnosticMode',
     shutdown_pc_when_finished: 'toggleShutdownFinished',
@@ -1866,20 +1865,24 @@ window.wcCompact = () => {
 
   function _renderRunSummary(run) {
     const el = document.getElementById('runSummary');
-    if (!el) return;
-    const tel = run?.telemetry || {};
+    if (!el || !run) return;
+    const tel = run.telemetry || {};
     const outcomeLabels = {
       completed: 'Completed',
       incomplete: 'Incomplete',
       stopped: 'Stopped',
       error: 'Error',
     };
+    el.dataset.outcome = outcomeLabels[run.outcome] ? run.outcome : 'ended';
+    document.getElementById('runResultBadge').textContent = outcomeLabels[run.outcome] || 'Ended';
+    document.getElementById('runResultReason').textContent = run.reason || 'No reason reported';
     const parts = [
-      outcomeLabels[run?.outcome] || 'Ended',
+      ...(run.category ? [run.category] : []),
+      ...(run.elapsed_sec >= 1 ? [_fmtElapsed(Math.round(run.elapsed_sec))] : []),
       `${tel.switches || 0} switches`,
       `${tel.health_hits || 0} health hits`,
       `${tel.ki_clicks || 0} Ki clicks`,
-      `${tel.wasd_greens || 0} WASD confirmed`,
+      `${tel.wasd_greens || 0} WASD presses`,
     ];
     if (tel.wasd_unconfirmed || tel.wasd_reds) {
       parts.push(`${tel.wasd_unconfirmed || 0} uncertain`, `${tel.wasd_reds || 0} failed`);
@@ -1890,7 +1893,7 @@ window.wcCompact = () => {
     if (tel.majin_regens || tel.majin_regen_failures) {
       parts.push(`${tel.majin_regens || 0} Majin regens`, `${tel.majin_regen_failures || 0} regen failures`);
     }
-    el.textContent = `Last run · ${parts.join(' · ')}`;
+    document.getElementById('runResultMeta').textContent = `Last run · ${parts.join(' · ')}`;
     el.hidden = false;
   }
 
@@ -2234,25 +2237,12 @@ window.wcCompact = () => {
 
     // Telemetry strip on Dashboard.
     const tel = state.telemetry || {};
-    const wasdAttempts = (tel.wasd_greens || 0) + (tel.wasd_unconfirmed || 0) + (tel.wasd_reds || 0);
-    const adaptiveWasd = cfg.agility_mode !== 'v1';
+    // The current game UI lights one letter at a time, so there is a press count
+    // but no confirmed/failed split to turn into a rate.
     const wasdRateEl = document.getElementById('telemWasdRate');
-    if (wasdRateEl) {
-      if (!adaptiveWasd || wasdAttempts === 0) {
-        wasdRateEl.textContent = '—';
-      } else {
-        const pct = (tel.wasd_greens / wasdAttempts) * 100;
-        wasdRateEl.textContent = pct.toFixed(0) + '%';
-      }
-    }
+    if (wasdRateEl) wasdRateEl.textContent = String(tel.wasd_greens || 0);
     const wasdSubEl = document.getElementById('telemWasdBreakdown');
-    if (wasdSubEl) {
-      wasdSubEl.textContent = !adaptiveWasd
-        ? 'unavailable in Burst mode'
-        : wasdAttempts === 0
-        ? 'no data yet'
-        : `${tel.wasd_greens || 0}✓  ${tel.wasd_unconfirmed || 0}? ${tel.wasd_reds || 0}✗ (${tel.wasd_sequences || 0} seq)`;
-    }
+    if (wasdSubEl) wasdSubEl.textContent = (tel.wasd_greens || 0) === 0 ? 'no keys yet' : 'WASD presses';
     const kiClicksEl = document.getElementById('telemKiClicks');
     if (kiClicksEl) kiClicksEl.textContent = String(tel.ki_clicks || 0);
     const kiSubEl = document.getElementById('telemKiBreakdown');
@@ -2270,6 +2260,8 @@ window.wcCompact = () => {
     if (switchesEl) switchesEl.textContent = String(tel.switches || 0);
     const runSummary = document.getElementById('runSummary');
     if (runStarted && runSummary) runSummary.hidden = true;
+    // Also on a fresh page load, so a reload doesn't lose why the last run ended.
+    if (!running && runSummary?.hidden && state.last_run) _renderRunSummary(state.last_run);
     if (runEnded) {
       _renderRunSummary(state.last_run);
       if (state.last_run?.outcome === 'incomplete') {
@@ -2457,7 +2449,7 @@ window.wcCompact = () => {
   for (const control of document.querySelectorAll('.view .row-ctrl [id]')) {
     const view = control.closest('.view');
     const label = control.closest('.row-item')?.querySelector('.row-label')?.textContent.trim();
-    if (!view || !label) continue;
+    if (!view || !label || control.closest('.legacy-ui')) continue;
     COMMANDS.push({ id: 'setting-' + control.id, label, keywords: aliases[control.id] || '', group: 'Settings', run: () => {
       openView(view.id);
       control.scrollIntoView({ block: 'center' });
@@ -2723,6 +2715,22 @@ window.wcCompact = () => {
 
   // What's-new content, newest first. Each entry: {version, notes:[{h, items[]}]}.
   const CHANGELOG = [
+    { version: '2.0.6', notes: [
+      { h: "Fixes", items: [
+        "GC gravity is set again. The game replaced the gravity button with a number box, so the Gravity Target and the after-run 0G action did nothing. The macro now types the value and checks it. If it can't, training carries on at the gravity you already have.",
+        "Auto-Senzu on slower PCs: a slot that is slow to redraw after eating no longer counts as a stuck bean (that reset the character), and a slow item list no longer reads as \"no Senzu left\".",
+        "Dying while a Senzu is being eaten or loaded now respawns and carries on, with Retry After Error on, instead of stopping the run.",
+        "Health on slower PCs: the bar is still pressed when the screen can only be read a few times a second, and presses are no longer sent early.",
+        "The stop hotkey now works while a run started with the hotkey is still setting up.",
+        "A tooltip from another program no longer pauses the run as \"another window over Roblox\".",
+        "Training Mode left open after a Ki HP check is closed with one more Tab instead of stopping the run.",
+      ] },
+      { h: "Changes", items: [
+        "The Dashboard shows how the last run ended, with a button to open the log.",
+        "Settings for the old game layout are hidden, and Diagnostics shows the log first.",
+        "Log files in the logs folder no longer contain your Windows user name.",
+      ] },
+    ] },
     { version: '2.0.5', notes: [
       { h: "Settings reset", items: [
         "All settings are back to defaults once with this update, including calibration and hotkeys. Your old settings are kept as macro_config.before-2.0.5.json in the config folder.",

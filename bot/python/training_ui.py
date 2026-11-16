@@ -609,6 +609,88 @@ def read_gravity(label, templates):
     return (value if reliable else None), float(best), float(second), True
 
 
+# Nov 2026 GC panel: the "Gravity: 40G" button became a number box plus Apply.
+# Live: opening Training Mode shows the current gravity in the box; typing a
+# value and pressing Enter applies it (no toast); the room tint changes at once.
+GRAVITY_INPUT_BOX = (424, 318, 120, 34)       # inside the box's green border
+GRAVITY_INPUT_CLICK_POINT = (484, 336)
+GRAVITY_APPLY_BOX = (552, 306, 104, 62)       # "Apply" sits at about (562, 318)
+# The panel's "Training Mode" title. Live: a focused box swallows Tab, and a click
+# here takes the focus away without applying what was typed.
+GRAVITY_INPUT_RELEASE_POINT = (345, 385)
+GRAVITY_APPLY_MATCH_MIN = 0.60       # live: 1.00 parked, 0.79 hovered, <=0.14 without it
+GRAVITY_DIGIT_MATCH_MIN = 0.70
+GRAVITY_DIGIT_MARGIN_MIN = 0.05
+
+
+def load_gravity_input_templates():
+    folder = os.path.join(BASE_DIR, "gravity_v3")
+    apply = cv2.imread(os.path.join(folder, "apply.png"), cv2.IMREAD_GRAYSCALE)
+    digits = {}
+    for digit in "0123456789":
+        image = cv2.imread(os.path.join(folder, f"digit_{digit}.png"), cv2.IMREAD_GRAYSCALE)
+        if image is None:
+            return {}
+        digits[digit] = image > 0
+    if apply is None:
+        return {}
+    return {"apply": apply, "digits": digits}
+
+
+def gravity_apply_visible(apply_crop, templates):
+    """For a GRAVITY_APPLY_BOX crop: is the number box's Apply button on screen?"""
+    gray = cv2.cvtColor(apply_crop[:, :, :3], cv2.COLOR_BGR2GRAY)
+    template = templates["apply"]
+    if gray.shape[0] < template.shape[0] or gray.shape[1] < template.shape[1]:
+        return False
+    score = cv2.minMaxLoc(cv2.matchTemplate(gray, template, cv2.TM_CCOEFF_NORMED))[1]
+    return score >= GRAVITY_APPLY_MATCH_MIN
+
+
+def _digit_score(glyph, template):
+    """Best IoU over a +-1 px horizontal shift; both masks share the box's rows."""
+    width = max(glyph.shape[1], template.shape[1]) + 2
+    best = 0.0
+    for shift in (-1, 0, 1):
+        a = np.zeros((glyph.shape[0], width), bool)
+        b = np.zeros((glyph.shape[0], width), bool)
+        a[:, 1:1 + glyph.shape[1]] = glyph
+        b[:, 1 + shift:1 + shift + template.shape[1]] = template
+        union = np.count_nonzero(a | b)
+        if union:
+            best = max(best, np.count_nonzero(a & b) / union)
+    return best
+
+
+def read_gravity_input(box_crop, templates):
+    """Read the whole number in a GRAVITY_INPUT_BOX crop, or None if any glyph is unsure."""
+    mask = _white_mask(box_crop)
+    columns = list(mask.any(axis=0)) + [False]
+    glyphs, start = [], None
+    for x, filled in enumerate(columns):
+        if filled and start is None:
+            start = x
+        elif not filled and start is not None:
+            # A 1-2 px run is the text caret while the box has focus.
+            if x - start > 2:
+                glyphs.append(mask[:, start:x])
+            start = None
+    if not glyphs or len(glyphs) > 4:
+        return None
+    text = ""
+    for glyph in glyphs:
+        scores = sorted(
+            ((_digit_score(glyph, template), digit)
+             for digit, template in templates["digits"].items()),
+            reverse=True,
+        )
+        best, digit = scores[0]
+        if best < GRAVITY_DIGIT_MATCH_MIN or best - scores[1][0] < GRAVITY_DIGIT_MARGIN_MIN:
+            return None
+        text += digit
+    return int(text)
+
+
 # --- Health: tap F while the sweeping white marker is inside the gold zone -----
 
 def health_bar(bar):

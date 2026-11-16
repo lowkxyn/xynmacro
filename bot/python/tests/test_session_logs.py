@@ -33,6 +33,22 @@ class SessionLogTests(unittest.TestCase):
             self.assertFalse((logs_dir / "session_old_00.log").exists())
             self.assertTrue((logs_dir / "session_old_29.log").exists())
 
+    def test_session_file_lines_are_redacted_as_they_are_written(self):
+        # Open logs folder hands out these files directly, unlike Copy and Save Log.
+        import collections
+        import io
+
+        session_file = io.StringIO()
+        ring = collections.deque()
+        tee = core._TeeBuffer(None, ring, file_handle=session_file)
+        with patch.dict(os.environ, {"USERPROFILE": r"C:\Users\somebody", "USERNAME": "somebody"}):
+            tee.write(r"[sidecar] Data folder: C:\Users\somebody\AppData\Roaming\xyn" + "\n")
+        written = session_file.getvalue()
+        self.assertNotIn("somebody", written)
+        self.assertIn(r"%USERPROFILE%\AppData\Roaming\xyn", written)
+        self.assertTrue(written.endswith("\n"))
+        self.assertIn("somebody", ring[0]["msg"])   # the in-app viewer keeps the raw line
+
 
 if __name__ == "__main__":
     unittest.main()

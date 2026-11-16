@@ -714,11 +714,19 @@ fn wait_for_backend(app: &AppHandle, endpoint: &BackendEndpoint, auth_token: &st
 }
 
 #[cfg(target_os = "windows")]
+/// Windows looks for a bare program name in the running exe's own folder first, so a
+/// file called taskkill.exe beside it (a Downloads folder, say) would run instead.
+fn system_program(name: &str) -> PathBuf {
+    let root = std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into());
+    PathBuf::from(root).join("System32").join(name)
+}
+
+#[cfg(target_os = "windows")]
 fn run_taskkill_bounded(args: &[&str], timeout: Duration) {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x08000000;
 
-    let Ok(mut taskkill) = Command::new("taskkill")
+    let Ok(mut taskkill) = Command::new(system_program("taskkill.exe"))
         .args(args)
         .creation_flags(CREATE_NO_WINDOW)
         .stdout(Stdio::null())

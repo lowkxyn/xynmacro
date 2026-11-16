@@ -56,6 +56,7 @@ a = Analysis(
         ('tpl_progression_prefix_ki_large_v2.png', '.'),
         ('gravity', 'gravity'),
         ('gravity_v2', 'gravity_v2'),
+        ('gravity_v3', 'gravity_v3'),
         ('defaults', 'defaults'),
     ],
     hiddenimports=['win32gui', 'win32process'],

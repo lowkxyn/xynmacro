@@ -47,8 +47,26 @@ def test_z_order_skips_fully_transparent_overlays_but_keeps_opaque_ones(monkeypa
                         lambda hwnd: (0, 0 if hwnd == 1 else 200, core.win32con.LWA_ALPHA))
     monkeypatch.setattr(win32gui, "GetWindowRect", lambda _: (1230, 820, 1920, 940))
     monkeypatch.setattr(win32gui, "GetWindowText", lambda _: "opaque overlay")
+    monkeypatch.setattr(win32gui, "GetClassName", lambda _: "Chrome_WidgetWin_1")
     monkeypatch.setattr(core._ctypes.windll, "dwmapi", SimpleNamespace(DwmGetWindowAttribute=lambda *_: 0))
     assert list(core._windows_above_game()) == [((1230, 820, 1920, 940), "opaque overlay")]
+
+
+def test_z_order_skips_tooltips(monkeypatch):
+    # Live 2026-11-16: an anti-AFK tool's tooltip next to the parked pointer
+    # paused a Ki stat for 10 s and the run then stopped.
+    monkeypatch.setattr(core, "GAME_HWND", 42)
+    monkeypatch.setattr(win32gui, "GetTopWindow", lambda _: 1)
+    monkeypatch.setattr(win32gui, "GetWindow", lambda hwnd, _: {1: 2, 2: 42}[hwnd])
+    monkeypatch.setattr(win32gui, "IsWindowVisible", lambda _: True)
+    monkeypatch.setattr(win32gui, "IsIconic", lambda _: False)
+    monkeypatch.setattr(win32gui, "GetWindowLong", lambda *_: 0)
+    monkeypatch.setattr(win32gui, "GetWindowRect", lambda _: (1217, 556, 1376, 576))
+    monkeypatch.setattr(win32gui, "GetWindowText", lambda hwnd: f"window {hwnd}")
+    monkeypatch.setattr(win32gui, "GetClassName",
+                        lambda hwnd: "tooltips_class32" if hwnd == 1 else "Notepad")
+    monkeypatch.setattr(core._ctypes.windll, "dwmapi", SimpleNamespace(DwmGetWindowAttribute=lambda *_: 0))
+    assert list(core._windows_above_game()) == [((1217, 556, 1376, 576), "window 2")]
 
 
 def test_brief_popup_pauses_input_then_clears_without_stopping(monkeypatch):

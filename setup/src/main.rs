@@ -96,9 +96,16 @@ fn write_payload() -> Result<PathBuf, String> {
     Ok(path)
 }
 
+/// Windows looks for a bare program name in the running exe's own folder first, so a
+/// file called taskkill.exe beside it (a Downloads folder, say) would run instead.
+fn system_program(name: &str) -> PathBuf {
+    let root = std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into());
+    PathBuf::from(root).join("System32").join(name)
+}
+
 fn stop_running_app() {
     for exe in [APP_EXE, SIDECAR_EXE] {
-        let _ = Command::new("taskkill")
+        let _ = Command::new(system_program("taskkill.exe"))
             .args(["/F", "/T", "/IM", exe])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
