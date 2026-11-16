@@ -114,6 +114,31 @@ def test_target_above_the_characters_max_is_accepted_at_the_cap(capsys):
     assert "capped gravity at 80G" in capsys.readouterr().out
 
 
+def test_max_types_the_highest_value_and_takes_the_games_cap(capsys):
+    # Live: a number above the character's max comes back as that max (500G here).
+    game = FakeGame((True, 1), (True, 9999), (True, 500))
+    result, _sleep = run_set(game, core.GC_GRAVITY_MAX_TARGET)
+    assert result is True
+    assert game.keys == ["click", "ctrl+a", "9", "9", "9", "9", "enter", "tab", "tab"]
+    assert "Raised 1G -> 500G, this character's max" in capsys.readouterr().out
+
+
+def test_max_when_already_at_the_cap_is_done_after_one_try(capsys):
+    game = FakeGame((True, 500), (True, 9999), (True, 500))
+    result, sleep = run_set(game, core.GC_GRAVITY_MAX_TARGET)
+    assert result is True
+    assert game.keys.count("enter") == 1
+    assert core.GRAVITY_INPUT_COOLDOWN_SEC not in [call.args[0] for call in sleep.call_args_list]
+    assert "Already at this character's max (500G)" in capsys.readouterr().out
+
+
+def test_a_target_above_100g_is_typed_as_given():
+    game = FakeGame((True, 100), (True, 275), (True, 275))
+    result, _sleep = run_set(game, 275)
+    assert result is True
+    assert game.keys[2:5] == ["2", "7", "5"]
+
+
 def test_wrong_box_text_never_presses_enter():
     # An unfocused box would send the digits to the hotbar; stop before Enter.
     game = FakeGame((True, 1), (True, 10))

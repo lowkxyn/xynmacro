@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import './theme-state.js';
+import '../src/theme-state.js';
 const {safeOverrides, normalizeTheme} = globalThis.XynMacroTheme;
 
 test('theme overrides accept only exposed colour tokens and plain colours', () => {

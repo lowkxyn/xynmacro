@@ -64,12 +64,14 @@ class GravityControlTests(unittest.TestCase):
         self.assertFalse(core._gravity_advance_is_safe(100, 0, 100))
         self.assertFalse(core._gravity_advance_is_safe(40, 30, 100))
 
-    def test_only_real_ten_g_steps_are_accepted(self):
-        self.assertEqual(core._normalize_gravity_target(0, strict=True), 0)
-        self.assertEqual(core._normalize_gravity_target(100, strict=True), 100)
-        with self.assertRaisesRegex(ValueError, "0, 10, 20"):
-            core._normalize_gravity_target(37, strict=True)
-        self.assertEqual(core._normalize_gravity_target(37), 0)
+    def test_only_whole_numbers_up_to_the_max_marker_are_accepted(self):
+        for good in (0, 37, 100, 500, core.GC_GRAVITY_MAX_TARGET):
+            self.assertEqual(core._normalize_gravity_target(good, strict=True), good)
+        for bad in (-10, 12.5, 10000, True, "abc", None, float("nan")):
+            with self.assertRaisesRegex(ValueError, "whole number from 0 to 9999"):
+                core._normalize_gravity_target(bad, strict=True)
+            # A bad value saved by an older build means Off, never a guess.
+            self.assertEqual(core._normalize_gravity_target(bad), 0)
 
     def test_off_sends_no_input(self):
         with (

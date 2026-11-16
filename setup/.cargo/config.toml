@@ -1,0 +1,4 @@
+# Link the C runtime into the setup exe: no vcruntime140.dll to find on a fresh PC,
+# and none for Windows to pick up from the folder the setup was downloaded to.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

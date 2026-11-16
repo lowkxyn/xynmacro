@@ -24,9 +24,7 @@ a = Analysis(
         ('tpl_senzu_row_v2.png', '.'),
         ('tpl_senzu_slot_v2.png', '.'),
         ('tpl_senzu_slot_small_v2.png', '.'),
-        ('tpl_hotbar_items_v2.png', '.'),
         ('tpl_hud_labels_v2.png', '.'),
-        ('tpl_majin_transform_v2.png', '.'),
         ('tpl_majin_super_regen_v2.png', '.'),
         ('tpl_majin_transform_mask_v2.png', '.'),
         ('tpl_majin_transform_alt_mask_v2.png', '.'),
@@ -70,6 +68,9 @@ a = Analysis(
     noarchive=False,
     optimize=0,
 )
+# OpenCV's video-file reader, 28 MB. The sidecar reads screen grabs and PNG
+# templates only, and cv2 loads this DLL on demand for video files.
+a.binaries = [entry for entry in a.binaries if 'opencv_videoio_ffmpeg' not in entry[0].lower()]
 pyz = PYZ(a.pure)
 
 exe = EXE(

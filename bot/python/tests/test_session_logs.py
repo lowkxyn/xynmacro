@@ -49,6 +49,30 @@ class SessionLogTests(unittest.TestCase):
         self.assertTrue(written.endswith("\n"))
         self.assertIn("somebody", ring[0]["msg"])   # the in-app viewer keeps the raw line
 
+    def test_logs_from_older_builds_are_redacted_once(self):
+        # Builds before 2.0.6 wrote these files unredacted.
+        with tempfile.TemporaryDirectory() as logs_dir:
+            logs = Path(logs_dir)
+            old = logs / "session_2026-10-01_09-00-00_pid111.log"
+            old.write_text(r"[sidecar] Data folder: C:\Users\somebody\AppData\Roaming\xyn" + "\n",
+                           encoding="utf-8")
+            os.utime(old, (1_700_000_000, 1_700_000_000))
+            live = logs / "session_2026-11-16_09-00-00_pid222.log"
+            live.write_text(r"C:\Users\somebody\still-open" + "\n", encoding="utf-8")
+            other = logs / "notes.txt"
+            other.write_text(r"C:\Users\somebody\not-a-session-log" + "\n", encoding="utf-8")
+            with patch.dict(os.environ, {"USERPROFILE": r"C:\Users\somebody", "USERNAME": "somebody"}), \
+                    patch.object(core, "_pid_alive", side_effect=lambda pid: pid == 222):
+                core._scrub_older_session_logs(logs_dir)
+                self.assertNotIn("somebody", old.read_text(encoding="utf-8"))
+                self.assertEqual(int(old.stat().st_mtime), 1_700_000_000)   # rotation order kept
+                self.assertIn("somebody", live.read_text(encoding="utf-8"))   # its sidecar is running
+                self.assertIn("somebody", other.read_text(encoding="utf-8"))
+                # Only once: a log written unredacted after the marker is not touched again.
+                old.write_text(r"C:\Users\somebody\again" + "\n", encoding="utf-8")
+                core._scrub_older_session_logs(logs_dir)
+                self.assertIn("somebody", old.read_text(encoding="utf-8"))
+
 
 if __name__ == "__main__":
     unittest.main()

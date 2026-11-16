@@ -282,11 +282,12 @@
         <div class="row-item">
           <span class="row-label">GC Gravity Target</span>
           <div class="row-ctrl gravity-control">
-            <input type="range" class="setting-slider" id="gcGravityTarget" min="0" max="100" step="10" value="0" aria-label="GC gravity target">
             <span class="mono-badge gravity-value" id="gcGravityValue">Off</span>
+            <input type="number" class="inp" id="gcGravityTarget" min="0" max="9999" step="1" value="0" aria-label="GC gravity target" aria-describedby="gcGravityHint"><span class="unit" id="gcGravityUnit">G</span>
+            <button type="button" class="btn-sm" id="gcGravityMax" aria-pressed="false" title="Use the highest gravity this character can set">Max</button>
           </div>
         </div>
-        <div class="row-hint">GC only. Off leaves the current gravity unchanged. A 10–100G target only raises gravity; it never lowers the current value or wraps 100G back to 0G.</div>
+        <div class="row-hint" id="gcGravityHint">GC only. 0 leaves gravity as it is. A number raises gravity to that value at Start, or to your character's max if the number is higher. Max always uses the highest your character can set. Gravity is never lowered. High gravity drains HP, so turn on a healing option before using it.</div>
         <div class="row-item">
           <span class="row-label" id="togglePreventSleepLabel">Prevent PC Sleep</span>
           <div class="row-ctrl"><button type="button" class="toggle" id="togglePreventSleep" role="switch" aria-checked="false" aria-labelledby="togglePreventSleepLabel" onclick="toggleSetting('prevent_sleep_while_running',this)"></button></div>

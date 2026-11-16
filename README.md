@@ -100,8 +100,9 @@ from this repository.
 Some antivirus products also flag `XynMacro-core.exe`, the bundled Python automation engine.
 PyInstaller packaging, continuous screen capture, synthetic input, and global hotkeys are
 all normal for this macro but resemble behaviours antivirus heuristics monitor. The source
-is public here. Runtime communication stays on `127.0.0.1`; external requests are limited
-to GitHub releases and `announcements.json`.
+is public here. Runtime communication stays on `127.0.0.1`. The app itself only contacts
+GitHub (releases and `announcements.json`) and, if you add a webhook for run updates,
+Discord. Reporting a bug opens a GitHub page in your browser.
 
 ## Troubleshooting
 

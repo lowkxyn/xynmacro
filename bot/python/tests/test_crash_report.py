@@ -76,6 +76,45 @@ class TestSessionMarker:
             assert json.load(fh)["clean"] is False
 
 
+class TestMarkerLogPath:
+    """The marker is a plain file and its log tail can end up in a posted bug report,
+    so it may only name one of this app's own session logs."""
+
+    def _crash_from(self, tmp_path, log):
+        _write_marker(tmp_path, log=log)
+        with patch.object(core, "JSON_DIR", str(tmp_path)), \
+                patch.object(core, "_pid_alive", return_value=False):
+            core.PREVIOUS_SESSION_CRASH = None
+            core._claim_session_marker(None)
+        crash, core.PREVIOUS_SESSION_CRASH = core.PREVIOUS_SESSION_CRASH, None
+        return crash
+
+    def test_a_real_session_log_is_read(self, tmp_path):
+        logs = tmp_path / "logs"
+        logs.mkdir()
+        log = logs / "session_2026-11-01_10-00-00_pid4321.log"
+        log.write_text("the last line before the crash\n", encoding="utf-8")
+        crash = self._crash_from(tmp_path, str(log))
+        assert "the last line before the crash" in crash["log_tail"]
+
+    @pytest.mark.parametrize("where", ["outside", "wrong_name", "escape"])
+    def test_any_other_file_is_ignored(self, tmp_path, where):
+        logs = tmp_path / "logs"
+        logs.mkdir()
+        secret = tmp_path / "notes.txt"
+        secret.write_text("something private\n", encoding="utf-8")
+        (logs / "notes.txt").write_text("something private\n", encoding="utf-8")
+        path = {
+            "outside": str(secret),
+            "wrong_name": str(logs / "notes.txt"),
+            "escape": str(logs / ".." / "notes.txt"),
+        }[where]
+        crash = self._crash_from(tmp_path, path)
+        assert crash is not None          # the crash is still reported
+        assert crash["log"] is None
+        assert "private" not in (crash["log_tail"] or "")
+
+
 class TestCrashSection:
     def test_the_crash_section_carries_the_previous_log(self, tmp_path):
         log = os.path.join(str(tmp_path), "session_old.log")

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-await import('./screen-state.js');
+await import('../src/screen-state.js');
 
 const { normalizeScreen, needsResolutionWarning, needsDpiWarning } = globalThis.XynMacroScreenState;
 

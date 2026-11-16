@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFile } from 'node:fs/promises';
-import './theme-state.js';
-import './appearance-controls.js';
+import '../src/theme-state.js';
+import '../src/appearance-controls.js';
 
 // Minimal DOM/window doubles: the controller only needs element state, listeners and
 // the handful of canvas calls one animation frame makes.
@@ -187,8 +187,8 @@ test('theme import enforces the 64 KB cap and the validated colour tokens', asyn
 });
 
 test('main.js delegates the appearance surface to the controller loaded before it', async () => {
-  const html = await readFile(new URL('index.html', import.meta.url), 'utf8');
-  const main = await readFile(new URL('main.js', import.meta.url), 'utf8');
+  const html = await readFile(new URL('../src/index.html', import.meta.url), 'utf8');
+  const main = await readFile(new URL('../src/main.js', import.meta.url), 'utf8');
   assert.ok(html.includes('src="appearance-controls.js"'));
   assert.ok(html.indexOf('appearance-controls.js') < html.indexOf('main.js'));
   assert.equal(main.split('XynMacroAppearanceControls.create(').length - 1, 1);

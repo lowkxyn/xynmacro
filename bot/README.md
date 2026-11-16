@@ -16,7 +16,7 @@ updates. The engine detects game state and sends input through Windows APIs.
 
 ## Development
 
-Install Node.js 20+, Rust with the MSVC toolchain, and Python 3.12+.
+Install Node.js 20+, Rust with the MSVC toolchain, and Python 3.14 (releases are built with 3.14.4).
 From `bot/`, run:
 
 ```powershell

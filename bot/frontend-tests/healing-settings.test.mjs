@@ -3,8 +3,8 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { runInNewContext } from 'node:vm';
 
-const main = await readFile(new URL('./main.js', import.meta.url), 'utf8');
-const html = await readFile(new URL('./index.html', import.meta.url), 'utf8');
+const main = await readFile(new URL('../src/main.js', import.meta.url), 'utf8');
+const html = await readFile(new URL('../src/index.html', import.meta.url), 'utf8');
 
 function fixture() {
   const elements = new Map();

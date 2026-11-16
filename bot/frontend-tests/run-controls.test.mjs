@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFile } from 'node:fs/promises';
-import './shutdown-controls.js';
-import './notification-controls.js';
+import '../src/shutdown-controls.js';
+import '../src/notification-controls.js';
 
 const ids = ['shutdownBanner', 'shutdownMessage', 'cancelShutdownButton', 'hudCancelShutdown',
   'notificationStatus', 'notificationEnabled', 'notificationInterval',
@@ -31,8 +31,8 @@ const pending = { pending: true, seconds_remaining: 42 };
 const configured = { configured: true, status: 'Ready', enabled: true, progress_minutes: 15 };
 
 test('page loads both controllers before main and forwards state to their single instances', async () => {
-  const html = await readFile(new URL('index.html', import.meta.url), 'utf8');
-  const main = await readFile(new URL('main.js', import.meta.url), 'utf8');
+  const html = await readFile(new URL('../src/index.html', import.meta.url), 'utf8');
+  const main = await readFile(new URL('../src/main.js', import.meta.url), 'utf8');
   for (const [file, name, state] of [['shutdown-controls', 'Shutdown', 'shutdown'], ['notification-controls', 'Notification', 'notifications']]) {
     assert.ok(html.includes(`src="${file}.js"`));
     assert.ok(html.indexOf(`${file}.js`) < html.indexOf('main.js'));

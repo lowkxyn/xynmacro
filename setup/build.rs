@@ -19,5 +19,13 @@ fn main() {
     // "name|bytes;name|bytes" in the order NSIS writes them, for the progress bar's file names.
     let files = env::var("XYN_INSTALL_FILES").unwrap_or_default();
     println!("cargo:rustc-env=XYN_INSTALL_FILES={files}");
+    // The setup is run straight from a Downloads folder. Windows looks there first for
+    // the DLLs an exe imports, so a file planted beside it would be loaded. This limits
+    // that search to System32; the C runtime is linked in (.cargo/config.toml) so nothing
+    // it imports lives anywhere else.
+    println!("cargo:rustc-link-arg-bins=/DEPENDENTLOADFLAG:0x800");
+    if !env::var("CARGO_CFG_TARGET_FEATURE").unwrap_or_default().contains("crt-static") {
+        println!("cargo:warning=built without a static C runtime (RUSTFLAGS overrides .cargo/config.toml); do not ship this setup");
+    }
     tauri_build::build()
 }

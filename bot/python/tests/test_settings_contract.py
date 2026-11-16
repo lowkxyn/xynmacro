@@ -90,16 +90,23 @@ class SettingsContractTests(unittest.TestCase):
         load_config.assert_not_called()
 
     @patch.object(core, "save_master_config")
-    def test_gravity_steps_and_sleep_toggle_are_user_settings(self, save_config):
+    def test_gravity_target_and_sleep_toggle_are_user_settings(self, save_config):
         core._ui_apply_setting("gc_gravity_target_g", 100)
         core._ui_apply_setting("prevent_sleep_while_running", False)
 
         self.assertEqual(core.GC_GRAVITY_TARGET_G, 100)
         self.assertFalse(core.PREVENT_SLEEP_WHILE_RUNNING)
-        with self.assertRaises(ValueError):
-            core._ui_apply_setting("gc_gravity_target_g", 37)
+        # The game's number box takes any whole number; 9999 stands for the character's max.
+        core._ui_apply_setting("gc_gravity_target_g", 275.0)
+        self.assertEqual(core.GC_GRAVITY_TARGET_G, 275)
+        core._ui_apply_setting("gc_gravity_target_g", core.GC_GRAVITY_MAX_TARGET)
+        self.assertEqual(core.GC_GRAVITY_TARGET_G, 9999)
+        for bad in (-10, 10000, 12.5, "abc", None):
+            with self.assertRaises(ValueError):
+                core._ui_apply_setting("gc_gravity_target_g", bad)
+        self.assertEqual(core.GC_GRAVITY_TARGET_G, 9999)
 
-        self.assertEqual(save_config.call_count, 2)
+        self.assertEqual(save_config.call_count, 4)
 
     @patch.object(core, "save_master_config")
     def test_internal_settings_are_not_user_settable(self, save_config):

@@ -930,6 +930,24 @@ def _session_marker_path():
 PREVIOUS_SESSION_CRASH = None
 
 
+def _own_session_log(path):
+    """The marker's log path, if it really is one of this app's session logs.
+
+    The marker is a plain file, and its log tail goes into a bug report the user may
+    post. A marker copied from somewhere else must not be able to name any other file.
+    """
+    if not isinstance(path, str) or not path:
+        return None
+    try:
+        logs_dir = os.path.realpath(os.path.join(JSON_DIR, "logs"))
+        real = os.path.realpath(path)
+    except (OSError, ValueError):
+        return None
+    name = os.path.basename(real)
+    inside = os.path.normcase(os.path.dirname(real)) == os.path.normcase(logs_dir)
+    return real if inside and name.startswith("session_") and name.endswith(".log") else None
+
+
 def _claim_session_marker(log_path):
     """Record this session as in-progress and report on how the last one ended.
 
@@ -960,11 +978,12 @@ def _claim_session_marker(log_path):
     # A live PID means a second copy is running, not a crash — don't cry wolf.
     if (previous and not previous["clean"]
             and not _pid_alive(int(previous["pid"]))):
+        previous_log = _own_session_log(previous.get("log"))
         PREVIOUS_SESSION_CRASH = {
             "version": previous.get("version"),
             "started_at": previous.get("started_at"),
-            "log": previous.get("log"),
-            "log_tail": _read_log_tail(previous.get("log")),
+            "log": previous_log,
+            "log_tail": _read_log_tail(previous_log),
         }
     try:
         os.makedirs(JSON_DIR, exist_ok=True)
@@ -1020,6 +1039,37 @@ def _start_session_logging():
         print("[sidecar] The previous session ended without shutting down cleanly.")
 
 
+def _scrub_older_session_logs(logs_dir):
+    """Once: redact the session logs that builds before 2.0.6 wrote as they were.
+
+    Open logs folder hands these files out directly, and they hold the Windows user
+    name wherever a path was printed. A log whose sidecar is still running is left
+    alone; that sidecar already redacts what it writes.
+    """
+    done = os.path.join(logs_dir, ".redacted")
+    if os.path.exists(done):
+        return
+    for name in os.listdir(logs_dir):
+        match = _re.fullmatch(r"session_.*_pid(\d+)\.log", name)
+        if not match or _pid_alive(int(match.group(1))):
+            continue
+        path = os.path.join(logs_dir, name)
+        try:
+            before = os.stat(path)
+            with open(path, "r", encoding="utf-8", errors="replace") as fh:
+                text = fh.read()
+            redacted = _scrub_user_paths(text)
+            if redacted != text:
+                with open(path, "w", encoding="utf-8", newline="") as fh:
+                    fh.write(redacted)
+                # Rotation deletes the oldest files by modified time.
+                os.utime(path, (before.st_atime, before.st_mtime))
+        except Exception:
+            pass
+    with open(done, "w", encoding="utf-8") as fh:
+        fh.write("Session logs written before this file were redacted once.\n")
+
+
 def _open_session_log_file():
     """Open a new timestamped log file for this sidecar instance. Returns the file
     handle or None on failure. Old session logs are kept (rotation = newest 25)."""
@@ -1035,6 +1085,10 @@ def _open_session_log_file():
             for old in existing[:-24]:
                 try: os.remove(old)
                 except Exception: pass
+        except Exception:
+            pass
+        try:
+            _scrub_older_session_logs(logs_dir)
         except Exception:
             pass
         stamp = time.strftime("%Y-%m-%d_%H-%M-%S")
@@ -1843,7 +1897,7 @@ def focus_game_window():
     return focused
 
 
-def _windows_above_game(include_tooltips=False):
+def _windows_above_game(include_tooltips=False, include_small_overlays=False):
     import win32gui
     from ctypes import wintypes
 
@@ -1868,6 +1922,11 @@ def _windows_above_game(include_tooltips=False):
                 # Steam) span the whole screen but only draw a corner toast and take no
                 # input; live, one stopped a run as "covering Roblox".
                 click_through = bool(style & win32con.WS_EX_TRANSPARENT and style & win32con.WS_EX_LAYERED)
+                if click_through and include_small_overlays:
+                    # A screen-sized click-through window is an overlay's host and says
+                    # nothing about where it draws. A smaller one is the toast itself.
+                    left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+                    click_through = right - left >= GAME_WIDTH and bottom - top >= GAME_HEIGHT
                 # Tooltips take no input and go away by themselves. Live 2026-11-16 another
                 # program's tooltip by the parked pointer paused a Ki stat for 10 s as
                 # "covering Roblox".
@@ -5563,9 +5622,18 @@ def _points_panel_uncovered(box):
     try:
         return not any(left < x2 and right > x1 and top < y2 and bottom > y1
                        for (left, top, right, bottom), _title
-                       in _windows_above_game(include_tooltips=True))
+                       in _windows_above_game(include_tooltips=True, include_small_overlays=True))
     except Exception:
         return False
+
+
+def _points_panel_fully_read(panel, stat):
+    """Every stat's row reads, not just the one being trained: something drawn over
+    another row would otherwise ride along in the picture."""
+    if not _new_game_ui():
+        return _read_training_points(panel, stat) is not None
+    return all(_read_training_points(panel, name) is not None
+               for name in training_ui.TRAINING_POINTS_ROW_Y)
 
 
 def _capture_points_panels(sct, stat=None):
@@ -5580,6 +5648,9 @@ def _capture_points_panels(sct, stat=None):
     """
     box = training_ui.TRAINING_POINTS_BOX if _new_game_ui() else TRAINING_POINTS_BOX
     try:
+        # Looked at before the first grab and again after the last, so a window that
+        # was over the panel for any of them rules the picture out.
+        clear_before = stat is not None and _points_panel_uncovered(box)
         first = _grab_reference_box(sct, box)
         time.sleep(0.05)
         second = _grab_reference_box(sct, box)
@@ -5596,8 +5667,8 @@ def _capture_points_panels(sct, stat=None):
         # These are desktop pixels. An unreadable grab can be another window sitting
         # over Roblox, and this picture is what a Discord update attaches.
         global _LATEST_POINTS_PANEL
-        if (_GAME_COVERED_SINCE is None and _read_training_points(second, stat) is not None
-                and _points_panel_uncovered(box)):
+        if (clear_before and _GAME_COVERED_SINCE is None
+                and _points_panel_fully_read(second, stat) and _points_panel_uncovered(box)):
             _LATEST_POINTS_PANEL = second
         return [first, second]
     except Exception as error:
@@ -6265,19 +6336,32 @@ def detect_training_menu(sct, monitor, template):
     return score >= TRAINING_MENU_MATCH_THRESHOLD, float(score)
 
 
+# The GC number box takes any whole number and caps it at the character's own
+# max, which differs per character. This value means "whatever that max is".
+GC_GRAVITY_MAX_TARGET = 9999
+
+
 def _normalize_gravity_target(value, *, strict=False):
-    """Accept only the real GC steps. Invalid persisted values safely mean Off."""
+    """0 is Off, 9999 is the character's max. Invalid persisted values safely mean Off."""
     try:
-        number = _finite_int(value)
+        number = float(value)
+        # No clamping or rounding: -10 or 12.5 is a mistake, not a gravity.
+        if isinstance(value, bool) or not math.isfinite(number) or number != int(number):
+            raise ValueError
+        number = int(number)
     except (TypeError, ValueError, OverflowError):
         if strict:
-            raise ValueError("GC gravity must be 0, 10, 20, ... 100")
+            raise ValueError("GC gravity must be a whole number from 0 to 9999")
         return 0
-    if number not in range(0, 101, 10):
+    if not 0 <= number <= GC_GRAVITY_MAX_TARGET:
         if strict:
-            raise ValueError("GC gravity must be 0, 10, 20, ... 100")
+            raise ValueError("GC gravity must be a whole number from 0 to 9999")
         return 0
     return number
+
+
+def _gravity_target_label(target):
+    return "this character's max" if target >= GC_GRAVITY_MAX_TARGET else f"{target}G"
 
 
 def _normalize_after_run_game_action(value, *, strict=False):
@@ -6557,6 +6641,7 @@ def _set_gc_gravity_by_input(sct, geometry, target, *, after_run=False):
         print("[GRAVITY] Gravity box found but its number was unreadable; leaving it unchanged")
         return False
     lowering = target == 0
+    wants_max = target >= GC_GRAVITY_MAX_TARGET
     if lowering and current <= GRAVITY_INPUT_MIN_G:
         print(f"[GRAVITY] Gravity is already at the lowest ({current}G)")
         return True
@@ -6581,6 +6666,15 @@ def _set_gc_gravity_by_input(sct, geometry, target, *, after_run=False):
         if not lowering and shown >= target:
             print(f"[GRAVITY] Raised {current}G -> {shown}G in "
                   f"{time.monotonic() - started:.1f}s; target confirmed")
+            return True
+        if wants_max and shown >= current:
+            # The game caps what was typed at the character's max. The same number
+            # back means it was there already.
+            if shown > current:
+                print(f"[GRAVITY] Raised {current}G -> {shown}G, this character's max, "
+                      f"in {time.monotonic() - started:.1f}s")
+            else:
+                print(f"[GRAVITY] Already at this character's max ({shown}G); no change")
             return True
         if not lowering and shown > current:
             print(f"[GRAVITY] The game capped gravity at {shown}G (below the {target}G "
@@ -6626,16 +6720,19 @@ def _raise_gc_gravity(sct, geometry, target):
                 # A raise never lowers, so a failed one leaves a gravity the character
                 # already had. Cancelling Start here would lock out anyone whose
                 # screen the box can't be read on, or who is already at their max.
-                print(f"[GRAVITY] Gravity was not raised to {target}G; training "
-                      "continues at the current gravity")
+                print(f"[GRAVITY] Gravity was not raised to {_gravity_target_label(target)}; "
+                      "training continues at the current gravity")
             return True
     if not control_present:
         if _new_game_ui() and _gc_room_confirmed(sct, geometry):
             print(f"[GRAVITY] The GC gravity box was not found, so gravity was not "
-                  f"raised to {target}G; training continues at the current gravity")
+                  f"raised to {_gravity_target_label(target)}; training continues at "
+                  "the current gravity")
             return True
         print("[GRAVITY] GC control not found; leaving gravity unchanged")
         return True
+    # The old click-to-cycle button stopped at 100G.
+    target = min(target, 100)
     if current is None:
         print(
             "[GRAVITY] GC control is present but its value was not reliable "

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-await import('./update-state.js');
+await import('../src/update-state.js');
 
 const { reminderDecision } = globalThis.XynMacroUpdateState;
 

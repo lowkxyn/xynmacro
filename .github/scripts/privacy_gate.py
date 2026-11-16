@@ -371,6 +371,11 @@ def load_allow_list(path):
     return allowed
 
 
+def _public_log():
+    """True in a GitHub Actions run, whose log anyone can read for a public repo."""
+    return os.environ.get("GITHUB_ACTIONS") == "true"
+
+
 def _apply_allow(findings, start, rel, digest, allowed, notes):
     """Downgrade this file's BLOCK findings that the allow list pins to its exact bytes."""
     for index in range(start, len(findings)):
@@ -381,7 +386,8 @@ def _apply_allow(findings, start, rel, digest, allowed, notes):
         if pinned == digest:
             findings[index] = ("ALLOWED", label, where, line)
         else:
-            notes.add(f"allow entry no longer matches the file, still blocking: {rel} {label}")
+            notes.add("an allow entry no longer matches its file, still blocking" if _public_log()
+                      else f"allow entry no longer matches the file, still blocking: {rel} {label}")
 
 
 def scan_worktree(root, identifiers, allowed=None):
@@ -408,8 +414,9 @@ def scan_worktree(root, identifiers, allowed=None):
                 _apply_allow(findings, start, rel, hashlib.sha256(data).hexdigest(),
                              allowed, notes)
                 used.update(key for key in allowed if key[0] == rel)
-    for rel, label in sorted(set(allowed or ()) - used):
-        notes.add(f"allow entry matched nothing: {rel} {label}")
+    unused = len(set(allowed or ()) - used)
+    if unused:
+        notes.add(f"{unused} allow entries matched nothing")
     for note in sorted(notes):
         print(f"note: {note}")
     return findings
@@ -439,6 +446,19 @@ def main(argv=None):
         if finding not in seen:
             seen.add(finding)
             severity, label, where, line = finding
+            # This output lands in public build logs. Where a pinned third-party hit
+            # sits would point at the very text the pin exists to keep quiet, so
+            # allowed hits are only counted.
+            if severity == "ALLOWED":
+                continue
+            if _public_log() and label.startswith("identifier:"):
+                # File and line of a private identifier would publish where it is.
+                withheld = (severity, label)
+                if withheld not in seen:
+                    seen.add(withheld)
+                    print(f"{severity}  {label}  (location withheld in a public log; "
+                          "run the gate locally to see it)")
+                continue
             print(f"{severity}  {label}  {where}:{line}")
     blocked = any(s == "BLOCK" or (args.strict and s == "REVIEW") for s, *_ in findings)
     allowed_count = sum(s == "ALLOWED" for s, *_ in findings)

@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 
-const viewer = readFileSync(new URL('./log-viewer.js', import.meta.url), 'utf8');
-const main = readFileSync(new URL('./main.js', import.meta.url), 'utf8');
+const viewer = readFileSync(new URL('../src/log-viewer.js', import.meta.url), 'utf8');
+const main = readFileSync(new URL('../src/main.js', import.meta.url), 'utf8');
 
 test('Copy Log uses the backend redaction instead of raw viewer text', () => {
   assert.match(viewer, /path: '\/copy_log'/);

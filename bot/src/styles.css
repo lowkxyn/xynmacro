@@ -166,7 +166,9 @@ html,body{background:transparent}
   transition:box-shadow .15s ease}
 .bg-slider:hover::-webkit-slider-thumb,.setting-slider:hover::-webkit-slider-thumb{box-shadow:0 0 0 4px color-mix(in srgb,var(--accent) 26%, transparent),0 1px 3px rgba(0,0,0,.4)}
 .bg-slider:focus-visible,.setting-slider:focus-visible{box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 22%,transparent);border-color:var(--accent)}
-.gravity-control{min-width:235px}
+.gravity-control .inp{width:84px}
+.gravity-control [hidden]{display:none}
+.btn-sm[aria-pressed="true"]{border-color:var(--accent);color:var(--accent);background:color-mix(in srgb,var(--accent) 14%,transparent)}
 .gravity-value{min-width:54px;text-align:center}
 
 /* Mesh: a slowly rotating multi-colour conic gradient — a soft swirl, distinct from Aurora. */

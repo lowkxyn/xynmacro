@@ -1461,18 +1461,41 @@ window.wcCompact = () => {
     return el.value;
   }
 
+  // The game caps a typed gravity at the character's own max, so the highest
+  // value the setting takes stands for "max".
+  const GRAVITY_MAX_TARGET = 9999;
+
   function _renderGravityValue(value) {
     const badge = document.getElementById('gcGravityValue');
     if (!badge) return;
     const gravity = Number(value) || 0;
-    badge.textContent = gravity === 0 ? 'Off' : `${gravity}G`;
+    const isMax = gravity >= GRAVITY_MAX_TARGET;
+    // The box already shows a number, so the badge only says Off; with Max on,
+    // the pressed button says it and the marker value stays out of sight.
+    badge.hidden = gravity !== 0;
+    const maxButton = document.getElementById('gcGravityMax');
+    if (maxButton) maxButton.setAttribute('aria-pressed', String(isMax));
+    for (const id of ['gcGravityTarget', 'gcGravityUnit']) {
+      const el = document.getElementById(id);
+      if (el) el.hidden = isMax;
+    }
   }
 
-  function _setupGravitySlider() {
-    const slider = document.getElementById('gcGravityTarget');
-    if (!slider) return;
-    slider.addEventListener('input', () => _renderGravityValue(slider.value));
-    _renderGravityValue(slider.value);
+  function _setupGravityControl() {
+    const input = document.getElementById('gcGravityTarget');
+    const maxButton = document.getElementById('gcGravityMax');
+    if (!input) return;
+    input.addEventListener('input', () => _renderGravityValue(input.value));
+    if (maxButton) {
+      maxButton.addEventListener('click', () => {
+        const turnOn = maxButton.getAttribute('aria-pressed') !== 'true';
+        input.value = turnOn ? String(GRAVITY_MAX_TARGET) : '0';
+        _renderGravityValue(input.value);
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+      });
+    }
+    _renderGravityValue(input.value);
   }
 
   function _queueFieldSave(el, save) {
@@ -2395,7 +2418,7 @@ window.wcCompact = () => {
     return task;
   };
 
-  _setupGravitySlider();
+  _setupGravityControl();
   _setupAutoSave();
   _syncAfterRunControls();
   settingControls.sync();
@@ -2715,6 +2738,19 @@ window.wcCompact = () => {
 
   // What's-new content, newest first. Each entry: {version, notes:[{h, items[]}]}.
   const CHANGELOG = [
+    { version: '2.0.8', notes: [
+      { h: "Changes", items: [
+        "GC Gravity Target takes any whole number now, with a Max button that uses the highest gravity your character can set. It used to stop at 100G. High gravity drains HP, so turn on a healing option first.",
+        "The download is about 11 MB smaller.",
+      ] },
+      { h: "Security and privacy", items: [
+        "A first install on a PC without WebView2 no longer downloads it during setup. The installer carries Microsoft's own installer for it.",
+        "The setup program no longer loads DLLs from the folder it was downloaded to.",
+        "Log files written by older versions are cleaned of your Windows user name the first time this version starts.",
+        "The progress picture sent to Discord is left out if anything else is drawn over the panel.",
+        "The crash section of a bug report can only read XynMacro's own log files.",
+      ] },
+    ] },
     { version: '2.0.7', notes: [
       { h: "Fixes", items: [
         "GC gravity is set again. The game replaced the gravity button with a number box, so the Gravity Target and the after-run 0G action did nothing. The macro now types the value and checks it. If it can't, training carries on at the gravity you already have.",

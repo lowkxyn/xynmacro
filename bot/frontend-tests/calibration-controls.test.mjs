@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import './calibration-controls.js';
+import '../src/calibration-controls.js';
 
 test('calibration keeps command payloads and user messages', async () => {
   const commands = [];

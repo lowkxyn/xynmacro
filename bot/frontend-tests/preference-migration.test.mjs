@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import vm from 'node:vm';
 
-const source = await readFile(new URL('./preference-migration.js', import.meta.url), 'utf8');
+const source = await readFile(new URL('../src/preference-migration.js', import.meta.url), 'utf8');
 const context = {};
 vm.createContext(context);
 vm.runInContext(source, context);

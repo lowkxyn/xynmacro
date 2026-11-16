@@ -3,6 +3,19 @@
 All notable changes to XynMacro. This file is generated from the in-app
 "What's new" notes by `scripts/changelog.mjs` — edit those, not this file.
 
+## 2.0.8
+
+### Changes
+- GC Gravity Target takes any whole number now, with a Max button that uses the highest gravity your character can set. It used to stop at 100G. High gravity drains HP, so turn on a healing option first.
+- The download is about 11 MB smaller.
+
+### Security and privacy
+- A first install on a PC without WebView2 no longer downloads it during setup. The installer carries Microsoft's own installer for it.
+- The setup program no longer loads DLLs from the folder it was downloaded to.
+- Log files written by older versions are cleaned of your Windows user name the first time this version starts.
+- The progress picture sent to Discord is left out if anything else is drawn over the panel.
+- The crash section of a bug report can only read XynMacro's own log files.
+
 ## 2.0.7
 
 ### Fixes

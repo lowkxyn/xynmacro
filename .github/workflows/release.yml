@@ -151,12 +151,11 @@ jobs:
         working-directory: bot
         run: npm ci
 
-      - name: Verify updater signing keypair
+      - name: Sign a probe with the updater key
         shell: pwsh
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          TAURI_UPDATER_PUBLIC_KEY: ${{ vars.TAURI_UPDATER_PUBLIC_KEY }}
         run: |
           $probe = Join-Path $env:RUNNER_TEMP 'xynmacro-updater-key-check.bin'
           [IO.File]::WriteAllText($probe, 'XynMacro updater key agreement check')
@@ -167,7 +166,17 @@ jobs:
           } finally {
             Pop-Location
           }
+
+      # Python runs every installed package's start-up hooks, and those packages are
+      # not pinned by hash, so this step is given the public key only.
+      - name: Verify the probe against the public updater key
+        shell: pwsh
+        env:
+          TAURI_UPDATER_PUBLIC_KEY: ${{ vars.TAURI_UPDATER_PUBLIC_KEY }}
+        run: |
+          $probe = Join-Path $env:RUNNER_TEMP 'xynmacro-updater-key-check.bin'
           python .github/scripts/verify_updater_keypair.py $probe "$probe.sig"
+          if ($LASTEXITCODE -ne 0) { throw 'The updater signing key does not match the public key.' }
 
       - name: Test updater signature validation
         run: python -B -m unittest discover -s .github/scripts -p 'test_*.py'
@@ -181,6 +190,7 @@ jobs:
         run: |
           cargo install cargo-audit --locked --version 0.22.2
           cargo audit --file Cargo.lock
+          cargo audit --file ../../setup/Cargo.lock
 
       - name: Audit Python dependencies
         run: python -m pip_audit -r bot/python/requirements.txt
@@ -261,6 +271,14 @@ jobs:
           $scan = Join-Path $env:RUNNER_TEMP 'installer-scan'
           7z x -y "-o$scan/installer" $installer.FullName | Out-Null
           if ($LASTEXITCODE -ne 0) { throw 'Could not unpack the installer.' }
+          # A PC without the WebView2 runtime gets it from the bootstrapper carried in
+          # the installer; downloading it at install time would use plain HTTP.
+          $bootstrapper = Get-ChildItem "$scan/installer" -Recurse -Filter 'MicrosoftEdgeWebview2Setup.exe' | Select-Object -First 1
+          if ($null -eq $bootstrapper) { throw 'The installer does not carry the WebView2 bootstrapper.' }
+          $bootstrapperSignature = Get-AuthenticodeSignature -LiteralPath $bootstrapper.FullName
+          if ($bootstrapperSignature.Status -ne 'Valid' -or $bootstrapperSignature.SignerCertificate.Subject -notlike 'CN=Microsoft Corporation,*') {
+            throw 'The WebView2 bootstrapper in the installer is not signed by Microsoft.'
+          }
           $sidecar = Get-ChildItem "$scan/installer" -Filter 'XynMacro-core*.exe' | Select-Object -First 1
           if ($null -eq $sidecar) { throw 'The installer does not contain the sidecar.' }
           python .github/scripts/unpack_sidecar.py $sidecar.FullName "$scan/sidecar"
@@ -319,10 +337,34 @@ jobs:
           } finally {
             Remove-Item -LiteralPath $list -Force -ErrorAction SilentlyContinue
           }
-          $hash = (Get-FileHash $setup.FullName -Algorithm SHA256).Hash.ToLower()
-          "$hash  $($setup.Name)" | Out-File -Encoding ascii "$($setup.FullName).sha256"
-          gh release upload '${{ steps.release.outputs.tag }}' $setup.FullName "$($setup.FullName).sha256" --repo '${{ github.repository }}' --clobber
+          gh release upload '${{ steps.release.outputs.tag }}' $setup.FullName --repo '${{ github.repository }}' --clobber
           if ($LASTEXITCODE -ne 0) { throw 'Could not attach the branded setup to the draft release.' }
+
+      # tauri-action writes API asset URLs into latest.json. Installed apps download from
+      # the public release URL, and the published files are never edited by hand afterwards.
+      - name: Point the updater manifest at the public download URL
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = '${{ steps.release.outputs.tag }}'
+          $repo = '${{ github.repository }}'
+          $work = Join-Path $env:RUNNER_TEMP 'updater-manifest'
+          New-Item -ItemType Directory -Force $work | Out-Null
+          gh release download $tag --repo $repo --pattern latest.json --dir $work --clobber
+          if ($LASTEXITCODE -ne 0) { throw 'The draft release has no latest.json.' }
+          $installers = @(gh release view $tag --repo $repo --json assets --jq '.assets[].name | select(endswith("-setup.exe"))')
+          if ($LASTEXITCODE -ne 0 -or $installers.Count -ne 1) { throw "Expected one NSIS installer on the release, found $($installers.Count)." }
+          $url = "https://github.com/$repo/releases/download/$tag/$($installers[0])"
+          $path = Join-Path $work 'latest.json'
+          $text = [IO.File]::ReadAllText($path)
+          # Only the url values change; the signature and everything else stay byte for byte.
+          $pattern = '"url"\s*:\s*"[^"]*"'
+          if (-not [regex]::IsMatch($text, $pattern)) { throw 'latest.json has no download URL to replace.' }
+          $text = [regex]::Replace($text, $pattern, { '"url": "' + $url + '"' })
+          [IO.File]::WriteAllText($path, $text)
+          gh release upload $tag $path --repo $repo --clobber
+          if ($LASTEXITCODE -ne 0) { throw 'Could not replace latest.json on the draft release.' }
 
       - name: Publish the release
         shell: pwsh
@@ -347,7 +389,11 @@ jobs:
           $version = '${{ steps.release.outputs.version }}'
           if ($manifest.version -ne $version) { throw "latest.json is for $($manifest.version), not $version." }
           $productName = if ('${{ steps.release.outputs.prerelease }}' -eq 'true') { 'XynMacro Beta' } else { 'XynMacro' }
+          $download = 'https://github.com/${{ github.repository }}/releases/download/${{ steps.release.outputs.tag }}/'
           foreach ($platform in $manifest.platforms.PSObject.Properties) {
+            if (-not "$($platform.Value.url)".StartsWith($download)) {
+              throw "$($platform.Name) downloads from '$($platform.Value.url)', not this release."
+            }
             $signature = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($platform.Value.signature))
             $trusted = ($signature -split "`n" | Where-Object { $_ -like 'trusted comment: *' } | Select-Object -First 1)
             $signedFile = ($trusted -split "`t" | Where-Object { $_ -like 'file:*' } | Select-Object -First 1)
@@ -378,17 +424,3 @@ jobs:
           gh release upload beta-feed (Join-Path '${{ steps.manifest.outputs.feed_dir }}' 'latest.json') --repo $repo --clobber
           if ($LASTEXITCODE -ne 0) { throw 'Could not upload latest.json to beta-feed.' }
 
-      - name: Generate installer SHA256 checksum
-        shell: pwsh
-        working-directory: bot/src-tauri/target/release/bundle/nsis
-        run: |
-          $exe = Get-ChildItem -Filter *-setup.exe | Select-Object -First 1
-          if ($null -eq $exe) { throw 'NSIS installer was not produced.' }
-          $hash = (Get-FileHash $exe.FullName -Algorithm SHA256).Hash.ToLower()
-          "$hash  $($exe.Name)" | Out-File -Encoding ascii "$($exe.Name).sha256"
-
-      - name: Upload installer checksum
-        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
-        with:
-          tag_name: ${{ steps.release.outputs.tag }}
-          files: bot/src-tauri/target/release/bundle/nsis/*-setup.exe.sha256

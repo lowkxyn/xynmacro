@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import unittest.mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import privacy_gate  # noqa: E402
@@ -52,9 +53,11 @@ class GateTest(unittest.TestCase):
         with open(self.ids, "w", encoding="utf-8") as fh:
             fh.write(text)
 
-    def run_gate(self, *args):
+    def run_gate(self, *args, public_log=False):
         out = io.StringIO()
-        with contextlib.redirect_stdout(out):
+        # The release workflow runs these tests too; pin the mode instead of inheriting it.
+        mode = {"GITHUB_ACTIONS": "true" if public_log else "false"}
+        with unittest.mock.patch.dict(os.environ, mode), contextlib.redirect_stdout(out):
             code = privacy_gate.main(["--identifiers", self.ids, *args])
         return code, out.getvalue()
 
@@ -325,9 +328,28 @@ class TestAllowList(GateTest):
         self.write_allow(self.pin("credential:url-password"), self.pin("identifier:term"))
         code, output = self.run_gate("--worktree", self.root, "--allow", self.allow)
         self.assertEqual(code, 0, output)
-        self.assertIn("ALLOWED  credential:url-password", output)
+        # Counted, never located: this output is public in the build log.
+        self.assertNotIn("ALLOWED", output)
+        self.assertNotIn("lib/vendor.txt", output)
+        self.assertIn("3 allowed by pinned hash", output)
         self.assertIn("0 blocking", output)
         self.assert_never_printed(output)
+
+    def test_a_public_log_never_says_where_an_identifier_is(self):
+        # A pin that stopped matching blocks again. In a public build log that must not
+        # print the file and line of the private text, or which file the pin was for.
+        self.write_allow(self.pin("credential:url-password"),
+                         self.pin("identifier:term", data=b"other bytes"))
+        code, output = self.run_gate("--worktree", self.root, "--allow", self.allow, public_log=True)
+        self.assertEqual(code, 1)
+        self.assertIn("BLOCK  identifier:term  (location withheld", output)
+        self.assertNotIn("lib/vendor.txt", output)
+        self.assertIn("an allow entry no longer matches its file", output)
+        self.assert_never_printed(output)
+        # The same run on the author's PC still shows where to look.
+        code, output = self.run_gate("--worktree", self.root, "--allow", self.allow)
+        self.assertEqual(code, 1)
+        self.assertIn("lib/vendor.txt", output)
 
     def test_changed_bytes_block_again(self):
         self.write_allow(self.pin("credential:url-password"), self.pin("identifier:term"))
@@ -355,7 +377,8 @@ class TestAllowList(GateTest):
                          self.pin("credential:private-key", path="lib/gone.txt"))
         code, output = self.run_gate("--worktree", self.root, "--allow", self.allow)
         self.assertEqual(code, 0)
-        self.assertIn("matched nothing: lib/gone.txt", output)
+        self.assertIn("1 allow entries matched nothing", output)
+        self.assertNotIn("lib/gone.txt", output)
 
     def test_malformed_allow_line_stops(self):
         self.write_allow("not-a-hash  identifier:term  lib/vendor.txt")

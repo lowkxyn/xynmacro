@@ -460,7 +460,7 @@ fn python_dir(app: &AppHandle) -> PathBuf {
 
 /// Writable runtime dir for port file, config, saved logs.
 /// Dev: same as python_dir (so the existing flow Just Works).
-/// Prod: app-data dir (e.g. %LOCALAPPDATA%/com.htcgc.xyn/). Created on demand.
+/// Prod: app-data dir (e.g. %APPDATA%/com.htcgc.xyn/). Created on demand.
 fn data_dir(app: &AppHandle) -> PathBuf {
     #[cfg(debug_assertions)]
     {

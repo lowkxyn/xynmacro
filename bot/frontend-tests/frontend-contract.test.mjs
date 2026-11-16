@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { runInNewContext } from 'node:vm';
 
-const sourceRoot = new URL('./', import.meta.url);
+const sourceRoot = new URL('../src/', import.meta.url);
 const repoRoot = new URL('../../', import.meta.url);
 
 const [html, main, hudHtml, hudMain, styles, readme, packageText, tauriConfText] = await Promise.all([
@@ -678,7 +678,7 @@ test('the crash notice waits to be seen instead of fading', () => {
 });
 
 test('state recovery clears only its own backend-lost bar', async () => {
-  const source = await readFile(new URL('main.js', import.meta.url), 'utf8');
+  const source = await readFile(new URL('../src/main.js', import.meta.url), 'utf8');
   const start = source.indexOf('  let _pollBusy = false;');
   const end = source.indexOf('  let _frontendRefreshTask = null;', start);
   assert.ok(start >= 0 && end > start);
@@ -754,7 +754,7 @@ test('state recovery clears only its own backend-lost bar', async () => {
 });
 
 test('a successful state poll preserves an unrelated startup error bar', async () => {
-  const source = await readFile(new URL('main.js', import.meta.url), 'utf8');
+  const source = await readFile(new URL('../src/main.js', import.meta.url), 'utf8');
   const start = source.indexOf('  let _pollBusy = false;');
   const end = source.indexOf('  let _frontendRefreshTask = null;', start);
   let removed = false;
@@ -878,7 +878,7 @@ test('folder selection disables the button and suppresses duplicate invokes unti
 });
 
 test('a scale change during DPI confirmation requires acceptance of the new scale', async () => {
-  await import('./screen-state.js');
+  await import('../src/screen-state.js');
   const normalize = globalThis.XynMacroScreenState.normalizeScreen;
   const screen = scale => normalize({ device: 'DISPLAY1', width: 1920, height: 1080, scale });
   const start = main.indexOf('      while (XynMacroScreenState.needsDpiWarning');
