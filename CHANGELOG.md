@@ -3,7 +3,7 @@
 All notable changes to XynMacro. This file is generated from the in-app
 "What's new" notes by `scripts/changelog.mjs` — edit those, not this file.
 
-## 2.0.6
+## 2.0.7
 
 ### Fixes
 - GC gravity is set again. The game replaced the gravity button with a number box, so the Gravity Target and the after-run 0G action did nothing. The macro now types the value and checks it. If it can't, training carries on at the gravity you already have.
@@ -18,6 +18,7 @@ All notable changes to XynMacro. This file is generated from the in-app
 - The Dashboard shows how the last run ended, with a button to open the log.
 - Settings for the old game layout are hidden, and Diagnostics shows the log first.
 - Log files in the logs folder no longer contain your Windows user name.
+- Updated a network library that had a new security advisory.
 
 ## 2.0.5
 

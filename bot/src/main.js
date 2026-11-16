@@ -2715,7 +2715,7 @@ window.wcCompact = () => {
 
   // What's-new content, newest first. Each entry: {version, notes:[{h, items[]}]}.
   const CHANGELOG = [
-    { version: '2.0.6', notes: [
+    { version: '2.0.7', notes: [
       { h: "Fixes", items: [
         "GC gravity is set again. The game replaced the gravity button with a number box, so the Gravity Target and the after-run 0G action did nothing. The macro now types the value and checks it. If it can't, training carries on at the gravity you already have.",
         "Auto-Senzu on slower PCs: a slot that is slow to redraw after eating no longer counts as a stuck bean (that reset the character), and a slow item list no longer reads as \"no Senzu left\".",
@@ -2729,6 +2729,7 @@ window.wcCompact = () => {
         "The Dashboard shows how the last run ended, with a button to open the log.",
         "Settings for the old game layout are hidden, and Diagnostics shows the log first.",
         "Log files in the logs folder no longer contain your Windows user name.",
+        "Updated a network library that had a new security advisory.",
       ] },
     ] },
     { version: '2.0.5', notes: [
