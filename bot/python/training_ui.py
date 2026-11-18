@@ -312,11 +312,13 @@ _PANEL_TITLE_MIN = 0.60
 _title_masks = {}
 
 
-def _panel_title_is(panel, *names):
+def _panel_title_score(panel, *names):
+    """Best match of the panel's bright title text against the named masks (0 when none)."""
     text = (cv2.cvtColor(crop(panel, _PANEL_TITLE_BOX)[:, :, :3], cv2.COLOR_BGR2GRAY) > 140)
     text = text.astype(np.uint8) * 255
     if not text.any():
-        return False
+        return 0.0
+    best = 0.0
     for name in names:
         if name not in _title_masks:
             _title_masks[name] = cv2.imread(os.path.join(BASE_DIR, name), cv2.IMREAD_GRAYSCALE)
@@ -324,9 +326,14 @@ def _panel_title_is(panel, *names):
         if template is None or template.shape[0] > text.shape[0] or template.shape[1] > text.shape[1]:
             continue
         scores = np.nan_to_num(cv2.matchTemplate(text, template, cv2.TM_CCOEFF_NORMED))
-        if float(scores.max()) >= _PANEL_TITLE_MIN:
-            return True
-    return False
+        best = max(best, float(scores.max()))
+        if best >= _PANEL_TITLE_MIN:
+            break
+    return best
+
+
+def _panel_title_is(panel, *names):
+    return _panel_title_score(panel, *names) >= _PANEL_TITLE_MIN
 
 
 class MajinTransform:
@@ -471,8 +478,12 @@ class SenzuMenus:
 
     @classmethod
     def hotbar_visible(cls, frame):
-        return _panel_title_is(crop(frame, cls.HOTBAR_BOX), "tpl_hotbar_items_mask_v2.png",
-                               "tpl_hotbar_items_small_mask_v2.png")
+        return cls.hotbar_title_score(frame) >= _PANEL_TITLE_MIN
+
+    @classmethod
+    def hotbar_title_score(cls, frame):
+        return _panel_title_score(crop(frame, cls.HOTBAR_BOX), "tpl_hotbar_items_mask_v2.png",
+                                  "tpl_hotbar_items_small_mask_v2.png")
 
     @classmethod
     def hotbar_slot_has_senzu(cls, frame, slot):

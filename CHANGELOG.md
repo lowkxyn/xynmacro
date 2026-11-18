@@ -3,6 +3,11 @@
 All notable changes to XynMacro. This file is generated from the in-app
 "What's new" notes by `scripts/changelog.mjs` — edit those, not this file.
 
+## 2.0.10
+
+### Fixes
+- Auto-Senzu waits longer for the Items list (H) and presses H once more if it doesn't show, instead of stopping the run. On a slow PC the list could open too late for the macro.
+
 ## 2.0.9
 
 ### Changes

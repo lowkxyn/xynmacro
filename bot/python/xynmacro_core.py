@@ -615,6 +615,9 @@ SENZU_STUCK_RESET_LIMIT = 1
 # Longest wait for the eaten bean to leave the H-list slot. A slow PC redraws
 # late; a shorter limit called a normal eat "stuck" and reset the character.
 SENZU_V2_EAT_CONFIRM_SEC = 2.5
+# Longest wait for the Items list to show after H. 0.8 s stopped a user's run
+# with "Items list (H) not confirmed"; a second H follows only if it never shows.
+SENZU_HOTBAR_OPEN_SEC = 1.5
 # Mean grey change in the Items list that counts as the list having scrolled.
 SENZU_LIST_MOVE_MIN = 2.0
 # How long a scrolled list may show nothing new before it counts as "did not
@@ -3768,12 +3771,23 @@ def _refill_senzu_slot_v2(sct, slot):
 def _hotbar_slot_loaded(sct, slot):
     """Open the H list if needed and report whether the Senzu slot is loaded."""
     menus = training_ui.SenzuMenus
-    if not menus.hotbar_visible(_client_frame(sct)):
+    for attempt in (1, 2):
+        # Checked again before the second H: a list that opened late would be
+        # closed by it.
+        if menus.hotbar_visible(_client_frame(sct)):
+            break
         if not _focus_game_for_senzu():
             return None
         _tap_key_unchecked("h")
-        if not _wait_for_frame(sct, menus.hotbar_visible, timeout=0.8):
+        if _wait_for_frame(sct, menus.hotbar_visible, timeout=SENZU_HOTBAR_OPEN_SEC):
+            break
+        if _senzu_abort_requested():
             return None
+        score = menus.hotbar_title_score(_client_frame(sct))
+        print(f"[SENZU] Items list (H) not seen after H (try {attempt}/2, title match {score:.2f}, "
+              f"window {GAME_WIDTH}x{GAME_HEIGHT})")
+    else:
+        return None
     return _wait_for_frame(sct, lambda frame: menus.hotbar_slot_has_senzu(frame, slot),
                            timeout=0.7)
 

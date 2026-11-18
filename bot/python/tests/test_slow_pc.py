@@ -495,3 +495,39 @@ def test_quick_pc_with_a_slow_game_redraw_still_finds_senzu(monkeypatch, clock):
     result, _took = _refill_with(monkeypatch, clock, items_list)
     assert result is True
     assert core.SENZU_STATUS == "ready"
+
+
+# --- The Items list (H) can open late or miss the first H ----------------------
+
+def test_hotbar_open_waits_for_a_slow_list(clock):
+    menus = core.training_ui.SenzuMenus
+    pressed = []
+    with patch.object(core, "_focus_game_for_senzu", return_value=True), \
+         patch.object(core, "_tap_key_unchecked", side_effect=lambda key: pressed.append(clock.now)), \
+         patch.object(menus, "hotbar_visible", side_effect=lambda frame: bool(pressed) and frame - pressed[0] >= 1.0), \
+         patch.object(menus, "hotbar_slot_has_senzu", return_value=True):
+        assert core._hotbar_slot_loaded(None, 1) is True
+    assert len(pressed) == 1
+
+
+def test_hotbar_open_presses_h_again_when_the_first_is_lost(clock):
+    menus = core.training_ui.SenzuMenus
+    pressed = []
+    with patch.object(core, "_focus_game_for_senzu", return_value=True), \
+         patch.object(core, "_tap_key_unchecked", side_effect=lambda key: pressed.append(clock.now)), \
+         patch.object(menus, "hotbar_visible", side_effect=lambda frame: len(pressed) >= 2), \
+         patch.object(menus, "hotbar_title_score", return_value=0.1), \
+         patch.object(menus, "hotbar_slot_has_senzu", return_value=False):
+        assert core._hotbar_slot_loaded(None, 1) is False
+    assert len(pressed) == 2
+
+
+def test_hotbar_open_gives_up_after_two_h(clock):
+    menus = core.training_ui.SenzuMenus
+    pressed = []
+    with patch.object(core, "_focus_game_for_senzu", return_value=True), \
+         patch.object(core, "_tap_key_unchecked", side_effect=lambda key: pressed.append(key)), \
+         patch.object(menus, "hotbar_visible", return_value=False), \
+         patch.object(menus, "hotbar_title_score", return_value=0.0):
+        assert core._hotbar_slot_loaded(None, 1) is None
+    assert pressed == ["h", "h"]

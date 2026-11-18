@@ -2797,6 +2797,11 @@ window.wcCompact = () => {
 
   // What's-new content, newest first. Each entry: {version, notes:[{h, items[]}]}.
   const CHANGELOG = [
+    { version: '2.0.10', notes: [
+      { h: "Fixes", items: [
+        "Auto-Senzu waits longer for the Items list (H) and presses H once more if it doesn't show, instead of stopping the run. On a slow PC the list could open too late for the macro.",
+      ] },
+    ] },
     { version: '2.0.9', notes: [
       { h: "Changes", items: [
         "The pages now have a scrollbar on the right. Drag it, or click above or below it to jump a screen at a time, so you're not stuck with the mouse wheel.",
