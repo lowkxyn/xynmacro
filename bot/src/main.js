@@ -447,6 +447,15 @@ window.wcCompact = () => {
   const _scroller = document.querySelector('.main');
   const _inner = document.querySelector('.main-inner');
   let _scrollTarget = 0, _scrollCur = 0, _scrollRaf = 0;
+  // The page scrolls by transform, so it has no native scrollbar. Give it one that can
+  // be dragged or clicked, so a worn mouse wheel isn't the only way down the page.
+  const _bar = document.createElement('div');
+  const _thumb = document.createElement('div');
+  _bar.className = 'main-scrollbar';
+  _bar.hidden = true;
+  _thumb.className = 'main-scrollbar-thumb';
+  _bar.appendChild(_thumb);
+  _scroller?.appendChild(_bar);
 
   function _scrollMax() {
     if (!_scroller || !_inner) return 0;
@@ -454,6 +463,22 @@ window.wcCompact = () => {
   }
   function _applyTransform(y) {
     _inner.style.transform = 'translate3d(0,' + (-Math.round(y)) + 'px,0)';
+    _updateScrollbar();
+  }
+  function _updateScrollbar() {
+    const max = _scrollMax();
+    _bar.hidden = max <= 0;
+    if (max <= 0) return;
+    const track = _bar.clientHeight;
+    const thumb = Math.max(32, track * _scroller.clientHeight / _inner.scrollHeight);
+    _thumb.style.height = thumb + 'px';
+    _thumb.style.transform = 'translateY(' + Math.round((track - thumb) * Math.min(1, _scrollCur / max)) + 'px)';
+  }
+  function _scrollTo(y) {
+    if (_scrollRaf) { cancelAnimationFrame(_scrollRaf); _scrollRaf = 0; }
+    _scrollTarget = _scrollCur = Math.max(0, Math.min(_scrollMax(), y));
+    _inner.style.pointerEvents = '';
+    _applyTransform(_scrollCur);
   }
   function _scrollStep() {
     const diff = _scrollTarget - _scrollCur;
@@ -498,7 +523,41 @@ window.wcCompact = () => {
     window.addEventListener('resize', () => {
       const max = _scrollMax();
       if (_scrollTarget > max) _scrollTarget = max;
-      if (_scrollCur > max) { _scrollCur = max; _applyTransform(_scrollCur); }
+      if (_scrollCur > max) _scrollCur = max;
+      _applyTransform(_scrollCur);
+    });
+    // Sections opening and closing change the page height without a window resize.
+    new ResizeObserver(() => _updateScrollbar()).observe(_inner);
+    // Rects, not offsetHeight: the interface zoom scales what the pointer moves over.
+    _thumb.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      e.stopPropagation();
+      _thumb.setPointerCapture(e.pointerId);
+      _bar.classList.add('dragging');
+      const startY = e.clientY;
+      const startScroll = _scrollCur;
+      const travel = _bar.getBoundingClientRect().height - _thumb.getBoundingClientRect().height;
+      const perPixel = travel > 0 ? _scrollMax() / travel : 0;
+      const move = (ev) => _scrollTo(startScroll + (ev.clientY - startY) * perPixel);
+      const end = () => {
+        _thumb.removeEventListener('pointermove', move);
+        _thumb.removeEventListener('pointerup', end);
+        _thumb.removeEventListener('pointercancel', end);
+        _bar.classList.remove('dragging');
+      };
+      _thumb.addEventListener('pointermove', move);
+      _thumb.addEventListener('pointerup', end);
+      _thumb.addEventListener('pointercancel', end);
+    });
+    // Clicking the track pages toward the click, like a normal scrollbar.
+    _bar.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0 || e.target !== _bar) return;
+      e.preventDefault();
+      const thumbRect = _thumb.getBoundingClientRect();
+      const direction = e.clientY < thumbRect.top ? -1 : 1;
+      _scrollTarget = Math.max(0, Math.min(_scrollMax(), _scrollTarget + direction * _scroller.clientHeight * 0.85));
+      if (!_scrollRaf) _scrollRaf = requestAnimationFrame(_scrollStep);
     });
   }
 
@@ -2738,6 +2797,11 @@ window.wcCompact = () => {
 
   // What's-new content, newest first. Each entry: {version, notes:[{h, items[]}]}.
   const CHANGELOG = [
+    { version: '2.0.9', notes: [
+      { h: "Changes", items: [
+        "The pages now have a scrollbar on the right. Drag it, or click above or below it to jump a screen at a time, so you're not stuck with the mouse wheel.",
+      ] },
+    ] },
     { version: '2.0.8', notes: [
       { h: "Changes", items: [
         "GC Gravity Target takes any whole number now, with a Max button that uses the highest gravity your character can set. It used to stop at 100G. High gravity drains HP, so turn on a healing option first.",

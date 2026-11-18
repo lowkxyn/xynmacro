@@ -3,6 +3,11 @@
 All notable changes to XynMacro. This file is generated from the in-app
 "What's new" notes by `scripts/changelog.mjs` — edit those, not this file.
 
+## 2.0.9
+
+### Changes
+- The pages now have a scrollbar on the right. Drag it, or click above or below it to jump a screen at a time, so you're not stuck with the mouse wheel.
+
 ## 2.0.8
 
 ### Changes

@@ -475,6 +475,14 @@ html.maximized .window-frame{border-radius:0}
    doesn't force the sidebar (backdrop-filter) or aurora layers to recompose. */
 .main{overflow:hidden;position:relative;transform:translateZ(0);contain:layout paint}
 .main-inner{will-change:transform;transform:translate3d(0,0,0);backface-visibility:hidden}
+.main-scrollbar{position:absolute;top:4px;right:2px;bottom:4px;width:10px;z-index:5;cursor:pointer}
+.main-scrollbar[hidden]{display:none}
+.main-scrollbar-thumb{
+  position:absolute;top:0;left:3px;right:3px;border-radius:4px;
+  background:var(--border-input);cursor:grab;transition:left .15s ease,right .15s ease,background .15s ease;
+}
+.main-scrollbar:hover .main-scrollbar-thumb,.main-scrollbar.dragging .main-scrollbar-thumb{left:1px;right:1px;background:var(--text3)}
+.main-scrollbar.dragging .main-scrollbar-thumb{cursor:grabbing}
 /* No max-width: content expands to fill the window when the user resizes wider. */
 .view{display:none;padding:28px 32px 44px}
 .view.active{display:block;animation:fadeUp .3s cubic-bezier(.16,1,.3,1)}
