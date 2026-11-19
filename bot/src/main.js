@@ -2797,7 +2797,7 @@ window.wcCompact = () => {
 
   // What's-new content, newest first. Each entry: {version, notes:[{h, items[]}]}.
   const CHANGELOG = [
-    { version: '2.0.12', notes: [
+    { version: '2.0.13', notes: [
       { h: "Changes", items: [
         "When every category in your Training Order is finished, the macro now closes the Training tab, so you can see the run is done instead of the last minigame still going.",
       ] },

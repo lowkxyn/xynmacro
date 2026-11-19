@@ -3,7 +3,7 @@
 All notable changes to XynMacro. This file is generated from the in-app
 "What's new" notes by `scripts/changelog.mjs` — edit those, not this file.
 
-## 2.0.12
+## 2.0.13
 
 ### Changes
 - When every category in your Training Order is finished, the macro now closes the Training tab, so you can see the run is done instead of the last minigame still going.
