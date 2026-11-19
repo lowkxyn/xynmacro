@@ -4547,6 +4547,17 @@ def _ki_hp_check(sct):
         return healed
 
 
+def _close_training_when_done(sct):
+    """Tab out of the last minigame and close Training Mode once the order is
+    done. Left running, the game keeps the minigame going and a finished run
+    looks like it is still training (a user waited 15 minutes, 19 Nov 2026)."""
+    with _input_lock, _menu_cursor_guard():
+        if _leave_training_to_gameplay(sct):
+            print("[DONE] Training Mode closed")
+        else:
+            print("[DONE] Could not confirm Training Mode closed")
+
+
 def _mid_stat_recharge(sct):
     """Step out of the current minigame, charge Ki back up, and resume the stat.
 
@@ -9926,6 +9937,7 @@ def run_master_controller():
             if next_idx >= len(runtime_order):
                 outcome, outcome_reason = _training_order_result(skipped_stats, capped_stats)
                 print("ALL DONE!" if outcome == "completed" else outcome_reason.upper())
+                _close_training_when_done(sct)
                 _record_run_outcome(outcome, outcome_reason, state)
                 return True
             # Menu handshake: Tab TOGGLES the menu, so pressing it while the menu
@@ -9955,6 +9967,7 @@ def run_master_controller():
             if next_idx is None:
                 outcome, outcome_reason = _training_order_result(skipped_stats, capped_stats)
                 print("ALL DONE!" if outcome == "completed" else outcome_reason.upper())
+                _close_training_when_done(sct)
                 _record_run_outcome(outcome, outcome_reason, state)
                 return True
             next_cat = runtime_order[next_idx]

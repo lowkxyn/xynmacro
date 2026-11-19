@@ -2797,6 +2797,11 @@ window.wcCompact = () => {
 
   // What's-new content, newest first. Each entry: {version, notes:[{h, items[]}]}.
   const CHANGELOG = [
+    { version: '2.0.12', notes: [
+      { h: "Changes", items: [
+        "When every category in your Training Order is finished, the macro now closes the Training tab, so you can see the run is done instead of the last minigame still going.",
+      ] },
+    ] },
     { version: '2.0.11', notes: [
       { h: "Fixes", items: [
         "Auto-Senzu now recognises the Items list (H) over the red gravity room. The see-through list let the red show through, so the macro couldn't read it and stopped the run. It also no longer presses H a second time on a list that's already open, which closed it.",

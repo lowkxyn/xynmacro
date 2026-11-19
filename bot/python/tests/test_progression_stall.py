@@ -353,6 +353,10 @@ def test_restart_resets_the_timer_before_navigating_menus(monkeypatch):
     assert event.is_set()
 
 
+# conftest replaces it for every test; keep the real one for its own test.
+_REAL_CLOSE_TRAINING = core._close_training_when_done
+
+
 def _setup_controller(monkeypatch):
     _controller_setup(monkeypatch)
     for name, value in {
@@ -418,6 +422,20 @@ def test_controller_advances_caps_and_reports_them_with_skips(monkeypatch, capsy
         assert stat in outcome.call_args.args[1]
     assert "ALL DONE!" not in capsys.readouterr().out
     assert [call.args[0] for call in core._confirm_trait_click.call_args_list] == ["Health", "Agility"]
+    core._close_training_when_done.assert_called_once()
+
+
+@pytest.mark.parametrize("closed,message", [
+    (True, "[DONE] Training Mode closed"),
+    (False, "[DONE] Could not confirm Training Mode closed"),
+])
+def test_finished_order_closes_training_mode(monkeypatch, capsys, closed, message):
+    leave = Mock(return_value=closed)
+    monkeypatch.setattr(core, "_leave_training_to_gameplay", leave)
+    monkeypatch.setattr(core, "_menu_cursor_guard", nullcontext)
+    _REAL_CLOSE_TRAINING("sct")
+    leave.assert_called_once_with("sct")
+    assert message in capsys.readouterr().out
 
 
 @pytest.mark.parametrize("enabled,tracked,present", [
