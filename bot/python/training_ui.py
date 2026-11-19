@@ -313,20 +313,28 @@ _title_masks = {}
 
 
 def _panel_title_score(panel, *names):
-    """Best match of the panel's bright title text against the named masks (0 when none)."""
-    text = (cv2.cvtColor(crop(panel, _PANEL_TITLE_BOX)[:, :, :3], cv2.COLOR_BGR2GRAY) > 140)
-    text = text.astype(np.uint8) * 255
-    if not text.any():
-        return 0.0
+    """Best match of the panel's title text against the named masks (0 when none).
+
+    Over the red gravity room the see-through pill dims the gold title to about
+    grey 140, so the bright-text cut breaks it up (a user's open list scored
+    0.49, 19 Nov 2026). The lower of red and green, matched without a cut, keeps
+    the gold text and drops the red room: that list scores 0.65, and no other
+    saved frame scores above 0.32 that way.
+    """
+    title = crop(panel, _PANEL_TITLE_BOX)[:, :, :3]
+    bright = (cv2.cvtColor(title, cv2.COLOR_BGR2GRAY) > 140).astype(np.uint8) * 255
+    gold = np.ascontiguousarray(np.minimum(title[:, :, 1], title[:, :, 2]))
     best = 0.0
     for name in names:
         if name not in _title_masks:
             _title_masks[name] = cv2.imread(os.path.join(BASE_DIR, name), cv2.IMREAD_GRAYSCALE)
         template = _title_masks[name]
-        if template is None or template.shape[0] > text.shape[0] or template.shape[1] > text.shape[1]:
+        if template is None or template.shape[0] > title.shape[0] or template.shape[1] > title.shape[1]:
             continue
-        scores = np.nan_to_num(cv2.matchTemplate(text, template, cv2.TM_CCOEFF_NORMED))
-        best = max(best, float(scores.max()))
+        for text in (bright, gold):
+            # A flat image (nothing bright, or an empty room) scores NaN.
+            scores = np.nan_to_num(cv2.matchTemplate(text, template, cv2.TM_CCOEFF_NORMED))
+            best = max(best, float(scores.max()))
         if best >= _PANEL_TITLE_MIN:
             break
     return best
@@ -426,6 +434,9 @@ class SenzuMenus:
     FIRST_SLOT_ROW_Y = 485                      # "1) ..." in the SENZU BEAN picker
     SLOT_ROW_PITCH = 62
     _MIN = 0.80                                 # live: 1.000 matches, <= 0.52 otherwise
+    # The red gravity room shows through the H list: a loaded Senzu slot scored
+    # 0.75 there (19 Nov 2026); other rows on 251 saved panels stay <= 0.56.
+    _SLOT_MIN = 0.70
     HEADINGS = ("items", "customize", "senzu_bean")
     _templates = {}
 
@@ -491,7 +502,7 @@ class SenzuMenus:
         row = MajinTransform._row(crop(frame, cls.HOTBAR_BOX), slot)
         for name in ("tpl_senzu_slot_v2.png", "tpl_senzu_slot_small_v2.png"):
             score, (x, _y) = cls._match(row, name)
-            if score < cls._MIN:
+            if score < cls._SLOT_MIN:
                 continue
             # Hotbar names are right-aligned; gold text left of the match means
             # a longer name ending in "Senzu Bean" (e.g. a Half bean).

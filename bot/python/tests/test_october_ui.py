@@ -557,6 +557,16 @@ def test_items_hotbar_shows_the_loaded_slot():
     assert not menus.hotbar_visible(paste([]))
 
 
+def test_items_hotbar_over_the_red_gravity_room():
+    # A user's open list at high gravity: the red room shows through the panel
+    # and dimmed both the ITEMS title and the Senzu row (19 Nov 2026).
+    menus = ui.SenzuMenus
+    frame = paste([("hotbar_red_room", menus.HOTBAR_BOX)])
+    assert menus.hotbar_visible(frame)
+    assert menus.hotbar_slot_has_senzu(frame, 2)
+    assert not any(menus.hotbar_slot_has_senzu(frame, slot) for slot in (1, 3, 4, 5))
+
+
 @pytest.mark.parametrize("name", ["dead_a", "dead_b"])
 def test_death_dialog_and_respawn_point(name):
     dead = paste([(name, (680, 460, 560, 165))])

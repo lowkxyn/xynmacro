@@ -3,6 +3,11 @@
 All notable changes to XynMacro. This file is generated from the in-app
 "What's new" notes by `scripts/changelog.mjs` — edit those, not this file.
 
+## 2.0.11
+
+### Fixes
+- Auto-Senzu now recognises the Items list (H) over the red gravity room. The see-through list let the red show through, so the macro couldn't read it and stopped the run. It also no longer presses H a second time on a list that's already open, which closed it.
+
 ## 2.0.10
 
 ### Fixes

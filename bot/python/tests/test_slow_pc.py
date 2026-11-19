@@ -522,6 +522,18 @@ def test_hotbar_open_presses_h_again_when_the_first_is_lost(clock):
     assert len(pressed) == 2
 
 
+def test_hotbar_open_keeps_a_half_seen_list_open(clock):
+    # A second H on a list that is open but not recognised closes it again.
+    menus = core.training_ui.SenzuMenus
+    pressed = []
+    with patch.object(core, "_focus_game_for_senzu", return_value=True), \
+         patch.object(core, "_tap_key_unchecked", side_effect=lambda key: pressed.append(key)), \
+         patch.object(menus, "hotbar_visible", return_value=False), \
+         patch.object(menus, "hotbar_title_score", return_value=0.49):
+        assert core._hotbar_slot_loaded(None, 1) is None
+    assert pressed == ["h"]
+
+
 def test_hotbar_open_gives_up_after_two_h(clock):
     menus = core.training_ui.SenzuMenus
     pressed = []

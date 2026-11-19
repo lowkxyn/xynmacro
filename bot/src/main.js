@@ -2797,6 +2797,11 @@ window.wcCompact = () => {
 
   // What's-new content, newest first. Each entry: {version, notes:[{h, items[]}]}.
   const CHANGELOG = [
+    { version: '2.0.11', notes: [
+      { h: "Fixes", items: [
+        "Auto-Senzu now recognises the Items list (H) over the red gravity room. The see-through list let the red show through, so the macro couldn't read it and stopped the run. It also no longer presses H a second time on a list that's already open, which closed it.",
+      ] },
+    ] },
     { version: '2.0.10', notes: [
       { h: "Fixes", items: [
         "Auto-Senzu waits longer for the Items list (H) and presses H once more if it doesn't show, instead of stopping the run. On a slow PC the list could open too late for the macro.",
