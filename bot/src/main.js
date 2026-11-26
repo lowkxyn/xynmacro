@@ -2386,6 +2386,10 @@ window.wcCompact = () => {
       if (!r || r.ok === false) showToast('Could not open Discord. The invite is discord.gg/dbogen', 'err');
     } catch (e) { showToast('Could not open Discord. The invite is discord.gg/dbogen', 'err'); }
   };
+  window.openReleases = async () => {
+    const opened = await invoke('open_releases').catch(() => false);
+    if (!opened) showToast('Could not open the page. It is github.com/lowkxyn/xynmacro/releases', 'err');
+  };
   window.openLogsDir = async () => {
     try {
       const r = await invoke('proxy_post', { path: '/open_logs_dir', body: null });
@@ -2404,6 +2408,8 @@ window.wcCompact = () => {
   // never drains — which is what left every button unresponsive.
   let _pollBusy = false;
   function _showBackendLost() {
+    // Installing an update closes the engine on purpose.
+    if (document.getElementById('updateInstalling')?.classList?.contains('open')) return;
     if (_elapsedTimer) { clearInterval(_elapsedTimer); _elapsedTimer = null; }
     _startedAt = 0;
     _macroRunning = false;
@@ -2797,6 +2803,16 @@ window.wcCompact = () => {
 
   // What's-new content, newest first. Each entry: {version, notes:[{h, items[]}]}.
   const CHANGELOG = [
+    { version: '2.0.14', notes: [
+      { h: "Fixes", items: [
+        "Fixed updates that kept asking to update again. The update now replaces the copy you're running, even if XynMacro is installed in a second folder.",
+        "Before updating, the macro now makes sure its engine has fully closed, waiting up to 15 seconds instead of under one.",
+        "If an update can't install, an \"Update not installed\" card says so, with a button to get the Setup, instead of quietly reopening the old version.",
+      ] },
+      { h: "Security and privacy", items: [
+        "Two libraries the app uses (cookie and url) are updated for newly published security fixes.",
+      ] },
+    ] },
     { version: '2.0.13', notes: [
       { h: "Changes", items: [
         "When every category in your Training Order is finished, the macro now closes the Training tab, so you can see the run is done instead of the last minigame still going.",
@@ -3133,15 +3149,23 @@ window.wcCompact = () => {
   // If installation failed after the app had already hidden and stopped its
   // backend, Rust relaunches cleanly and leaves one short-lived error marker.
   // Read it once so the failure is visible instead of looking like a random
-  // restart; the next check can safely offer the update again.
-  setTimeout(async () => {
+  // restart. Resolves true when the last update failed, so the automatic check
+  // doesn't offer the same update again in this launch; Check now still does.
+  const _updateFailed = (async () => {
     try {
       const error = await invoke('take_update_install_error');
-      if (!error) return;
+      if (!error) return false;
       _setUpdateStatus(`Update was not installed: ${error}`);
-      showToast('Update installation failed. It will be offered again.', 'err');
-    } catch (error) {}
-  }, 500);
+      const body = document.getElementById('ufBody');
+      if (body) body.textContent = error;
+      document.getElementById('updateFailedToast')?.classList.add('show');
+      return true;
+    } catch (error) { return false; }
+  })();
+  document.getElementById('ufDismiss')?.addEventListener('click', () => {
+    document.getElementById('updateFailedToast')?.classList.remove('show');
+  });
+  document.getElementById('ufDownload')?.addEventListener('click', () => window.openReleases());
 
   // Update-on-restart: the update downloads in the background (safe even while
   // the macro is running) and installs when the app closes or the user clicks
@@ -3264,6 +3288,8 @@ window.wcCompact = () => {
   });
 
   async function _runUpdateCheck({ automatic = false } = {}) {
+    if (automatic && await _updateFailed) return null;
+    document.getElementById('updateFailedToast')?.classList.remove('show');
     if (_updateCheckTask) return _updateCheckTask;
     _setUpdateStatus('Checking GitHub for updates…');
     const task = (async () => {
@@ -3301,6 +3327,11 @@ window.wcCompact = () => {
   }
 
   try {
+    // Closing the window installs a downloaded update too, not just Restart & update.
+    window.__TAURI__.event?.listen('update-installing', () => {
+      document.getElementById('updateToast')?.classList.remove('show');
+      document.getElementById('updateInstalling')?.classList.add('open');
+    });
     window.__TAURI__.event?.listen('update-download-progress', ({ payload }) => {
       const downloaded = Number(payload?.downloaded || 0);
       const total = Number(payload?.total || 0);

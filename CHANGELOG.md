@@ -3,6 +3,16 @@
 All notable changes to XynMacro. This file is generated from the in-app
 "What's new" notes by `scripts/changelog.mjs` — edit those, not this file.
 
+## 2.0.14
+
+### Fixes
+- Fixed updates that kept asking to update again. The update now replaces the copy you're running, even if XynMacro is installed in a second folder.
+- Before updating, the macro now makes sure its engine has fully closed, waiting up to 15 seconds instead of under one.
+- If an update can't install, an "Update not installed" card says so, with a button to get the Setup, instead of quietly reopening the old version.
+
+### Security and privacy
+- Two libraries the app uses (cookie and url) are updated for newly published security fixes.
+
 ## 2.0.13
 
 ### Changes

@@ -1,6 +1,6 @@
 [package]
 name = "xyn_macro"
-version = "2.0.13"
+version = "2.0.14"
 description = "XynMacro — DBOG training-minigame automation (Tauri shell)"
 authors = ["Xyn"]
 edition = "2021"
@@ -30,7 +30,7 @@ tauri-plugin-updater = { version = "=2.10.1", default-features = false, features
 tauri-plugin-updater = { path = "vendor/tauri-plugin-updater" }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Graphics_Dwm"] }
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Graphics_Dwm", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Threading"] }
 
 [profile.dev]
 opt-level = 1

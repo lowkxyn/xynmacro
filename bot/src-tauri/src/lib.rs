@@ -343,8 +343,12 @@ async fn download_update(app: AppHandle) -> Result<Option<String>, String> {
     let download_state = app.state::<UpdateDownloadState>();
     let _download_guard = UpdateDownloadGuard::acquire(&download_state.active)?;
     let generation = download_state.generation.load(Ordering::SeqCst);
+    // Without /D= the installer uses the folder in the registry, so a second copy of
+    // the app would update the other one and keep offering the same update.
+    let install_dir = std::env::current_exe().ok().and_then(|exe| install_dir_arg(&exe));
     let Some(mut update) = app
         .updater_builder()
+        .installer_args(install_dir)
         .timeout(Duration::from_secs(30))
         .build()
         .map_err(|error| error.to_string())?
@@ -388,6 +392,19 @@ async fn download_update(app: AppHandle) -> Result<Option<String>, String> {
     }
     *guard = Some((update, bytes));
     Ok(Some(version))
+}
+
+/// NSIS's install-folder argument for the copy that is running. It has to be the
+/// last argument and unquoted, even with spaces in the path. A loose exe with no
+/// uninstaller beside it isn't an installed copy, so nothing gets unpacked around it.
+fn install_dir_arg(exe: &Path) -> Option<String> {
+    let dir = exe.parent()?;
+    let path = dir.to_str()?;
+    // NSIS doesn't take \\?\ paths.
+    if !dir.join("uninstall.exe").is_file() || path.starts_with(r"\\?\") {
+        return None;
+    }
+    Some(format!("/D={path}"))
 }
 
 fn claim_shutdown_update<T>(
@@ -485,6 +502,52 @@ fn update_error_path(app: &AppHandle) -> PathBuf {
     data_dir(app).join("update_install_error.txt")
 }
 
+/// Written just before the installer takes over. The installer runs silently after
+/// this process has exited, so a later launch is the only place to notice it failed.
+fn update_attempt_path(app: &AppHandle) -> PathBuf {
+    data_dir(app).join("update_attempt.txt")
+}
+
+/// The silent installer needs a moment, and closes the app if it's still at work. So an
+/// app reopened straight away waits this long before it calls the update failed.
+const INSTALLER_GRACE: Duration = Duration::from_secs(30);
+
+fn update_attempt_text(from: &str, to: &str, exe: &Path) -> String {
+    format!("{from}\n{to}\n{}\n", exe.display())
+}
+
+/// All copies share the data folder, so a marker only counts for the copy that wrote it.
+fn attempt_is_from(attempt: &str, exe: &Path) -> bool {
+    attempt
+        .lines()
+        .nth(2)
+        .is_some_and(|path| path.trim().eq_ignore_ascii_case(&exe.to_string_lossy()))
+}
+
+/// Still on the version that started the update means the installer never replaced it.
+fn failed_update_message(attempt: &str, current: &str) -> Option<String> {
+    let mut lines = attempt.lines().map(str::trim);
+    let (from, to) = (lines.next()?, lines.next()?);
+    (from == current && !to.is_empty() && to != current).then(|| {
+        format!("Version {to} didn't install, so you're still on {current}. Antivirus or Windows may have blocked the installer.")
+    })
+}
+
+fn take_failed_attempt(app: &AppHandle) -> Option<String> {
+    let path = update_attempt_path(app);
+    let attempt = fs::read_to_string(&path).ok()?;
+    if !attempt_is_from(&attempt, &std::env::current_exe().ok()?) {
+        return None;
+    }
+    let message = failed_update_message(&attempt, runtime_app_version());
+    if message.is_some() {
+        let age = fs::metadata(&path).ok().and_then(|meta| meta.modified().ok()?.elapsed().ok());
+        std::thread::sleep(INSTALLER_GRACE.saturating_sub(age.unwrap_or_default()));
+    }
+    let _ = fs::remove_file(path);
+    message
+}
+
 /// The sidecar's launch arguments.
 ///
 /// The auth token is deliberately NOT here: a command line is readable by any
@@ -543,7 +606,18 @@ fn discard_pending_update(app: AppHandle) -> bool {
     discard_update(&shutdown, &mut guard)
 }
 
+/// Fixed page, so the frontend can't open anything else. Not through the engine, which
+/// may be the part that antivirus removed.
 #[tauri::command]
+fn open_releases() -> bool {
+    let root = std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into());
+    Command::new(PathBuf::from(root).join("explorer.exe"))
+        .arg("https://github.com/lowkxyn/xynmacro/releases/latest")
+        .spawn()
+        .is_ok()
+}
+
+#[tauri::command(async)]
 fn take_update_install_error(app: AppHandle) -> Option<String> {
     let path = update_error_path(&app);
     let message = fs::read_to_string(&path).ok();
@@ -551,6 +625,7 @@ fn take_update_install_error(app: AppHandle) -> Option<String> {
     message
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
+        .or_else(|| take_failed_attempt(&app))
 }
 
 fn spawn_sidecar(
@@ -831,36 +906,111 @@ fn sidecar_executable_path() -> Result<PathBuf, String> {
         .ok_or_else(|| "could not resolve sidecar directory".to_string())
 }
 
-#[cfg(target_os = "windows")]
-fn wait_for_sidecar_unlock() -> Result<(), String> {
-    use std::os::windows::fs::OpenOptionsExt;
+/// An update can wait longer than a normal close: giving up early leaves the old version.
+const ENGINE_CLOSE_LIMIT: Duration = Duration::from_secs(15);
 
-    let sidecar = sidecar_executable_path()?;
-    if !sidecar.exists() {
-        return Ok(());
-    }
-    let deadline = Instant::now() + Duration::from_millis(900);
-    while Instant::now() < deadline {
-        if fs::OpenOptions::new()
-            .read(true)
-            .share_mode(0)
-            .open(&sidecar)
-            .is_ok()
-        {
-            return Ok(());
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    Err("XynMacro didn't close in time. The update will be offered again.".into())
+#[cfg(target_os = "windows")]
+fn close_engine_for_update() -> Result<(), String> {
+    close_engine(&sidecar_executable_path()?, ENGINE_CLOSE_LIMIT)
 }
 
 #[cfg(not(target_os = "windows"))]
-fn wait_for_sidecar_unlock() -> Result<(), String> {
+fn close_engine_for_update() -> Result<(), String> {
     Ok(())
+}
+
+/// Waits until the installer could overwrite the engine, ending any copy still running.
+/// The engine is two processes (a PyInstaller bootloader and the Python under it), so
+/// ending the tracked one can leave the other holding the file.
+#[cfg(target_os = "windows")]
+fn close_engine(engine: &Path, limit: Duration) -> Result<(), String> {
+    use std::os::windows::fs::OpenOptionsExt;
+
+    if !engine.exists() {
+        return Ok(());
+    }
+    let deadline = Instant::now() + limit;
+    loop {
+        // Write access, because Windows lets a running exe be opened for reading.
+        match fs::OpenOptions::new().write(true).share_mode(0).open(engine) {
+            Ok(_) => return Ok(()),
+            Err(error) if Instant::now() >= deadline => {
+                return Err(if error.kind() == std::io::ErrorKind::PermissionDenied {
+                    "XynMacro isn't allowed to replace its own files in this folder.".into()
+                } else {
+                    "Another program, usually antivirus or a second XynMacro, is still using XynMacro's files.".into()
+                });
+            }
+            Err(_) => end_processes_running(engine),
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// Ends every process started from exactly this exe. Matching the full path keeps
+/// another installed copy's engine out of it.
+#[cfg(target_os = "windows")]
+fn end_processes_running(exe: &Path) {
+    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
+        TH32CS_SNAPPROCESS,
+    };
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, QueryFullProcessImageNameW, TerminateProcess, PROCESS_NAME_WIN32,
+        PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE,
+    };
+
+    let Some(name) = exe.file_name() else { return };
+    let name = name.to_string_lossy();
+    // Some RAM and mapped drives can't be canonicalized; compare their paths as they are.
+    let resolve = |path: &Path| fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let target = resolve(exe);
+    let mut path = vec![0_u16; 32_768];
+    // SAFETY: every handle is checked before use and closed once; the entry and path
+    // buffers outlive the calls that fill them, and their sizes are passed along.
+    unsafe {
+        let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if snapshot == INVALID_HANDLE_VALUE {
+            return;
+        }
+        let mut entry: PROCESSENTRY32W = std::mem::zeroed();
+        entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+        let mut more = Process32FirstW(snapshot, &mut entry) != 0;
+        while more {
+            let length = entry.szExeFile.iter().position(|&unit| unit == 0).unwrap_or(0);
+            if String::from_utf16_lossy(&entry.szExeFile[..length]).eq_ignore_ascii_case(&name) {
+                let process = OpenProcess(
+                    PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE,
+                    0,
+                    entry.th32ProcessID,
+                );
+                if !process.is_null() {
+                    let mut size = path.len() as u32;
+                    if QueryFullProcessImageNameW(
+                        process,
+                        PROCESS_NAME_WIN32,
+                        path.as_mut_ptr(),
+                        &mut size,
+                    ) != 0
+                    {
+                        let image = PathBuf::from(String::from_utf16_lossy(&path[..size as usize]));
+                        if resolve(&image) == target {
+                            TerminateProcess(process, 1);
+                        }
+                    }
+                    CloseHandle(process);
+                }
+            }
+            more = Process32NextW(snapshot, &mut entry) != 0;
+        }
+        CloseHandle(snapshot);
+    }
 }
 
 fn restart_with_update_error(app: &AppHandle, message: &str) {
     eprintln!("[tauri] Update install cancelled: {message}");
+    let _ = fs::remove_file(update_attempt_path(app));
     let _ = fs::write(update_error_path(app), message);
     app.state::<ShutdownState>().cleanup_complete.store(true, Ordering::SeqCst);
     app.request_restart();
@@ -884,7 +1034,14 @@ fn request_shutdown_inner(app: AppHandle, hide_window: bool, require_update: boo
         };
         update
     };
-    if hide_window {
+    if pending_update.is_some() {
+        // Stay up showing "Installing update", so nobody reopens the old version while
+        // this waits for the engine to close.
+        if let Some(hud) = app.get_webview_window(HUD_LABEL) {
+            let _ = hud.close();
+        }
+        let _ = app.emit("update-installing", ());
+    } else if hide_window {
         if let Some(window) = app.get_webview_window("main") {
             let _ = window.hide();
         }
@@ -895,11 +1052,15 @@ fn request_shutdown_inner(app: AppHandle, hide_window: bool, require_update: boo
         terminate_tracked_child(&app, Duration::from_millis(650));
         cleanup_port_file(&app, launcher_pid);
         if let Some((update, bytes)) = pending_update {
-            if let Err(error) = wait_for_sidecar_unlock() {
+            if let Err(error) = close_engine_for_update() {
                 restart_with_update_error(&app, &error);
                 return;
             }
             println!("[tauri] Installing downloaded update after cleanup");
+            if let Ok(exe) = std::env::current_exe() {
+                let text = update_attempt_text(runtime_app_version(), &update.version, &exe);
+                let _ = fs::write(update_attempt_path(&app), text);
+            }
             if let Err(error) = update.install(bytes) {
                 eprintln!("[tauri] Update install failed: {error}");
                 let message = error.to_string();
@@ -1611,6 +1772,7 @@ pub fn run() {
             download_update,
             discard_pending_update,
             take_update_install_error,
+            open_releases,
             install_pending_update,
             factory_reset_app_prefs,
             take_config_reset_flag,
@@ -1646,7 +1808,8 @@ mod tests {
     };
     use super::{backend_health_matches, bounds_overlap, parse_backend_endpoint, BackendEndpoint,
         SavedWindowBounds, ShutdownState, UpdateDownloadGuard, UpdateDownloadState};
-    use super::reset_settings_once;
+    use super::{attempt_is_from, failed_update_message, install_dir_arg, reset_settings_once,
+        update_attempt_text};
     use std::path::Path;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Mutex;
@@ -1693,6 +1856,158 @@ mod tests {
         assert!(claim_shutdown_update(&shutdown, &mut pending.lock().unwrap(), true).is_err());
         assert!(!shutdown.started.load(Ordering::SeqCst));
         assert_eq!(claim_shutdown_update(&shutdown, &mut pending.lock().unwrap(), false), Ok(None));
+    }
+
+    #[cfg(windows)]
+    mod engine_close {
+        use super::super::{close_engine, end_processes_running};
+        use std::os::windows::fs::OpenOptionsExt;
+        use std::path::PathBuf;
+        use std::process::{Child, Command, Stdio};
+        use std::time::{Duration, Instant};
+
+        /// A stand-in engine: a real exe that keeps running until it is ended.
+        fn engine(label: &str) -> PathBuf {
+            let dir = std::env::temp_dir().join(format!("xyn engine {label} {}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            let exe = dir.join("XynMacro-core.exe");
+            let root = std::env::var("SystemRoot").unwrap();
+            std::fs::copy(PathBuf::from(root).join("System32").join("PING.EXE"), &exe).unwrap();
+            exe
+        }
+
+        fn start(exe: &PathBuf) -> Child {
+            Command::new(exe).args(["-n", "60", "127.0.0.1"]).stdout(Stdio::null()).spawn().unwrap()
+        }
+
+        fn finish(exe: PathBuf) {
+            // Windows can keep the image open for a moment after the process ends.
+            for _ in 0..40 {
+                if std::fs::remove_dir_all(exe.parent().unwrap()).is_ok() {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        }
+
+        #[test]
+        fn a_running_engine_passes_a_read_check_but_not_a_write_check() {
+            let exe = engine("oldcheck");
+            let mut running = start(&exe);
+            let read = std::fs::OpenOptions::new().read(true).share_mode(0).open(&exe).is_ok();
+            let write = std::fs::OpenOptions::new().write(true).share_mode(0).open(&exe).is_ok();
+            let _ = running.kill();
+            let _ = running.wait();
+            assert!(read);
+            assert!(!write);
+            finish(exe);
+        }
+
+        #[test]
+        fn every_engine_process_left_running_is_ended() {
+            let exe = engine("leftover");
+            let mut first = start(&exe);
+            let mut second = start(&exe);
+            assert_eq!(close_engine(&exe, Duration::from_secs(10)), Ok(()));
+            assert!(first.wait().is_ok_and(|status| !status.success()));
+            assert!(second.wait().is_ok_and(|status| !status.success()));
+            finish(exe);
+        }
+
+        #[test]
+        fn another_copy_of_the_app_keeps_its_engine() {
+            let ours = engine("ours");
+            let theirs = engine("theirs");
+            let mut other = start(&theirs);
+            end_processes_running(&ours);
+            std::thread::sleep(Duration::from_millis(200));
+            let untouched = other.try_wait().unwrap().is_none();
+            let _ = other.kill();
+            let _ = other.wait();
+            assert!(untouched);
+            finish(ours);
+            finish(theirs);
+        }
+
+        #[test]
+        fn a_file_held_by_another_program_is_reported_after_the_limit() {
+            let exe = engine("held");
+            let held = std::fs::OpenOptions::new().read(true).share_mode(0).open(&exe).unwrap();
+            let started = Instant::now();
+            let error = close_engine(&exe, Duration::from_millis(300)).unwrap_err();
+            assert!(started.elapsed() >= Duration::from_millis(300));
+            assert!(error.contains("antivirus"), "{error}");
+            drop(held);
+            assert_eq!(close_engine(&exe, Duration::from_secs(5)), Ok(()));
+            finish(exe);
+        }
+
+        #[test]
+        fn a_short_hold_is_waited_out() {
+            let exe = engine("shorthold");
+            let held = std::fs::OpenOptions::new().read(true).share_mode(0).open(&exe).unwrap();
+            let release = std::thread::spawn(move || {
+                // Longer than the old 900 ms limit, which gave up here.
+                std::thread::sleep(Duration::from_millis(1500));
+                drop(held);
+            });
+            assert_eq!(close_engine(&exe, Duration::from_secs(10)), Ok(()));
+            release.join().unwrap();
+            finish(exe);
+        }
+
+        #[test]
+        fn a_file_that_cannot_be_written_says_so() {
+            let exe = engine("readonly");
+            let mut permissions = std::fs::metadata(&exe).unwrap().permissions();
+            permissions.set_readonly(true);
+            std::fs::set_permissions(&exe, permissions.clone()).unwrap();
+            let error = close_engine(&exe, Duration::from_millis(100)).unwrap_err();
+            assert!(error.contains("isn't allowed"), "{error}");
+            #[allow(clippy::permissions_set_readonly_false)]
+            permissions.set_readonly(false);
+            std::fs::set_permissions(&exe, permissions).unwrap();
+            finish(exe);
+        }
+
+        #[test]
+        fn a_missing_engine_does_not_block_the_update() {
+            let missing = std::env::temp_dir().join("xyn-no-such-folder").join("XynMacro-core.exe");
+            assert_eq!(close_engine(&missing, Duration::from_millis(50)), Ok(()));
+        }
+    }
+
+    #[test]
+    fn updates_install_over_the_running_copy() {
+        let dir = std::env::temp_dir().join(format!("xyn copy dir {}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let exe = dir.join("XynMacroApp.exe");
+        // A loose exe isn't an installed copy: nothing may be unpacked around it.
+        assert_eq!(install_dir_arg(&exe), None);
+        std::fs::write(dir.join("uninstall.exe"), "x").unwrap();
+        // Unquoted even with spaces, which is the only form NSIS accepts.
+        assert_eq!(install_dir_arg(&exe), Some(format!("/D={}", dir.display())));
+        let long_form = std::path::PathBuf::from(format!(r"\\?\{}", exe.display()));
+        assert_eq!(install_dir_arg(&long_form), None);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn an_update_that_never_replaced_the_app_is_reported_once_it_relaunches() {
+        let exe = Path::new(r"C:\Apps\My Copy\XynMacroApp.exe");
+        let attempt = update_attempt_text("2.0.13", "2.0.14", exe);
+        assert!(attempt_is_from(&attempt, Path::new(r"c:\apps\my copy\xynmacroapp.exe")));
+        assert!(!attempt_is_from(&attempt, Path::new(r"C:\Apps\Other\XynMacroApp.exe")));
+        assert!(!attempt_is_from("2.0.13\n2.0.14\n", exe));
+        let message = failed_update_message(&attempt, "2.0.13").unwrap();
+        assert!(message.contains("2.0.14") && message.contains("2.0.13"), "{message}");
+        // It worked, or the user has since installed something else by hand.
+        assert_eq!(failed_update_message(&attempt, "2.0.14"), None);
+        assert_eq!(failed_update_message(&attempt, "2.0.15"), None);
+        for junk in ["", "2.0.13", "2.0.13\n", "2.0.13\n\n", "2.0.13\n2.0.13\n"] {
+            assert_eq!(failed_update_message(junk, "2.0.13"), None, "{junk:?}");
+        }
     }
 
     #[test]

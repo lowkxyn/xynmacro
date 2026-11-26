@@ -677,6 +677,29 @@ test('the crash notice waits to be seen instead of fading', () => {
   assert.match(main, /window\.openBugReport\?\.\(\)/);
 });
 
+/* A failed update used to show a toast that faded, then offer the same update again. */
+test('a failed update stays on screen and is not offered again in that launch', () => {
+  assert.match(html, /class="update-toast" id="updateFailedToast"/);
+  assert.match(main, /document\.getElementById\('updateFailedToast'\)\?\.classList\.add\('show'\)/);
+  for (const id of ['ufDismiss', 'ufDownload']) {
+    assert.ok(main.includes(`document.getElementById('${id}')?.addEventListener('click'`), id);
+  }
+  assert.match(main, /if \(automatic && await _updateFailed\) return null;/);
+  // The page can only ask for the one fixed address, and the engine may be gone.
+  assert.match(main, /invoke\('open_releases'\)/);
+});
+
+test('closing the window to install an update shows the installing screen', () => {
+  const start = main.indexOf("listen('update-installing'");
+  assert.ok(start > 0);
+  assert.match(main.slice(start, start + 250), /getElementById\('updateInstalling'\)\?\.classList\.add\('open'\)/);
+});
+
+test('closing the engine to install an update is not reported as a lost engine', () => {
+  const start = main.indexOf('function _showBackendLost()');
+  assert.match(main.slice(start, start + 300), /updateInstalling'\)\?\.classList\?\.contains\('open'\)\) return;/);
+});
+
 test('state recovery clears only its own backend-lost bar', async () => {
   const source = await readFile(new URL('../src/main.js', import.meta.url), 'utf8');
   const start = source.indexOf('  let _pollBusy = false;');

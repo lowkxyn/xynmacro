@@ -1228,6 +1228,17 @@
 
 <!-- Update install screen: shown briefly when the user starts the install, so
      the app isn't visibly frozen while it hands off to the installer. -->
+<!-- A failed update waits to be read: a fading toast was too easy to miss, and the
+     same update was then offered straight away as if nothing had happened. -->
+<div class="update-toast" id="updateFailedToast" role="alert">
+  <div class="ut-title">Update not installed</div>
+  <div class="ut-body"><span id="ufBody"></span> Close XynMacro, then run the Setup from the download page.</div>
+  <div class="ut-actions">
+    <button class="btn-primary" id="ufDownload">Get Setup</button>
+    <button class="btn-sm" id="ufDismiss">Dismiss</button>
+  </div>
+</div>
+
 <div class="countdown-overlay update-installing" id="updateInstalling">
   <div class="countdown-content" role="status" aria-live="polite">
     <div class="splash-name update-installing-title">Installing update</div>
